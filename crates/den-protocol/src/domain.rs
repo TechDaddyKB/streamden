@@ -304,11 +304,12 @@ impl OnError {
     }
 }
 
+crate::tagged::string_kind! { "Node";
 /// The node kinds of the sub-action tree (§6.4). Extensible with a fallback: a `kind` this build does not
 /// know decodes as [`Node::Unknown`], which a client renders as a read-only placeholder and which keeps
 /// the raw node so a later save does not lose it (§7.2). [`Node::Placeholder`] is different: it is the
 /// explicit node an importer writes for a type it could not convert.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema, TS)]
 #[serde(
     tag = "kind",
     rename_all = "snake_case",
@@ -457,6 +458,7 @@ pub enum Node {
     #[serde(untagged)]
     #[ts(untagged)]
     Unknown(UnknownNode),
+}
 }
 
 /// A node whose `kind` this build does not know (§7.2). The node-specific members are kept verbatim so

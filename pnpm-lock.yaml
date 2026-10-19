@@ -176,6 +176,12 @@ importers:
         specifier: 0.18.1
         version: 0.18.1
 
+  sdk/ts:
+    devDependencies:
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+
   web/kit:
     devDependencies:
       typescript:

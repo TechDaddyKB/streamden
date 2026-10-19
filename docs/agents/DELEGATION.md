@@ -2,7 +2,7 @@
 
 > Audience: the **owner** (dispatcher), plus any agent that needs to know the process.
 > Evidence and sources: [docs/research/ai-agent-fleet.md](../research/ai-agent-fleet.md) (benchmarks read 2026-10-18).
-> **Owner routing (D-044, 2026-10-19) overrides the tables below:** Codex GPT-6.1 Sol at medium effort implements
+> **Owner routing (D-056, 2026-10-19) overrides the tables below:** Codex GPT-6.1 Sol at medium effort implements
 > backend, engine, connectors, server, tooling and CI; Claude implements UI/UX; Grok QAs all implementation. See §2a.
 > **Routing below is provisional.** Lock it in after the S-5 bake-off (§6) and re-run the bake-off whenever a
 > vendor ships a new flagship.
@@ -30,7 +30,7 @@
 | Live API/platform research, X data | Grok 4.7 | Claude or Codex verifies against official docs | Medium–high |
 | Code review | **Always a different vendor from the author** | — | Medium |
 
-### 2a. Owner routing override (D-044, 2026-10-19)
+### 2a. Owner routing override (D-056, 2026-10-19)
 
 Owner direction (chat): shift coding agents to GPT Sol 6.1 medium, except UI/UX ("I prefer the Anthropic look"),
 with Grok QAing and suggesting code fixes across the board, which also uses the subscription quotas better. The

@@ -1487,6 +1487,255 @@ fn lint_reports_marks_that_cannot_hold() {
     assert_eq!(findings.len(), 2, "{findings:#?}");
 }
 
+/// DEN-51: literal-bearing keywords cannot publish values at or below a whole-value secret mark.
+/// Diagnostics name keywords and schema paths, without repeating their authored values.
+#[test]
+fn lint_rejects_literals_under_secret_marks() {
+    fn findings(schema: Value) -> Vec<String> {
+        let mut catalog = Catalog::new();
+        catalog.register_type::<Marked>();
+        catalog
+            .register_operation(op("util.op", schema, json!({})))
+            .unwrap();
+        codegen::lint(&catalog)
+            .into_iter()
+            .map(|e| e.to_string())
+            .collect()
+    }
+    for key in ["default", "examples", "const", "enum"] {
+        let literal = if matches!(key, "examples" | "enum") {
+            json!([SECRET])
+        } else {
+            json!(SECRET)
+        };
+        let leaf = json!({ "type": "string", key: literal });
+        let marked = json!({ "type": "string", "x-secret": true, key: literal });
+        for (schema, at) in [
+            (
+                json!({ "type": "object", "properties": { "token": marked } }),
+                "params/properties/token",
+            ),
+            (
+                json!({ "type": "object", "x-secret": true, "properties": { "token": leaf } }),
+                "params/properties/token",
+            ),
+            (
+                json!({ "type": "object", "properties": { "tokens": { "type": "array", "x-secret": true, "items": leaf } } }),
+                "params/properties/tokens/items",
+            ),
+            (
+                json!({ "type": "object", "properties": { "token": { "allOf": [{ "x-secret": true }, leaf] } } }),
+                "params/properties/token/allOf/1",
+            ),
+            (
+                json!({ "type": "object", "properties": { "token": { "$ref": "#/types/Marked", key: literal } } }),
+                "params/properties/token",
+            ),
+        ] {
+            let errors = findings(schema.clone());
+            assert!(
+                errors
+                    .iter()
+                    .any(|e| e.contains(&format!("{at}/{key}: `{key}` is forbidden"))),
+                "{errors:#?}"
+            );
+            assert!(!errors.join("\n").contains(SECRET), "{errors:#?}");
+            let mut catalog = Catalog::new();
+            catalog.register_type::<Marked>();
+            catalog
+                .register_operation(op("util.op", schema, json!({})))
+                .unwrap();
+            assert!(
+                codegen::build_unredacted(catalog).is_err(),
+                "publication must stop"
+            );
+        }
+        // Literal values on an unmarked sibling stay legal, even when their contents look like schemas.
+        let errors = findings(json!({ "type": "object", "properties": {
+            "token": { "type": "string", "x-secret": true }, "public": leaf
+        } }));
+        assert!(errors.is_empty(), "{errors:#?}");
+    }
+    let errors =
+        findings(json!({ "type": "object", "default": { "x-secret": true, "default": SECRET } }));
+    assert!(errors.is_empty(), "annotation values are data: {errors:#?}");
+}
+
+/// Schema applicators carry the inherited secret context; map names are not schema keywords.
+#[test]
+fn lint_secret_literals_covers_schema_children() {
+    let leaf = json!({ "type": "string", "examples": [SECRET] });
+    let mut children = Vec::new();
+    for key in [
+        "properties",
+        "patternProperties",
+        "dependentSchemas",
+        "$defs",
+        "definitions",
+    ] {
+        children.push((
+            json!({ key: { "examples": leaf } }),
+            format!("{key}/examples/examples"),
+        ));
+    }
+    for key in ["allOf", "anyOf", "oneOf", "prefixItems", "items"] {
+        children.push((json!({ key: [leaf] }), format!("{key}/0/examples")));
+    }
+    for key in [
+        "additionalProperties",
+        "unevaluatedProperties",
+        "items",
+        "contains",
+        "unevaluatedItems",
+        "contentSchema",
+        "if",
+        "then",
+        "else",
+        "not",
+        "propertyNames",
+    ] {
+        children.push((json!({ key: leaf }), format!("{key}/examples")));
+    }
+    for (mut schema, at) in children {
+        schema["type"] = json!("object");
+        schema["x-secret"] = json!(true);
+        let mut catalog = Catalog::new();
+        catalog
+            .register_operation(op("util.op", schema, json!({})))
+            .unwrap();
+        let errors: Vec<_> = codegen::lint(&catalog)
+            .into_iter()
+            .map(|e| e.to_string())
+            .collect();
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains(&format!("params/{at}: `examples` is forbidden"))),
+            "{at}: {errors:#?}"
+        );
+    }
+}
+
+/// A mark on a reference protects the referenced descendants too; aliases and cycles terminate.
+#[test]
+fn lint_rejects_literals_in_secret_reference_targets() {
+    fn literal_type(schema: &mut Schema) {
+        *schema = schemars::json_schema!({ "type": "object", "properties": {
+            "token": { "type": "string", "default": "SYNTHETIC_SECRET" },
+            "next": { "$ref": "#/types/LiteralType" }
+        } });
+    }
+    #[derive(schemars::JsonSchema)]
+    #[schemars(transform = literal_type)]
+    struct LiteralType;
+    #[derive(schemars::JsonSchema)]
+    #[allow(dead_code)]
+    struct Alias(LiteralType);
+    let mut catalog = Catalog::new();
+    catalog.register_type::<Alias>();
+    assert!(
+        codegen::lint(&catalog).is_empty(),
+        "unmarked literals are allowed"
+    );
+    catalog
+        .register_operation(op(
+            "util.op",
+            json!({ "type": "object", "properties": {
+        "secret": { "$ref": "#/types/Alias", "x-secret": true }
+    } }),
+            json!({}),
+        ))
+        .unwrap();
+    let errors: Vec<_> = codegen::lint(&catalog)
+        .into_iter()
+        .map(|e| e.to_string())
+        .collect();
+    assert!(
+        errors.iter().any(|e| e.contains(
+            "params/properties/secret/$ref/Alias/$ref/LiteralType/properties/token/default"
+        )),
+        "{errors:#?}"
+    );
+    assert!(!errors.join("\n").contains(SECRET));
+}
+
+/// DEN-51: every catalog schema location accepts only the shared table's canonical reference prefix.
+#[test]
+fn lint_requires_canonical_reference_prefixes() {
+    for reference in [
+        "#/$defs/Marked",
+        "#/definitions/Marked",
+        "other.json#/types/Marked",
+        "#/types/Marked/properties/token",
+        "#/types/Marked/",
+        "#/types/NoSuchType",
+        "#/types/",
+    ] {
+        let mut catalog = Catalog::new();
+        catalog.register_type::<Marked>();
+        let bad = json!({ "type": "object", "properties": { "token": { "$ref": reference } } });
+        let mut def = op("util.op", bad.clone(), json!({}));
+        def.result = Schema::try_from(bad.clone()).unwrap();
+        catalog.register_operation(def).unwrap();
+        catalog
+            .register_event(EventDef {
+                r#type: EventType::new("util.happened").unwrap(),
+                title: "Happened".into(),
+                description: "Test. An event.".into(),
+                payload: Schema::try_from(bad).unwrap(),
+                payload_version: 1,
+                category: vec!["Test".into()],
+                filters: vec![],
+                high_volume: false,
+                critical: false,
+                examples: vec![json!({})],
+                authored_examples: vec![],
+            })
+            .unwrap();
+        let errors: Vec<_> = codegen::lint(&catalog)
+            .into_iter()
+            .map(|e| e.to_string())
+            .collect();
+        for at in [
+            "params/properties/token",
+            "result/properties/token",
+            "payload/properties/token",
+        ] {
+            assert!(
+                errors
+                    .iter()
+                    .any(|e| e.contains(at) && e.contains("canonical `#/types/<Name>`")),
+                "{errors:#?}"
+            );
+        }
+        assert!(codegen::build_unredacted(catalog).is_err());
+    }
+    fn bad_ref(schema: &mut Schema) {
+        *schema = schemars::json_schema!({ "$ref": "#/$defs/Marked" });
+    }
+    #[derive(schemars::JsonSchema)]
+    #[schemars(transform = bad_ref)]
+    struct BadRef;
+    let mut bad_catalog = Catalog::new();
+    bad_catalog.register_type::<BadRef>();
+    assert!(codegen::lint(&bad_catalog).iter().any(|e| {
+        e.to_string()
+            .contains("type:BadRef: : $ref must use the canonical")
+    }));
+    let mut catalog = Catalog::new();
+    catalog.register_type::<Marked>();
+    catalog
+        .register_operation(op(
+            "util.op",
+            json!({ "type": "object", "properties": {
+        "token": { "$ref": "#/types/Marked" }
+    } }),
+            json!({}),
+        ))
+        .unwrap();
+    assert!(codegen::lint(&catalog).is_empty());
+}
+
 /// The two round-3 P1 #2 reproductions, and the applicability control Codex used: the validator
 /// applies the entry (a `type: integer` twin rejects the string member), so the published example must
 /// redact it, whatever a Rust regex thinks of `\W` (Unicode-aware there, ASCII in ECMA-262) or `\s`

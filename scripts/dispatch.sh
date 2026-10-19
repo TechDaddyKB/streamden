@@ -5,9 +5,10 @@
 #
 # work   (default) — create/reuse ../den-wt/DEN-<n> (or ../den-wt/DEN-<n>-<vendor> if another vendor owns it)
 #                    on branch agent/<vendor>/DEN-<n>-<slug>, then start the agent.
-# review           — reuse the existing ../den-wt/DEN-<n> worktree (the author's branch) and start a reviewer.
+# review           — reuse ../den-wt/DEN-<n> by default; DEN_REVIEW_AUTHOR=<claude|codex|grok> selects
+#                    ../den-wt/DEN-<n>-<author>. The positional vendor is always the reviewer.
 #
-# Codex runs GPT-6.1 Sol at medium reasoning effort by default (D-044); override with DEN_EFFORT=<low|medium|high>.
+# Codex runs GPT-6.1 Sol at medium reasoning effort by default (D-056); override with DEN_EFFORT=<low|medium|high>.
 # DEN_DRY_RUN=1 prints the launch command (and the prompt) instead of starting the agent.
 #
 # The agent follows AGENTS.md + docs/agents/board.md: it claims the card itself, works only in this worktree,
@@ -33,12 +34,21 @@ case "$vendor" in
 esac
 [[ "$mode" == work || "$mode" == review ]] || usage
 [[ "$slug" =~ ^[a-z0-9-]+$ ]] || { echo "slug must be lowercase letters, digits, hyphens" >&2; exit 2; }
+review_author="${DEN_REVIEW_AUTHOR:-}"
+if [[ -n "$review_author" ]]; then
+  [[ "$mode" == review ]] || { echo "DEN_REVIEW_AUTHOR is only valid in review mode" >&2; exit 2; }
+  case "$review_author" in
+    claude|codex|grok) ;;
+    *) echo "DEN_REVIEW_AUTHOR must be claude, codex or grok" >&2; exit 2 ;;
+  esac
+fi
 
 # Shells started from desktop AppImages (e.g. Enjoy) leak library/plugin paths that break git, curl and GUI apps.
 unset LD_LIBRARY_PATH GST_PLUGIN_SYSTEM_PATH GST_PLUGIN_SYSTEM_PATH_1_0 GST_PLUGIN_PATH APPIMAGE APPDIR OWD PYTHONHOME PYTHONPATH
 
 repo="$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)"
 wt="$(dirname "$repo")/den-wt/$card"
+[[ -z "$review_author" ]] || wt="$wt-$review_author"
 username="$vendor/$model"
 today="$(date +%F)"
 # Generate once per dispatch; retries use the same ID embedded in the prompt.
