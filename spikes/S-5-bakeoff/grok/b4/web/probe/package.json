@@ -1,0 +1,14 @@
+{
+  "name": "@b4/probe",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "node --check src/index.js && node --check test/index.test.js",
+    "test": "node --test test/index.test.js"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}

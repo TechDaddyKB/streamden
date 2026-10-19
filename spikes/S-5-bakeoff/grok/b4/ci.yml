@@ -1,0 +1,145 @@
+# Inactive until copied to .github/workflows/. GitHub does not load workflows
+# outside the repository-root .github/workflows directory.
+name: B-4 Rust and pnpm
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: grok-b4-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+    working-directory: spikes/S-5-bakeoff/grok/b4
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  fmt:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  verify:
+    name: clippy, nextest, pnpm (${{ matrix.os }})
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            runner: ubuntu-22.04
+            container: null
+          - os: fedora
+            runner: ubuntu-22.04
+            container: fedora:44@sha256:43b29f65a41eb9c35e1cd5323e3bdf3b655c2357a9f4f1ff2f9c2798e5045d80
+          - os: arch
+            runner: ubuntu-22.04
+            container: archlinux:base@sha256:3c64b538588416593f69a1aebd2f2ec0f2541b29159f32556fa7def2167147a0
+          - os: windows
+            runner: windows-latest
+            container: null
+          - os: macos
+            runner: macos-latest
+            container: null
+    steps:
+      # Container images have no git. Install it, and the Tauri Linux headers,
+      # before checkout. These steps do not build or launch a Tauri shell.
+      - name: Fedora prerequisites
+        if: matrix.os == 'fedora'
+        working-directory: /
+        run: |
+          dnf install -y --allowerasing \
+            git gcc gcc-c++ make pkgconf-pkg-config \
+            ca-certificates curl wget file \
+            webkit2gtk4.1-devel openssl-devel \
+            libappindicator-gtk3-devel librsvg2-devel libxdo-devel \
+            alsa-lib-devel pipewire-devel dbus-devel patchelf
+      - name: Arch prerequisites
+        if: matrix.os == 'arch'
+        working-directory: /
+        run: |
+          pacman -Syu --noconfirm --needed \
+            git base-devel pkgconf ca-certificates \
+            curl wget file openssl \
+            webkit2gtk-4.1 appmenu-gtk-module libappindicator-gtk3 \
+            librsvg xdotool \
+            alsa-lib pipewire dbus patchelf
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Ubuntu prerequisites
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config curl wget file \
+            libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
+            libayatana-appindicator3-dev librsvg2-dev \
+            libasound2-dev libpipewire-0.3-dev libdbus-1-dev patchelf
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: spikes/S-5-bakeoff/grok/b4 -> target
+          shared-key: grok-b4-${{ matrix.os }}-${{ runner.arch }}
+          key: nextest-0.9.148
+          cache-bin: "false"
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # main
+        with:
+          tool: cargo-nextest@0.9.148
+      - run: cargo nextest run --workspace --all-targets --all-features --locked
+      - name: Doctests
+        run: cargo test --workspace --doc --locked
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: spikes/S-5-bakeoff/grok/b4/package.json
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: spikes/S-5-bakeoff/grok/b4/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test
+
+  codegen:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "22"
+      - name: Placeholder codegen drift check
+        run: |
+          node scripts/codegen.mjs
+          git diff --exit-code -- generated/
+          test -z "$(git ls-files --others --exclude-standard -- generated/)"
