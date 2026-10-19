@@ -6,7 +6,16 @@ on:
   pull_request:
     paths:
       - 'packaging/**'
-      - 'apps/desktop/tauri.conf.json'
+      - 'apps/**'
+      - 'crates/**'
+      - 'web/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.cargo/**'
       - '.github/workflows/release-packaging.yml'
   push:
     tags: ['v*']
@@ -73,7 +82,12 @@ jobs:
         working-directory: apps/desktop
         env:
           BUNDLE_TARGETS: ${{ matrix.bundles }}
-        run: cargo tauri build --bundles "$BUNDLE_TARGETS" -- --locked
+        run: |
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            bash ../../packaging/build-linux.sh
+          else
+            cargo tauri build --bundles "$BUNDLE_TARGETS" -- --locked
+          fi
       - name: Upload installers
         if: ${{ always() && steps.installers.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -91,6 +105,8 @@ jobs:
   install-smoke:
     name: Install smoke (${{ matrix.distro }})
     needs: bundles
+    # Still collect Linux evidence when only the Windows matrix leg fails.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
