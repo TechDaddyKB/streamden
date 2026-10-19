@@ -227,13 +227,16 @@ impl<'de> Deserialize<'de> for RpcResponse {
             id: Option<RequestId>,
             #[serde(default, deserialize_with = "present")]
             result: Option<serde_json::Value>,
-            #[serde(default)]
-            error: Option<RpcError>,
+            /// Presence, not value: `error: null` is a present (and invalid) error, not an absent one.
+            #[serde(default, deserialize_with = "present")]
+            error: Option<serde_json::Value>,
         }
         let raw = Raw::deserialize(deserializer)?;
         let outcome = match (raw.result, raw.error) {
             (Some(result), None) => RpcOutcome::Success { result },
-            (None, Some(error)) => RpcOutcome::Failure { error },
+            (None, Some(error)) => RpcOutcome::Failure {
+                error: RpcError::deserialize(error).map_err(serde::de::Error::custom)?,
+            },
             (Some(_), Some(_)) => {
                 return Err(serde::de::Error::custom(
                     "a response carries either `result` or `error`, not both",

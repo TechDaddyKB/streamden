@@ -565,6 +565,9 @@ fn published_examples_redact_marked_secrets() {
     }
     let mut params = catalog.schema_for::<Params>().to_value();
     params["properties"]["password"]["x-secret"] = json!(true);
+    // A pattern property (review round 2); its regex is not evaluated, every member not named in
+    // `properties` is checked against it.
+    params["patternProperties"] = json!({ "^k_": { "type": "string", "x-secret": true } });
     let mut def = op(
         "demo.read",
         0,
@@ -579,7 +582,9 @@ fn published_examples_redact_marked_secrets() {
             "whole": { "user": "example-secret-3", "password": "example-secret-4" },
             "keys": [{ "user": "u", "password": "example-secret-5" }],
             "auth": { "kind": "token", "token": "example-secret-6" },
-            "extra": { "a": { "user": "u", "password": "example-secret-7" } }
+            "extra": { "a": { "user": "u", "password": "example-secret-7" } },
+            "k_api": "example-secret-13",
+            "plain": "kept"
         }),
         shape: ResultShape::Normal,
         result: json!({ "token": "example-secret-8", "ok": true }),
@@ -654,6 +659,12 @@ fn published_examples_redact_marked_secrets() {
     assert_eq!(example.params["auth"]["token"], json!("***"));
     assert_eq!(example.params["auth"]["kind"], json!("token"));
     assert_eq!(example.params["extra"]["a"]["password"], json!("***"));
+    assert_eq!(
+        example.params["k_api"],
+        json!("***"),
+        "pattern properties are followed"
+    );
+    assert_eq!(example.params["plain"], json!("kept"));
     assert_eq!(example.result["token"], json!("***"));
     assert_eq!(example.result["ok"], json!(true));
     let dry_run = &doc.operations["demo.write"].def.examples[1];
@@ -702,6 +713,9 @@ fn template_derivation_descends_into_tagged_unions() {
         /// An inline union.
         #[schemars(schema_with = "inline_union")]
         inline: (),
+        /// A value-mode domain field, marked value again by the author.
+        #[schemars(extend("x-den-template" = "value"))]
+        delay: den_protocol::template::TemplateOr<u64>,
     }
     fn inline_union(_: &mut schemars::SchemaGenerator) -> Schema {
         schemars::json_schema!({ "anyOf": [{ "type": "object", "properties": { "n": { "type": "number" } } }, { "type": "boolean" }] })
@@ -721,7 +735,15 @@ fn template_derivation_descends_into_tagged_unions() {
         jsonschema::validator_for(&doc.schema_at("/operations/t.union/paramsAuthoring")).unwrap();
     let invocation =
         jsonschema::validator_for(&doc.schema_at("/operations/t.union/params")).unwrap();
-    let base = json!({ "target": { "kind": "name", "name": "x" }, "list": [], "inline": true });
+    let base = json!({ "target": { "kind": "name", "name": "x" }, "list": [], "inline": true, "delay": "{wait}" });
+    let delay = &doc.operations["t.union"].params_authoring.as_value()["properties"]["delay"];
+    assert_eq!(delay["x-den-template"], json!("value"));
+    assert_eq!(
+        delay["anyOf"].as_array().map(Vec::len),
+        Some(2),
+        "a TemplateOr field marked value explicitly is not widened twice"
+    );
+    assert!(delay["anyOf"][0].get("anyOf").is_none());
     let with = |choice: Value| {
         let mut v = base.clone();
         v["choice"] = choice;
@@ -817,4 +839,52 @@ fn referenced_strings_honour_local_variable_hints() {
         assert_eq!(v["properties"]["message"]["x-ui"]["variables"], json!(true));
         assert_eq!(v["properties"]["count"]["x-den-template"], json!("value"));
     }
+}
+
+/// Review round 2: a `$ref` whose target is itself a `$ref` is followed to the end, and the walk fails
+/// closed past its depth bound.
+#[test]
+fn redaction_follows_reference_chains() {
+    let mut types = std::collections::BTreeMap::new();
+    types.insert("A".to_owned(), json!({ "$ref": "#/types/B" }));
+    types.insert(
+        "B".to_owned(),
+        json!({ "type": "string", "x-secret": true }),
+    );
+    types.insert("Loop".to_owned(), json!({ "$ref": "#/types/Loop" }));
+    types.insert(
+        "Deep".to_owned(),
+        json!({ "type": "object", "properties": { "d": { "$ref": "#/types/Deep" } } }),
+    );
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "chain": { "$ref": "#/types/A" },
+            "looped": { "$ref": "#/types/Loop" },
+            "deep": { "$ref": "#/types/Deep" }
+        }
+    });
+    let mut deep = json!("leaf");
+    for _ in 0..80 {
+        deep = json!({ "d": deep });
+    }
+    let mut value = json!({ "chain": "LEAK1", "looped": "fine", "deep": deep, "other": "kept" });
+    codegen::redact_secrets(&mut value, &schema, &types);
+    assert_eq!(value["chain"], json!("***"), "the chain A -> B is followed");
+    assert_eq!(
+        value["looped"],
+        json!("fine"),
+        "a self-referential alias terminates"
+    );
+    assert_eq!(value["other"], json!("kept"));
+    assert!(
+        serde_json::to_string(&value["deep"])
+            .unwrap()
+            .contains("***")
+            && !serde_json::to_string(&value["deep"])
+                .unwrap()
+                .contains("leaf"),
+        "past the depth bound the remainder is redacted whole: {}",
+        value["deep"]
+    );
 }
