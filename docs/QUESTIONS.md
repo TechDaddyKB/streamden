@@ -81,6 +81,37 @@ ADR-0004's open item; (b) GitHub Pages on the org, `tech-daddy-digital.github.io
 later.
 **Answer:**
 
+### Q-B8 — Public version and prerelease scheme 🟥 (Round 3)
+
+Options: SemVer with alpha/beta/rc channels and immutable versioned assets; or stable-only versions until
+updating ships.
+**Recommendation:** SemVer `0.1.0-alpha.N` → beta/rc → `0.1.0`, with tested monotonic native
+installer mappings before publishing any prerelease format. Never replace published bytes under a tag.
+See [Spec 01 §3](spec/01-build-release.md#3-release-identity-and-data-model).
+**Answer:**
+
+### Q-B9 — Update delivery and consent at v0.1 🟥 (Round 3)
+
+Options: manual verified downloads first; or opt-in signed self-update for AppImage/Windows (macOS later),
+with package-manager formats remaining external.
+**Recommendation:** design stable/beta/alpha now, default
+to manual checks and explicit download/install; enable self-update only after backup/recovery, signing
+and contract gates pass. Decide whether v0.1 must include self-update or may defer that part of parity
+23.17; notification cadence and staged rollout are also unapproved. No silent restart during streaming.
+See [Spec 01 §6](spec/01-build-release.md#6-update-channels-api-and-ui-proposed-q-b9).
+**Answer:**
+
+### Q-B10 — Public release signing prerequisites 🟥 (Round 3)
+
+Options: require signed Linux checksums/RPMs and defer Windows publication until SignPath approval; or
+choose a paid Windows signer if SignPath is unavailable (budget remains Q-G3).
+**Recommendation:** signed
+Linux release first after org transfer, SignPath OSS for Windows later, no public unsigned Windows fallback
+without an explicit decision. Updater keys remain separate. Existing account steps live in the
+[distribution runbook](owner/registrations/distribution-and-signing.md); this question authorizes no key
+generation, application or purchase.
+**Answer:**
+
 ---
 
 ## P — Platforms and OS support
@@ -97,6 +128,16 @@ unsigned, best-effort. (c) Later.
 ### Q-P3 — Flatpak at launch? 🟥 (Round 2)
 **Recommendation:** no, P6. The sandbox complicates system Python/.NET, local ports, MIDI and input
 simulation.
+**Answer:**
+
+### Q-P4 — Minimum Linux release baseline 🟥 (Round 3)
+
+Options: publish the current Ubuntu 24.04 x86_64 build baseline plus tested Debian/Fedora/Arch versions;
+or invest in an older build baseline (research suggested Ubuntu 22.04) before release.
+**Recommendation:**
+keep the verified 24.04 pipeline for v0.1, explicitly document minimum glibc/WebKitGTK and exact tested
+distros, add older/ARM targets only with evidence. AppImage does not mean every Linux version works.
+See [Spec 01 §7](spec/01-build-release.md#7-platform-reproducibility-and-budgets).
 **Answer:**
 
 ---

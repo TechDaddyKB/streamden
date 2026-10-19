@@ -10,7 +10,7 @@ links to the FEATURE-PARITY rows it covers.
 
 | File | Workstream | Status |
 |---|---|---|
-| `01-build-release.md` | WS-01 Build, CI, packaging | not started |
+| [01-build-release.md](01-build-release.md) | WS-01 Build, CI, packaging | r1 proposed; Claude review and owner decisions pending (DEN-66) |
 | `02-protocol.md` | WS-02 Protocol and contracts | r6, approved by the owner 2026-10-19 |
 | `03-engine.md` | WS-03 Engine core | r5, approved by the owner 2026-10-19 |
 | `04-scripting.md` | WS-04 Scripting | not started |
