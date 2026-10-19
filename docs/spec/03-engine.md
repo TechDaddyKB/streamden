@@ -64,7 +64,10 @@ Placeholder`; the run context roots `event, user, trigger, action, run, globals,
 (spec 02 §6.3); `AuthContext` and the rules of spec 02 §8.8.
 
 This spec adds the engine's own records and documents, all persisted per spec 02 §7.3 and carried by
-`den-protocol` through a contract task (§23):
+`den-protocol` through a contract task (§23; **landed in spec 02 r6**, which is normative for the shapes, including
+`Queue.maxRunMs`, `SubAction.onError`, `Node::ForEach`, `Command.sources: Vec<EventType>`,
+`Command.permissions.users: Vec<UserKey { platform, userId }>`, `RunError.code: ErrorCode` and `run.lastError:
+RunError | null`; spec 02 §6.1, §6.4, §6.5):
 
 ```rust
 /// One execution of an action. Persisted in Action History (§12) unless `history.record` is false.
@@ -1545,6 +1548,12 @@ and requires:
 Spec 02 is approved; these are additive requests for the contract task that precedes implementation (AGENTS.md
 "Contracts first"), tracked as board card **DEN-33**. None blocks the rest of this spec: where an amendment has not
 landed, the stated default applies.
+
+**Landed in spec 02 r6 (DEN-33, 2026-10-19).** Every item below is decided text in spec 02 (§3–§11, §17); spec 02
+is normative where its wording differs from this list (`PendingChange.targetKind`, `Case.values`,
+`FilterableField.caseInsensitive`, `PlannedCall.untrustedFields` not part of the plan identity, `x-den-untrusted:
+"conditional"` naming its sibling in `x-den-untrusted-flag`). The list stays as the request record; the
+`den-protocol` code follow-ups are tracked from the DEN-33 handoff.
 
 - **A1 — `SubAction.onError: OnError { stop | continue }`** (default `stop`) and the read-only run-context fields
   `run.lastError` (§9.10) and `run.queueName` (§6.4). Needed for Streamer.bot import parity and rows 2.08, 3.09.
