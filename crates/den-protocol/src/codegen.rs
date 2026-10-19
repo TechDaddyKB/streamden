@@ -294,6 +294,8 @@ pub fn lint(catalog: &Catalog) -> Vec<LintError> {
             }
         }
         lint_value_mode_enums(def.params.as_value(), "params", &types, &mut err);
+        lint_secret_marks(def.params.as_value(), "params", &types, &mut err);
+        lint_secret_marks(def.result.as_value(), "result", &types, &mut err);
     }
     let mut tool_names: BTreeMap<String, &OperationName> = BTreeMap::new();
     for (name, def) in catalog.operations() {
@@ -345,8 +347,152 @@ pub fn lint(catalog: &Catalog) -> Vec<LintError> {
         if def.examples.is_empty() {
             err("needs at least one example payload".into());
         }
+        lint_secret_marks(def.payload.as_value(), "payload", &types, &mut err);
+    }
+    errors.extend(lint_shared_types(&types));
+    errors
+}
+
+/// The `x-secret` lint over every shared type. [`lint`] runs it on the catalog as registered;
+/// [`build_unredacted`] runs it again on the final table, which also holds the types registered while
+/// building (result shapes, `TemplateString`, …).
+fn lint_shared_types(types: &BTreeMap<String, Value>) -> Vec<LintError> {
+    let mut errors = Vec::new();
+    for (name, schema) in types {
+        let subject = format!("type:{name}");
+        lint_secret_marks(schema, "", types, &mut |message| {
+            errors.push(LintError {
+                subject: subject.clone(),
+                message,
+            })
+        });
     }
     errors
+}
+
+/// Calls `f` with every schema object reachable from `schema` through the applicator keywords, and the
+/// pointer-like path it sits at.
+fn for_each_subschema(schema: &Value, path: &str, f: &mut impl FnMut(&str, &Map<String, Value>)) {
+    let Some(obj) = schema.as_object() else {
+        return;
+    };
+    f(path, obj);
+    for (key, member) in obj {
+        match key.as_str() {
+            "properties" | "patternProperties" | "dependentSchemas" | "$defs" | "definitions" => {
+                if let Some(entries) = member.as_object() {
+                    for (name, child) in entries {
+                        for_each_subschema(child, &format!("{path}/{key}/{name}"), f);
+                    }
+                }
+            }
+            "allOf" | "anyOf" | "oneOf" | "prefixItems" => {
+                if let Some(branches) = member.as_array() {
+                    for (i, child) in branches.iter().enumerate() {
+                        for_each_subschema(child, &format!("{path}/{key}/{i}"), f);
+                    }
+                }
+            }
+            // `items` is one schema in 2020-12 and may be a tuple array in draft-07 input.
+            "items" if member.is_array() => {
+                for (i, child) in member.as_array().into_iter().flatten().enumerate() {
+                    for_each_subschema(child, &format!("{path}/{key}/{i}"), f);
+                }
+            }
+            "additionalProperties"
+            | "unevaluatedProperties"
+            | "items"
+            | "contains"
+            | "unevaluatedItems"
+            | "contentSchema"
+            | "if"
+            | "then"
+            | "else"
+            | "not"
+            | "propertyNames" => {
+                for_each_subschema(member, &format!("{path}/{key}"), f);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Lints the `x-secret` marks of a schema (§3). A mark must be a boolean (publication fails closed on
+/// anything else, but the author should hear about it first). `x-secret: false` beside a `$ref` whose
+/// target is marked secret is a contradiction: secrecy is monotonic, nothing clears a mark the
+/// referenced type carries, and a `false` there would only mislead whoever reads the schema.
+fn lint_secret_marks(
+    schema: &Value,
+    path: &str,
+    types: &BTreeMap<String, Value>,
+    err: &mut impl FnMut(String),
+) {
+    for_each_subschema(schema, path, &mut |at, obj| match obj.get("x-secret") {
+        None | Some(Value::Bool(true)) => {}
+        Some(Value::Bool(false)) => {
+            if let Some(name) = ref_name(obj)
+                && let Some(marked) = referenced_secret_type(&name, types)
+            {
+                err(format!(
+                    "{at}: `x-secret: false` beside a $ref to `{marked}`, which is marked secret; secrecy is monotonic (§3) and the mark cannot be cleared here: drop the sibling"
+                ));
+            }
+        }
+        Some(other) => err(format!("{at}: x-secret must be a boolean, got {other}")),
+    });
+}
+
+/// The first shared type reachable from `name` whose schema marks the whole value secret (or carries
+/// a malformed mark, which publication treats as secret), if any. Reachable means through `$ref`s and
+/// through the applicators that apply to the same value (`allOf`/`anyOf`/`oneOf`, `if`/`then`/`else`,
+/// `not`), the way the publication walk unions them. Cycles are visited once.
+fn referenced_secret_type(name: &str, types: &BTreeMap<String, Value>) -> Option<String> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut pending = vec![name.to_owned()];
+    while let Some(current) = pending.pop() {
+        if !seen.insert(current.clone()) {
+            continue;
+        }
+        let Some(target) = types.get(&current) else {
+            continue;
+        };
+        let mut refs = Vec::new();
+        if marks_whole_value(target, &mut refs) {
+            return Some(current);
+        }
+        pending.extend(refs);
+    }
+    None
+}
+
+/// Whether `schema` marks the whole value it applies to: an `x-secret` that is not `false` on it or on
+/// a subschema that applies to the same value. The `$ref`s met on the way are collected into `refs`
+/// for the caller to follow.
+fn marks_whole_value(schema: &Value, refs: &mut Vec<String>) -> bool {
+    let Some(obj) = schema.as_object() else {
+        return false;
+    };
+    if obj
+        .get("x-secret")
+        .is_some_and(|mark| *mark != Value::Bool(false))
+    {
+        return true;
+    }
+    if let Some(name) = ref_name(obj) {
+        refs.push(name);
+    }
+    let branches = ["allOf", "anyOf", "oneOf"]
+        .into_iter()
+        .filter_map(|key| obj.get(key)?.as_array())
+        .flatten();
+    let singles = ["if", "then", "else", "not"]
+        .into_iter()
+        .filter_map(|key| obj.get(key));
+    let mut marked = false;
+    for sub in branches.chain(singles) {
+        marked |= marks_whole_value(sub, refs);
+    }
+    marked
 }
 
 fn properties_of(schema: &Value) -> Option<&Map<String, Value>> {
@@ -570,12 +716,17 @@ fn is_annotation_key(key: &str) -> bool {
 /// of the referenced schema. JSON Schema 2020-12 applies `$ref` siblings in conjunction with the target,
 /// so inlining or resolving a reference must keep every one of them: an annotation on the property
 /// replaces the target's, and a constraint that collides with one of the target's goes into an `allOf`
-/// so both still apply.
+/// so both still apply. `x-secret` is the exception among the annotations: secrecy is monotonic (§3),
+/// so the merged mark is [`merged_secret_mark`] of both sides and a `false` sibling never clears the
+/// target's `true`.
 pub fn merge_ref_target(property: &Map<String, Value>, target: &Value) -> Map<String, Value> {
     let mut merged = target.as_object().cloned().unwrap_or_default();
     let mut conjunction = Map::new();
+    if let Some(mark) = merged_secret_mark(property.get("x-secret"), target.get("x-secret")) {
+        merged.insert("x-secret".into(), mark);
+    }
     for (key, value) in property {
-        if key == "$ref" {
+        if key == "$ref" || key == "x-secret" {
             continue;
         }
         if is_annotation_key(key) || !merged.contains_key(key) {
@@ -593,6 +744,21 @@ pub fn merge_ref_target(property: &Map<String, Value>, target: &Value) -> Map<St
         all_of.push(Value::Object(conjunction));
     }
     merged
+}
+
+/// The `x-secret` mark of two schemas that apply to the same position, in conjunction (§3). Secrecy is
+/// monotonic: `true` on either side wins over `false`, and a malformed (non-boolean) mark on either
+/// side is kept as it is, so the publication walk still fails closed on it instead of seeing a clean
+/// boolean. `None` only when neither side carries a mark.
+fn merged_secret_mark(a: Option<&Value>, b: Option<&Value>) -> Option<Value> {
+    let marks: Vec<&Value> = [a, b].into_iter().flatten().collect();
+    if let Some(malformed) = marks.iter().find(|m| !m.is_boolean()) {
+        return Some((*malformed).clone());
+    }
+    if marks.is_empty() {
+        return None;
+    }
+    Some(Value::Bool(marks.iter().any(|m| m.as_bool() == Some(true))))
 }
 
 /// Derives the invocation and authoring schemas of an operation from its author params (§10.1).
@@ -791,11 +957,14 @@ const MAX_APPLICABLE: usize = 512;
 ///   `dependentSchemas` entry, whether or not that branch would validate the value. A secret marked in
 ///   any of them redacts the value. A branch that does not apply can only redact more, never less.
 /// - Object members collect their schemas from every applicable subschema: the named `properties`
-///   entry **and** every matching `patternProperties` entry (the regex is evaluated; one that does not
-///   compile matches everything), and when neither matched in that subschema its
-///   `additionalProperties` and `unevaluatedProperties` (whatever another subschema evaluated: the
-///   walk never decides which branch validated). Array items collect `prefixItems[i]`, else `items`,
-///   else `unevaluatedItems`, plus `contains` always.
+///   entry **and** every matching `patternProperties` entry, and when neither matched in that
+///   subschema its `additionalProperties` and `unevaluatedProperties` (whatever another subschema
+///   evaluated: the walk never decides which branch validated). Whether a pattern matches a member
+///   name is decided by the JSON Schema validator itself ([`PatternProbes`]): the same ECMA-262
+///   dialect, engine and limits that validate the authored examples, so the two can never disagree
+///   about which entry applies; a pattern the validator rejects cannot be classified, so every member
+///   of that object redacts whole. Array items collect `prefixItems[i]`, else `items`, else
+///   `unevaluatedItems`, plus `contains` always.
 /// - Anything the walk cannot classify redacts the value whole instead of passing it through: a `$ref`
 ///   that does not resolve to a shared type, an expansion past [`MAX_APPLICABLE`] subschemas, a value
 ///   nested past [`MAX_REDACT_DEPTH`], a schema keyword this walk does not model, a keyword whose
@@ -804,7 +973,34 @@ const MAX_APPLICABLE: usize = 512;
 /// Values the schema does not describe at all (a member of an untyped `params` object, for instance)
 /// are left alone: an unmarked position is not a secret.
 pub fn redact_secrets(value: &mut Value, schema: &Value, types: &BTreeMap<String, Value>) {
-    redact(value, &[schema], types, 0);
+    redact(value, &[schema], types, 0, &mut PatternProbes::default());
+}
+
+/// Decides whether a `patternProperties` entry applies to a member name by asking the JSON Schema
+/// validator that checks the authored examples, rather than a regex engine of this crate's own. The
+/// validator implements the ECMA-262 dialect JSON Schema prescribes (`\w` and `\W` are ASCII there,
+/// `\s` includes U+FEFF, …) on top of its engine and limits; a second engine, however carefully
+/// configured, would be a second opinion. One probe schema `{ "patternProperties": { <pattern>: false } }`
+/// is compiled per pattern: the member `{ <name>: null }` fails it exactly when the pattern selects the
+/// name. A pattern the validator cannot compile is `None`: the caller cannot classify the members and
+/// fails closed.
+#[derive(Default)]
+struct PatternProbes(BTreeMap<String, Option<jsonschema::Validator>>);
+
+impl PatternProbes {
+    fn applies(&mut self, pattern: &str, name: &str) -> Option<bool> {
+        let probe = self.0.entry(pattern.to_owned()).or_insert_with(|| {
+            let mut entries = Map::new();
+            entries.insert(pattern.to_owned(), Value::Bool(false));
+            let mut schema = Map::new();
+            schema.insert("patternProperties".into(), Value::Object(entries));
+            jsonschema::validator_for(&Value::Object(schema)).ok()
+        });
+        let validator = probe.as_ref()?;
+        let mut instance = Map::new();
+        instance.insert(name.to_owned(), Value::Null);
+        Some(!validator.is_valid(&Value::Object(instance)))
+    }
 }
 
 /// Why a position could not be classified. Every case redacts the value whole.
@@ -935,7 +1131,13 @@ fn marked_secret(applicable: &[&Map<String, Value>]) -> Result<bool, Unclassifia
 }
 
 /// Redacts `value` against the union of `schemas` (every schema that applies at its location).
-fn redact(value: &mut Value, schemas: &[&Value], types: &BTreeMap<String, Value>, depth: usize) {
+fn redact(
+    value: &mut Value,
+    schemas: &[&Value],
+    types: &BTreeMap<String, Value>,
+    depth: usize,
+    probes: &mut PatternProbes,
+) {
     if schemas.is_empty() {
         return;
     }
@@ -959,6 +1161,7 @@ fn redact(value: &mut Value, schemas: &[&Value], types: &BTreeMap<String, Value>
         Value::Object(map) => {
             for (name, member) in map.iter_mut() {
                 let mut child: Vec<&Value> = Vec::new();
+                let mut unclassifiable = false;
                 for obj in &applicable {
                     let mut matched = false;
                     if let Some(prop) = obj.get("properties").and_then(|p| p.get(name)) {
@@ -967,12 +1170,14 @@ fn redact(value: &mut Value, schemas: &[&Value], types: &BTreeMap<String, Value>
                     }
                     if let Some(Value::Object(patterns)) = obj.get("patternProperties") {
                         for (pattern, pattern_schema) in patterns {
-                            let applies = regex::Regex::new(pattern)
-                                .map(|re| re.is_match(name))
-                                .unwrap_or(true);
-                            if applies {
-                                matched = true;
-                                child.push(pattern_schema);
+                            match probes.applies(pattern, name) {
+                                Some(true) => {
+                                    matched = true;
+                                    child.push(pattern_schema);
+                                }
+                                Some(false) => {}
+                                // Which entries apply (and so whether the fallbacks do) is unknown.
+                                None => unclassifiable = true,
                             }
                         }
                     }
@@ -987,7 +1192,12 @@ fn redact(value: &mut Value, schemas: &[&Value], types: &BTreeMap<String, Value>
                         }
                     }
                 }
-                redact(member, &child, types, depth + 1);
+                if unclassifiable {
+                    // Fail closed: a member whose schemas cannot be collected is not published.
+                    *member = Value::String(REDACTED.into());
+                } else {
+                    redact(member, &child, types, depth + 1, probes);
+                }
             }
         }
         Value::Array(items) => {
@@ -1005,7 +1215,7 @@ fn redact(value: &mut Value, schemas: &[&Value], types: &BTreeMap<String, Value>
                         child.push(contains);
                     }
                 }
-                redact(item, &child, types, depth + 1);
+                redact(item, &child, types, depth + 1, probes);
             }
         }
         _ => {}
@@ -1090,6 +1300,10 @@ pub fn build_unredacted(mut catalog: Catalog) -> Result<ProtocolDocument, BuildE
         catalog.finish_schema(&mut def.payload);
     }
     let types: BTreeMap<String, Value> = catalog.take_definitions().into_iter().collect();
+    let errors = lint_shared_types(&types);
+    if !errors.is_empty() {
+        return Err(BuildError::Lint(errors));
+    }
 
     let mut operations = BTreeMap::new();
     for mut def in ops {

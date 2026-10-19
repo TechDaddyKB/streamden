@@ -15,6 +15,14 @@ crate rules.
 - Layout (DEN-34): `ids`, `timestamp`, `shared`, `events`, `domain`, `template`, `results`, `auth`, `rpc`, `catalog`,
   `manifest` hold the types; `schema` holds the generator settings and transforms; `core::register` registers what
   Spec 02 itself defines; `codegen` builds `protocol.json`, the catalog lint and the TS export that `xtask` writes.
+- `x-secret` (Spec 02 §3) is monotonic: mark a field or type `true` and every position that reaches it, by name,
+  pattern, composition or `$ref`, is published as `"***"`. `x-secret: false` never clears a mark a referenced
+  type carries (the lint rejects that sibling); a non-boolean mark fails lint and, if it ever gets through,
+  publication redacts the position whole. `codegen::redact_secrets` asks the `jsonschema` validator which
+  `patternProperties` apply, so never add a second regex engine to decide that. Marks under
+  `patternProperties` and `additionalProperties` are allowed on purpose: schemars emits `additionalProperties`
+  for `HashMap<String, T>` (a map of named secrets is a common shape), and applicability there is the
+  validator's own verdict, so forbidding them would cost expressiveness without adding safety.
 - Fixtures live in `tests/fixtures/<type>/*.json`: one per tagged-union variant, round-tripped and schema-validated
   by `tests/contract.rs`. Add a fixture for every new variant (Spec 02 §17.1). `schema/protocol.json` and
   `schema/plugin.schema.json` are golden snapshots: a type change fails `cargo test -p den-protocol` until you run
