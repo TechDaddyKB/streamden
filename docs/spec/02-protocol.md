@@ -69,7 +69,7 @@ translates to and from this protocol and never extends it).
 | Default queue | The nil UUID `00000000-0000-0000-0000-000000000000` | Matches Streamer.bot's export convention, so import is a straight mapping. |
 | Event IDs, run IDs | UUIDv7 | Monotonic per process, used for replay cursors (§8.4) and history. |
 | Plugin ID | Reverse-DNS, `^[a-z0-9]+(\.[a-z0-9-]+)+$`, ≤ 128 chars (`io.github.alice.acmelive`) | Namespace verification is the registry's job (spec 12, Q-K3). |
-| Slug | `^[a-z][a-z0-9_]{1,23}$`, unique per installation | Prefix for every event type, operation and variable namespace the plugin contributes. Reserved for core: `core`, `system`, `session`, `auth`, `actions`, `triggers`, `queues`, `variables`, `events`, `chat`, `tts`, `audio`, `plugins`, `obs`, `twitch`, `youtube`, `kick`, `x`, `bluesky`, `discord`, `vts`, `vmc`, `mcp`, `ai`, `code`, `ui`, `overlay`, `deck`, `util`, `batch`, `global`, `globals`, `user`, `event`, `run`, `trigger`, `action`. |
+| Slug | `^[a-z][a-z0-9_]{1,23}$`, unique per installation | Prefix for every event type, operation and variable namespace the plugin contributes. Reserved for core: `core`, `system`, `session`, `auth`, `actions`, `triggers`, `queues`, `variables`, `events`, `chat`, `tts`, `audio`, `plugins`, `obs`, `twitch`, `youtube`, `kick`, `x`, `bluesky`, `discord`, `vts`, `vmc`, `mcp`, `ai`, `code`, `ui`, `overlay`, `deck`, `util`, `batch`, `global`, `globals`, `user`, `event`, `run`, `trigger`, `action`, `runs`, `signals`, `commands`, `timers`, `schedule`, `settings`, `catalog`, `http`. Every namespace a core `register(&mut Catalog)` uses (§5.2) MUST be in this list; `lint-catalog` fails a core operation or event whose prefix is not reserved (§9.7). A plugin manifest whose `slug` is in this list fails manifest validation and is refused at install. |
 | Contribution IDs | `<slug>.<localId>` (`acme.gift`, `acme.send_chat`) | `localId` is `lower_snake_case`. Persisted references to a contribution are the shared type `ContributionRef { type, plugin? }` (§5.3), flattened into `Trigger` (§6.2) and `Node::Op` (§6.4): `plugin` (the plugin ID) is **required** when the slug is not reserved for core and **forbidden** when it is. The derive emits `plugin` as optional; codegen adds a generated `if/then/else` clause from the reserved-slug list to every schema that embeds a `ContributionRef` (`if type matches ^(core|system|…)\. then plugin is not allowed, else plugin is required`), and the save-time and import validators enforce the same rule in code, so the pair is part of the generated types and survives strict validation and round-trips. Installing a plugin whose slug is already used by a different plugin ID is refused locally (the registry also keeps slugs unique, spec 12). Import re-binds by `plugin`: if that plugin is installed but its current manifest uses a different slug (the author renamed it in a later version), `type` is rewritten to the installed slug; if it is not installed, an `Op` becomes `placeholder` and a `Trigger` is kept verbatim but `unresolved` (§6.2) until the plugin is installed; a non-reserved `type` without `plugin` cannot be re-bound safely and becomes `placeholder` with an import-report entry. |
 | API tokens | `sdt_` + 43 chars base64url (256 random bits) | The prefix lets secret scanners find leaked tokens. Stored as SHA-256 hashes and compared in constant time (spec 06). The protocol refers to a token only by its `TokenId` (above). |
 | Approval handles | `apr_` + 22 chars base64url | MCP approval flow, 120 s TTL. |
@@ -165,7 +165,7 @@ pub struct TwitchSubscription {
 - **Engine events and operations (A3).** Spec 03 §15 registers the engine's own operations and events through
   the same explicit `register(&mut Catalog)` (§9.1): the operations and events of `actions.*`, `triggers.*`,
   `events.*`, `runs.*`, `queues.*`, `variables.*`, `signals.*`, `commands.*`, `timers.*`, `schedule.*`,
-  `system.*`, `core.test` and `core.custom`, with the flags it states (`highVolume` on
+  `system.*`, `settings.*` (spec 03 §16), `core.test` and `core.custom`, with the flags it states (`highVolume` on
   `runs.node_started`, `runs.node_completed` and `variables.user_updated`; `critical` on `system.stopping`,
   `system.subscriber_stalled` and `system.storage_*`; `writesArgs: Named { nameParam: "name" }` on
   `variables.set_arg` and `Any` on `signals.wait`). `core.custom { name, data }` is the user-defined event
@@ -1072,7 +1072,7 @@ Per tool:
 |---|---|
 | `cargo xtask codegen --check` | Any generated artifact drifts |
 | `cargo xtask schema-compat --base <last-tag>` | Breaking change without a version bump (§7.2) |
-| `cargo xtask lint-catalog` | Missing doc comment/description/example; bad identifier; reserved run-context name; MCP name/schema rule violated; a result schema defining `dryRun` or `draft`, or an author param named `dryRun` or `approvalId`; a tier ≥ 1 operation whose result root isn't `type: object` or that lacks a dry-run example; a tier-2 configuration operation that lacks a draft example; a leaf param without a resolved template mode, or a value-mode enum member starting with `{` (§10.1); a protocol method registered as an operation; a core tier-4 operation marked `mcp`; an event payload with a top-level `platform` field (§6.2); an `x-den-untrusted: "conditional"` field whose named sibling flag is missing or not a boolean (§3); an example carrying a non-redacted value at an `x-secret` field (§3); a core `payloadVersion` step without both its upgrade and downgrade function (§5.2); a `Node` or `Fragment` example whose `kind` is not one of the build's known kinds (it would decode into the receiving-only fallback, §7.2) |
+| `cargo xtask lint-catalog` | Missing doc comment/description/example; bad identifier; reserved run-context name; MCP name/schema rule violated; a result schema defining `dryRun` or `draft`, or an author param named `dryRun` or `approvalId`; a tier ≥ 1 operation whose result root isn't `type: object` or that lacks a dry-run example; a tier-2 configuration operation that lacks a draft example; a leaf param without a resolved template mode, or a value-mode enum member starting with `{` (§10.1); a protocol method registered as an operation; a core tier-4 operation marked `mcp`; an event payload with a top-level `platform` field (§6.2); an `x-den-untrusted: "conditional"` field whose named sibling flag is missing or not a boolean (§3); an example carrying a non-redacted value at an `x-secret` field (§3); a core `payloadVersion` step without both its upgrade and downgrade function (§5.2); a `Node` or `Fragment` example whose `kind` is not one of the build's known kinds (it would decode into the receiving-only fallback, §7.2); a core operation or event whose namespace is not in the reserved-core slug list (§4) |
 | `cargo nextest run -p den-protocol` | Round-trip, golden fixture or migration test fails |
 | `pnpm -C sdk/ts typecheck && pnpm -C sdk/ts test` | Generated TS doesn't compile or rejects fixtures |
 | `uv run pytest sdk/python` (plus pyright) | Generated models reject fixtures |
@@ -1349,7 +1349,11 @@ import-originated data is.
     under the same slug, (b) installed in a later version whose manifest renamed the slug (`type` rewritten), (c) absent (`placeholder` node,
     `unresolved` trigger, both resolve on install), (d) a different plugin owns the slug (re-bound by plugin ID); a
     core type with `plugin` set and a plugin type without `plugin` are rejected by the generated `if/then/else`
-    schema clause and by the save-time validator (§4).
+    schema clause and by the save-time validator (§4). For every namespace the engine registers (§5.2), positive
+    fixtures save and import a core reference without `plugin` (`commands.triggered` and `schedule.timer_fired`
+    triggers, `signals.wait`, `timers.set_state` and `runs.replay` ops), the same references with `plugin` set are
+    rejected, installing a plugin whose slug is `runs`, `signals`, `commands`, `timers` or `schedule` is refused,
+    and `lint-catalog` fails a core registration under an unreserved prefix.
 13. **MCP exposure** (§9.6): the Lean profile creates a disabled `ai_draft` through `actions_create` and through
     `invoke_operation("actions.create")` with identical results; `invoke_operation` on a protocol method or a tier-4
     operation → `NOT_FOUND`; `actions_update` and `invoke_operation("actions.update")` yield an `ai_draft {
@@ -1485,4 +1489,7 @@ protocol design choice made here, not a product decision, and is open to reviewe
   intersection note (§17.1). From the Codex review of DEN-34, folded in as contract text: the receiving-only
   `unknown` variants of `Node` and `Fragment` (§7.2), `$ref` sibling preservation and union traversal in template
   derivation (§10.1), and the secret-example lint (§3, §9.7). Document kinds `command`, `timer`, `pending_change`,
-  `view_state` (§7.3).
+  `view_state` (§7.3). Round 2 (Codex review, P1): the engine namespaces `runs`, `signals`, `commands`, `timers`,
+  `schedule`, plus `settings` (spec 03 §16), the `catalog.changed` notification name and the core primitive
+  `http.*` (spec 11), are reserved for core; a manifest claiming a reserved slug is refused; and `lint-catalog`
+  fails a core registration under an unreserved prefix (§4, §5.2, §9.7, §17.12).
