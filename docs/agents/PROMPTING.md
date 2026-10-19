@@ -102,15 +102,24 @@ security; test plan; open questions (add them to docs/QUESTIONS.md, don't answer
 Ask me questions first if a product decision is missing. Don't write code.
 ```
 
-**Contract author** (Claude Opus)
+**Contract designer** (Claude Opus; design and ADR only, D-044)
 ```
-Turn spec §<x> into types in crates/den-protocol with serde + schemars, doc comments on every field, and
-examples. Add stub implementations and failing contract tests. Write or amend the ADR. Don't implement behaviour.
+Design the contract for spec §<x>: the public types, field docs, examples and error cases for crates/den-protocol.
+Write or amend the ADR and list the exact types, fields and invariants the implementer must produce.
+Don't write Rust code or implement behaviour.
+```
+
+**Contract implementer** (Codex Sol, medium effort; QA by Grok, second review by Claude)
+```
+Implement the approved contract design for spec §<x> and ADR <NNNN> in crates/den-protocol with serde + schemars,
+doc comments on every field, and examples. Add stub implementations and failing contract tests. Regenerate
+artifacts with `cargo xtask codegen`. Don't implement behaviour and don't deviate from the ADR; report gaps.
 ```
 
 **Implementer** (any vendor): use the universal template as-is.
 
-**Test writer** (Codex Sol; never the same vendor as the implementer)
+**Test writer** (Grok for independent QA suites; ordinary implementation tests are written by the implementer
+alongside its code, and an independent suite never comes from the implementer's vendor)
 ```
 Write tests for <module> against docs/spec/<NN>.md §<x>, not against the implementation's current behaviour.
 Use crates/den-testkit fixtures and golden payloads. If the implementation disagrees with the spec, report it;
