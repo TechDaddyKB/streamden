@@ -2120,18 +2120,41 @@ fn strip_fallback_branches(schema: &mut Value, fallbacks: &[String]) {
             branches.retain(|branch| !is_fallback_branch(branch, fallbacks));
         }
     }
+    // Match `for_each_subschema`: map keys name schemas, so even `default`, `title`, and
+    // `x-*` entries must be visited. Only schema-bearing keywords recurse; annotations are data.
     for (key, member) in obj.iter_mut() {
-        // Annotation values (`default`, `examples`, `x-…`) are data, not schemas.
-        if is_annotation_key(key) {
-            continue;
-        }
-        match member {
-            Value::Object(_) => strip_fallback_branches(member, fallbacks),
-            Value::Array(items) => {
-                for item in items {
-                    strip_fallback_branches(item, fallbacks);
+        match key.as_str() {
+            "properties" | "patternProperties" | "dependentSchemas" | "$defs" | "definitions" => {
+                if let Some(entries) = member.as_object_mut() {
+                    for child in entries.values_mut() {
+                        strip_fallback_branches(child, fallbacks);
+                    }
                 }
             }
+            "allOf" | "anyOf" | "oneOf" | "prefixItems" => {
+                if let Some(branches) = member.as_array_mut() {
+                    for child in branches {
+                        strip_fallback_branches(child, fallbacks);
+                    }
+                }
+            }
+            // `items` is one schema in 2020-12 and may be a tuple array in draft-07 input.
+            "items" if member.is_array() => {
+                for child in member.as_array_mut().into_iter().flatten() {
+                    strip_fallback_branches(child, fallbacks);
+                }
+            }
+            "additionalProperties"
+            | "unevaluatedProperties"
+            | "items"
+            | "contains"
+            | "unevaluatedItems"
+            | "contentSchema"
+            | "if"
+            | "then"
+            | "else"
+            | "not"
+            | "propertyNames" => strip_fallback_branches(member, fallbacks),
             _ => {}
         }
     }
