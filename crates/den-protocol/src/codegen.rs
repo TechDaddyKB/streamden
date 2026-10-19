@@ -607,31 +607,36 @@ fn lint_shared_types(types: &BTreeMap<String, Value>) -> Vec<LintError> {
 
 /// Calls `f` with every schema object reachable from `schema` through the applicator keywords, and the
 /// pointer-like path it sits at.
-fn for_each_subschema(schema: &Value, path: &str, f: &mut impl FnMut(&str, &Map<String, Value>)) {
+fn for_each_subschema(schema: &Value, path: &str, f: &mut dyn FnMut(&str, &Map<String, Value>)) {
     let Some(obj) = schema.as_object() else {
         return;
     };
     f(path, obj);
+    for_each_child_schema(obj, path, &mut |at, child| for_each_subschema(child, at, f));
+}
+
+/// Visits immediate schema children without treating annotation values as schemas.
+fn for_each_child_schema(obj: &Map<String, Value>, path: &str, f: &mut impl FnMut(&str, &Value)) {
     for (key, member) in obj {
         match key.as_str() {
             "properties" | "patternProperties" | "dependentSchemas" | "$defs" | "definitions" => {
                 if let Some(entries) = member.as_object() {
                     for (name, child) in entries {
-                        for_each_subschema(child, &format!("{path}/{key}/{name}"), f);
+                        f(&format!("{path}/{key}/{name}"), child);
                     }
                 }
             }
             "allOf" | "anyOf" | "oneOf" | "prefixItems" => {
                 if let Some(branches) = member.as_array() {
                     for (i, child) in branches.iter().enumerate() {
-                        for_each_subschema(child, &format!("{path}/{key}/{i}"), f);
+                        f(&format!("{path}/{key}/{i}"), child);
                     }
                 }
             }
             // `items` is one schema in 2020-12 and may be a tuple array in draft-07 input.
             "items" if member.is_array() => {
                 for (i, child) in member.as_array().into_iter().flatten().enumerate() {
-                    for_each_subschema(child, &format!("{path}/{key}/{i}"), f);
+                    f(&format!("{path}/{key}/{i}"), child);
                 }
             }
             "additionalProperties"
@@ -645,7 +650,7 @@ fn for_each_subschema(schema: &Value, path: &str, f: &mut impl FnMut(&str, &Map<
             | "else"
             | "not"
             | "propertyNames" => {
-                for_each_subschema(member, &format!("{path}/{key}"), f);
+                f(&format!("{path}/{key}"), member);
             }
             _ => {}
         }
@@ -665,20 +670,76 @@ fn lint_secret_marks(
     types: &BTreeMap<String, Value>,
     err: &mut impl FnMut(String),
 ) {
-    for_each_subschema(schema, path, &mut |at, obj| match obj.get("x-secret") {
-        None | Some(Value::Bool(true)) => {}
-        Some(Value::Bool(false)) => {
-            let marked = ref_name(obj).and_then(|name| referenced_secret_type(&name, types));
-            match marked {
-                Some(marked) => err(format!(
-                    "{at}: `x-secret: false` beside a $ref to `{marked}`, which is marked secret; secrecy is monotonic (§3) and the mark cannot be cleared here: drop the sibling"
-                )),
-                None => err(format!(
-                    "{at}: `x-secret: false` has no effect (§3 marks with `true` only; secrecy is monotonic) and a field-level `extend` can erase an inline type's mark with it: drop it"
-                )),
+    for_each_subschema(schema, path, &mut |at, obj| {
+        if obj.contains_key("$ref") && ref_name(obj).is_none() {
+            err(format!(
+                "{at}: $ref must use the canonical `#/types/<Name>` prefix (§9.1)"
+            ));
+        }
+        match obj.get("x-secret") {
+            None | Some(Value::Bool(true)) => {}
+            Some(Value::Bool(false)) => {
+                let marked = ref_name(obj).and_then(|name| referenced_secret_type(&name, types));
+                match marked {
+                    Some(marked) => err(format!(
+                        "{at}: `x-secret: false` beside a $ref to `{marked}`, which is marked secret; secrecy is monotonic (§3) and the mark cannot be cleared here: drop the sibling"
+                    )),
+                    None => err(format!(
+                        "{at}: `x-secret: false` has no effect (§3 marks with `true` only; secrecy is monotonic) and a field-level `extend` can erase an inline type's mark with it: drop it"
+                    )),
+                }
+            }
+            Some(other) => err(format!("{at}: x-secret must be a boolean, got {other}")),
+        }
+    });
+    lint_secret_literals(schema, path, types, false, &mut Default::default(), err);
+}
+
+/// Schema literals are published verbatim. A whole-value mark also protects every descendant and
+/// referenced type, including siblings of a mark in a same-value composition. Never print literals
+/// in diagnostics. Track reference cycles on the current path so recursive types terminate.
+fn lint_secret_literals(
+    schema: &Value,
+    path: &str,
+    types: &BTreeMap<String, Value>,
+    inherited_secret: bool,
+    visiting: &mut std::collections::BTreeSet<String>,
+    err: &mut impl FnMut(String),
+) {
+    let Some(obj) = schema.as_object() else {
+        return;
+    };
+    let mut refs = Vec::new();
+    let secret = inherited_secret
+        || marks_whole_value(schema, &mut refs)
+        || refs
+            .iter()
+            .any(|name| referenced_secret_type(name, types).is_some());
+    if secret {
+        for key in ["default", "examples", "const", "enum"] {
+            if obj.contains_key(key) {
+                err(format!(
+                    "{path}/{key}: `{key}` is forbidden under a secret-marked position (§3)"
+                ));
             }
         }
-        Some(other) => err(format!("{at}: x-secret must be a boolean, got {other}")),
+        if let Some(name) = ref_name(obj)
+            && let Some(target) = types.get(&name)
+            && visiting.insert(name.clone())
+        {
+            lint_secret_literals(
+                target,
+                &format!("{path}/$ref/{name}"),
+                types,
+                true,
+                visiting,
+                err,
+            );
+            visiting.remove(&name);
+        }
+    }
+    for_each_child_schema(obj, path, &mut |at, child| {
+        lint_secret_literals(child, at, types, secret, visiting, err);
     });
 }
 
@@ -932,9 +993,7 @@ fn resolve_mode(leaf: &Value, types: &BTreeMap<String, Value>, depth: usize) -> 
 
 fn ref_name(obj: &Map<String, Value>) -> Option<String> {
     let r = obj.get("$ref")?.as_str()?;
-    r.strip_prefix("#/types/")
-        .or_else(|| r.strip_prefix("#/$defs/"))
-        .map(str::to_owned)
+    r.strip_prefix("#/types/").map(str::to_owned)
 }
 
 fn resolve_ref<'a>(
