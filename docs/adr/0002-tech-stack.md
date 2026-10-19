@@ -33,7 +33,9 @@ web-tech WYSIWYG designer. It must be maintainable by Claude, Codex and Grok age
 | Flutter | 3.03 |
 
 ## Consequences
-- ➕ About 4 MB installers and about 94 MB idle on Linux (vs about 300 MB and 280–590 MB for Electron).
+- ➕ About 4 MB installers (vs about 300 MB for Electron; research figures). Idle memory is not the
+  research's about 94 MB: S-1 measured about 280 MB PSS with the window open, still at the low end of
+  Electron's 280–590 MB.
   Native deb/rpm/AppImage/MSI/DMG bundling. A strong engine for sockets, audio and inference.
 - ➖ WebKitGTK on Wayland + NVIDIA is fragile (blank windows, "Error 71"). Mitigations: an early GL-context
   quirk, a graphics-compat setting with crash-loop fallback, never unconditional env vars, the UI also served
@@ -45,19 +47,37 @@ web-tech WYSIWYG designer. It must be maintainable by Claude, Codex and Grok age
   unchanged into a sidecar either way.
 
 ## Spike evidence (2026-10-18, E-1 = Hyprland + NVIDIA/AMD hybrid)
-- **S-1 (DEN-2): GO for Tauri 2, with conditions.** Every compat level rendered, with no Error 71, DMA-BUF or
-  EGL failures. First paint was 150–260 ms; idle CPU 0.4–1.2 %. The tray, close-to-tray with the engine still
-  running, the second window, fullscreen, resize, moving across monitors, and the crash-loop fallback
-  (levels 0→4, then browser UI) all worked. Conditions that change the design:
-  1. **The early-GL-context quirk must not be the default.** On this machine it pushed rendering to software
-     (llvmpipe), about 5× the CPU.
-  2. **Destroying a window leaks its WebKit process** (about 100–130 MB per close and reopen). The shell must
-     terminate the web process explicitly.
-  3. **The memory budget needs a process split:** closed-to-tray still held about 196 MB, against about 52 MB for
-     engine + tray alone. So the UI runs as a separate process, launched on demand, and the engine + tray process
-     never loads WebKit.
-  4. `always_on_top` is ignored on Hyprland, so the chat window uses compositor rules (`pin`) and docs.
-  5. WebKit rendered on the AMD iGPU in this hybrid setup. NVIDIA-only desktops are still untested.
+- **S-1 (DEN-2): Conditional GO for Tauri 2. Out of the box, WebKitGTK is not reliable on Hyprland +
+  NVIDIA**, so the graphics-compat ladder ships as a hard, tested requirement with an NVIDIA-aware default.
+  (The first run measured a broken driver state, NVIDIA userspace and kernel module mismatched before a reboot,
+  and is void for GPU results; see S-1 §0. GPU figures below are from the re-run; the non-GPU memory checks
+  are first-run figures that S-1 keeps as valid.)
+  - Level 0 (defaults) exits with `Error 71` before first paint on every launch (0/11). NVIDIA explicit sync
+    triggers it: level 0 + `__NV_DISABLE_EXPLICIT_SYNC=1` paints 6/6.
+  - Level 1 (the early-GL quirk) is the best level on this machine: it painted on all 13 launches in about
+    350 ms and renders on NVIDIA with no llvmpipe, at 4.4 % CPU animated, 12 % fullscreen at 5120×1440 and
+    0.4 % idle.
+  - Levels 2–3 (no DMA-BUF) paint, but WebKit paints on the CPU (28 % fullscreen). Level 4 (X11/XWayland)
+    shows a blank window and never paints (0/7) while the process stays alive.
+  - The crash ladder rescues a clean install by itself (level 0 crashes, the next start comes up at level 1).
+    The tray, close-to-tray with the engine still running, the second window, fullscreen and the browser
+    fallback work.
+
+  GO conditions (S-1 §10):
+  1. **NVIDIA-aware default.** On Wayland with an NVIDIA GPU, start at the early-GL quirk, after checking that
+     NVIDIA EGL actually works. Never ship level 0 as the NVIDIA default. Keep level 0 for other GPUs (untested;
+     E-2).
+  2. **Ladder:** quirk → `__NV_DISABLE_EXPLICIT_SYNC=1` → no-DMA-BUF → no-DMA-BUF + X11 → browser. Plain X11 is
+     not a step (blank on NVIDIA). Bump immediately on a hard crash and after two failures otherwise.
+  3. **First-paint watchdog** so a live blank window also bumps the level.
+  4. **Broken-driver detection:** if GTK's GL is llvmpipe or NVIDIA reports an API mismatch, skip the quirk and
+     tell the user to reboot.
+  5. **Shell rules:** closing a webview terminates its web process (`destroy()` alone leaks it: 3 cycles left
+     4 web processes, 573 MB PSS while closed; report the leak to wry/Tauri). Two-process model: closed to
+     tray the in-process app still held 184 MB PSS / 332 MB RSS, against 52 MB PSS / 92 MB RSS for engine + tray alone, so the engine + tray
+     process never loads WebKit and the UI process exits on close. `always_on_top` is ignored on Hyprland, so
+     don't promise it on Wayland; ship Hyprland/KWin rules (`pin`) and the OBS-dock chat.
+  6. Cap Tokio worker threads in the engine. Watch for `tray-icon` moving to libayatana-appindicator-glib.
 - **S-2 (DEN-3), Linux done:** transparent overlays, WebSocket reconnect (0.14–3.2 s), `w-<id>.localhost`
   per-widget origins (isolated, persistent) and CDN loads all pass. Native-Wayland OBS has no custom docks
   (native chat window confirmed), and OBS browser hardware acceleration must be **off** on NVIDIA Linux
@@ -65,7 +85,7 @@ web-tech WYSIWYG designer. It must be maintainable by Claude, Codex and Grok age
   server.
 
 ## Acceptance checklist
-- [x] Spike S-1 on Hyprland + NVIDIA (E-1): GO with the conditions above
+- [x] Spike S-1 on Hyprland + NVIDIA (E-1): Conditional GO with the conditions above
 - [ ] Spike S-1 on KDE (E-2) and Windows (E-3): **parked, DEN-20** (D-035)
 - [x] Spike S-2 on Linux (E-1)
 - [ ] Spike S-2 on Windows (E-3): **parked, DEN-20** (D-035)

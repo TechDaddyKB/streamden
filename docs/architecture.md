@@ -31,10 +31,10 @@
   desktop app can attach to a running daemon, e.g. a daemon on the stream PC controlled from the gaming PC.
 - **The UI is just another API client.** In-process it uses Tauri IPC carrying the *same* typed messages as `/ws`.
 - **Process split (from spike S-1, to be specified in spec 07):** the always-running process is the engine plus
-  tray and **never loads WebKit** (about 52 MB measured). The UI windows run in a separate, on-demand Tauri process
-  that talks to the engine over the local API, and is fully exited when the last window closes. Measured:
-  keeping WebKit resident after closing to tray cost about 196 MB, and destroying a webview without killing its
-  web process leaked about 100–130 MB per cycle.
+  tray and **never loads WebKit** (52 MB PSS / 92 MB RSS measured). The UI windows run in a separate, on-demand
+  Tauri process that talks to the engine over the local API, and is fully exited when the last window closes.
+  Measured: the in-process app closed to tray still held 184 MB PSS / 332 MB RSS, and destroying a webview
+  without terminating its web process leaked it (3 close/reopen cycles left 4 web processes, 573 MB PSS).
 
 ## 2. Core domain model
 
