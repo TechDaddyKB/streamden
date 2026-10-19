@@ -483,6 +483,18 @@ providers can power it (local models too)? Disclosure (the EU AI Act Art. 50 tra
 Replies pass moderation, the approval queue is the default, disclosure is on, and there's a hard budget cap.
 **Answer:**
 
+### Q-A6 — Do MCP-caused event chains inherit the MCP restrictions? 🟥 (Round 3)
+[Spec 02 §8.8](spec/02-protocol.md) makes authorization transitive: a run started over MCP can never reach tier 4
+(code, end stream) through nested or queued actions. But an MCP run can emit events (a chat message, a variable
+change), and the user's own triggers on those events start new runs. Options: (a) **new runs start under the
+trigger's authority** (tier 4 allowed): a trigger is the user's configuration, so this is user intent; the audit log
+links the chain through `causedBy`; (b) runs with MCP lineage inherit the MCP `maxTier: 3` for N hops of
+`causedBy`, which also blocks legitimate user automations whenever an AI client is active; (c) configurable per
+MCP token, default (a).
+**Recommendation:** (a), which the spec implements as its default, plus a UI lint that warns when a trigger listens
+to events that MCP-exposed operations can emit and its action has effective tier 4.
+**Answer:**
+
 ---
 
 ## H — Data

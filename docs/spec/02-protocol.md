@@ -1,6 +1,7 @@
 # Spec 02: Protocol and contracts (WS-02)
 
-- **Status:** Draft for review (DEN-14). Reviewer: Codex (Astra). Approval: owner.
+- **Status:** Draft, revision 2 (resolves the Codex Astra review findings 1–6, see §19). Reviewer: Codex
+  (Astra). Approval: owner. Card: DEN-14.
 - **Owns:** `crates/den-protocol` (single-writer), the codegen pipeline (`cargo xtask codegen`), and every generated
   artifact (`protocol.json`, OpenAPI, AsyncAPI, TS, Python, plugin manifest schema, MCP tool catalog).
 - **Builds on:** [architecture.md](../architecture.md) §2–4, [plugin-sdk-and-api.md](../research/plugin-sdk-and-api.md)
@@ -14,8 +15,9 @@
 
 **In scope:** the wire and storage shapes every other subsystem builds against: the event envelope and naming;
 the domain types (Action, Trigger, Sub-action, Variable, Queue); the ID scheme; versioning and migrations; the
-operation catalog; the WebSocket JSON-RPC envelope, handshake, subscriptions and errors; stdio framing for workers
-and sidecars; plugin manifest schema v0; template syntax; codegen and its CI checks.
+operation catalog; the authorization context every call and run carries; the WebSocket JSON-RPC envelope,
+handshake, subscriptions and errors; stdio framing for workers and sidecars; plugin manifest schema v0; template
+syntax; codegen and its CI checks.
 
 **Non-goals (owned elsewhere):** engine semantics such as trigger precedence, queue scheduling, and run and
 history behaviour (spec 03). Endpoints, ports, the pairing UI, REST resource design and the MCP server runtime
@@ -44,12 +46,12 @@ translates to and from this protocol and never extends it).
 | Rust derives | Every public type derives `Serialize, Deserialize, JsonSchema, TS` (ts-rs, §9.2) and has a doc comment on the type and on every field. Doc comments become schema `description`s. |
 | Field names | `camelCase` on the wire (`#[serde(rename_all = "camelCase")]`). |
 | Enum values | `snake_case` strings. **Open enums** (platforms, tiers of other services) are strings with documented known values, never closed Rust enums, so new values don't break old clients. |
-| Tagged unions | Internally tagged: `kind` for domain unions, `type` only for the event type. No `untagged` unions on the wire (they make schemas ambiguous). |
+| Tagged unions | Internally tagged: `kind` for domain unions, `type` only for the event type. No `untagged` unions on the wire (they make schemas ambiguous), with the single exception in the Unions row. `#[serde(flatten)]` inside a struct variant (`Node::Op`, §6.4) is covered by the round-trip and ts-rs tests in §17.1. |
 | Identifiers in namespaces | Dotted, `lower_snake_case` segments, `^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`: event types `twitch.channel_point_redemption`, operations `obs.set_scene`, methods `actions.run`. |
 | Time | RFC 3339 UTC with milliseconds and `Z` (`2026-10-18T20:15:03.120Z`). Durations are integer milliseconds in fields ending `Ms`. |
 | Money | `Money { amountMinor: i64, currency: String /* ISO 4217 or a platform unit like "bits" */, exponent: u8 }`. Floats are never used for money. The run context also exposes a derived `amount` number for templates (§6.3). |
 | Unknown fields | Wire types **ignore** unknown fields (forward compatibility). Manifests and persisted documents validate strictly, except keys starting with `x-`. Strictness is enforced by the JSON Schema validator, not serde's `deny_unknown_fields`, which doesn't work with `flatten`. Types using `#[serde(flatten)]` (e.g. `SubAction`, §6.4) get `unevaluatedProperties: false` (2020-12) instead of `additionalProperties: false` per branch, via a schemars transform; a test validates every fixture against it. |
-| Unions | No `untagged` unions, with one exception: `TemplateOr<T>` (§6.4) is the schema `{ "anyOf": [T, { "type": "string", "x-den-template": true }] }`, never at a root, and is decoded by a hand-written deserializer (string → template, anything else → `T`). |
+| Unions | No `untagged` unions, with one exception: `TemplateOr<T>` (§6.4, §10.1) is the Rust form of a value-mode template field. Its schema is `{ "anyOf": [T, { "type": "string", "x-den-template": "value" }] }`, never at a root, decoded by a hand-written deserializer (a string that is exactly one `{…}` form → template, anything else → `T`). The same derivation produces every operation's authoring schema (§10.1). |
 | Optional vs null | Absent means "not provided". `null` is only used where a value can be explicitly cleared; the schema says so. |
 | Sizes | One WS message ≤ 1 MiB by default (configurable, spec 06). Max JSON nesting depth 32 for anything coming from plugins or clients. |
 | Untrusted text | Fields that carry viewer- or third-party-controlled text (chat text, usernames, titles, plugin outputs) are marked `x-den-untrusted: true`. MCP and the AI layer wrap these values (§9.6). |
@@ -64,7 +66,7 @@ translates to and from this protocol and never extends it).
 | Event IDs, run IDs | UUIDv7 | Monotonic per process, used for replay cursors (§8.4) and history. |
 | Plugin ID | Reverse-DNS, `^[a-z0-9]+(\.[a-z0-9-]+)+$`, ≤ 128 chars (`io.github.alice.acmelive`) | Namespace verification is the registry's job (spec 12, Q-K3). |
 | Slug | `^[a-z][a-z0-9_]{1,23}$`, unique per installation | Prefix for every event type, operation and variable namespace the plugin contributes. Reserved for core: `core`, `system`, `session`, `auth`, `actions`, `triggers`, `queues`, `variables`, `events`, `chat`, `tts`, `audio`, `plugins`, `obs`, `twitch`, `youtube`, `kick`, `x`, `bluesky`, `discord`, `vts`, `vmc`, `mcp`, `ai`, `code`, `ui`, `overlay`, `deck`, `util`, `batch`, `global`, `globals`, `user`, `event`, `run`, `trigger`, `action`. |
-| Contribution IDs | `<slug>.<localId>` (`acme.gift`, `acme.send_chat`) | `localId` is `lower_snake_case`. The slug is the readable name, but persisted documents store **both** `type` and `plugin` (the plugin ID) on every node or trigger that references a plugin contribution. Installing a plugin whose slug is already used by a different plugin ID is refused locally (the registry also keeps slugs unique, spec 12). On import from another installation, a reference is re-bound by plugin ID; if that plugin isn't installed, the node becomes a `placeholder`. |
+| Contribution IDs | `<slug>.<localId>` (`acme.gift`, `acme.send_chat`) | `localId` is `lower_snake_case`. Persisted references to a contribution are the shared type `ContributionRef { type, plugin? }` (§5.3), flattened into `Trigger` (§6.2) and `Node::Op` (§6.4): `plugin` (the plugin ID) is **required** when the slug is not reserved for core and **forbidden** when it is. The derive emits `plugin` as optional; codegen adds a generated `if/then/else` clause from the reserved-slug list to every schema that embeds a `ContributionRef` (`if type matches ^(core|system|…)\. then plugin is not allowed, else plugin is required`), and the save-time and import validators enforce the same rule in code, so the pair is part of the generated types and survives strict validation and round-trips. Installing a plugin whose slug is already used by a different plugin ID is refused locally (the registry also keeps slugs unique, spec 12). Import re-binds by `plugin`: if that plugin is installed but its current manifest uses a different slug (the author renamed it in a later version), `type` is rewritten to the installed slug; if it is not installed, an `Op` becomes `placeholder` and a `Trigger` is kept verbatim but `unresolved` (§6.2) until the plugin is installed; a non-reserved `type` without `plugin` cannot be re-bound safely and becomes `placeholder` with an import-report entry. |
 | API tokens | `sdt_` + 43 chars base64url (256 random bits) | The prefix lets secret scanners find leaked tokens. Stored as SHA-256 hashes and compared in constant time (spec 06). |
 | Approval handles | `apr_` + 22 chars base64url | MCP approval flow, 120 s TTL. |
 | Session IDs | `ses_` + 22 chars base64url | Per WS connection. |
@@ -136,16 +138,30 @@ pub struct TwitchSubscription {
   `protocol.json` lists the envelope schema once and each payload schema under `events.<type>.payload`.
 - **Unknown types at the receiver.** Every client MUST ignore event types and fields it doesn't know. The
   generated parsers return "unknown", never an error, for an unrecognised `type`.
-- **Payload evolution.** Additive changes keep `payloadVersion`. A breaking change to one event type bumps its
-  `payloadVersion`, and the engine emits the old shape to sessions that negotiated an older `rpcVersion` for one
-  deprecation window (§7.4), through a registered downgrade function.
+- **Payload evolution.** Additive changes keep `payloadVersion`. A breaking change to a core event's payload bumps
+  its `payloadVersion` **and** `rpcVersion` together: each `rpcVersion` fixes exactly one payload version per core
+  event type, published in `protocol.json` as `events.<type>.payloadVersions: { "1": 1, "2": 2 }` with one
+  payload schema per version. The session's negotiated `rpcVersion` (§8.3) is therefore the only negotiation knob:
+  the engine emits, and replays (§8.4), the payload version that the session's `rpcVersion` maps to, through a
+  registered downgrade function keyed `(type, from, to)`, for the deprecation window (§7.4), and
+  `meta.payloadVersion` always states the shape actually delivered. Two sessions on `rpcVersion` 1 and 2 receiving
+  the same upstream event get different shapes (§17.10). Per-event negotiation in `identify`/`subscribe` was
+  rejected: it adds a second knob that generated SDKs, which are pinned to one `rpcVersion`, cannot use. Breaking
+  payload changes SHOULD be batched into one `rpcVersion` bump. **Plugin events** are outside this table: a plugin
+  declares `payloadVersion` per event in its manifest (§11), a breaking change there is a plugin major version
+  bump, the host never downgrades plugin payloads, and clients consuming plugin events check
+  `meta.payloadVersion`. Stored events (history, exports) are immutable and keep the version they were emitted
+  with; readers use `meta.payloadVersion`, not §7.3 migrations.
 
 ### 5.3 Shared core types (referenced by every connector and plugin)
 
 `UserRef { platform, id, login, displayName, avatarUrl?, color?, roles: Vec<String> /* broadcaster, moderator,
 vip, subscriber, founder, member… open */, badges: Vec<Badge>, pronouns? }` ·
 `ChatText { text, fragments: Vec<Fragment> }` where `Fragment` is `kind`-tagged `text | emote | mention | link |
-cheermote` · `Money` · `ImageRef { url, width?, height?, scale? }` · `Duration` (ms) · `PlatformId` (open string).
+cheermote` · `Money` · `ImageRef { url, width?, height?, scale? }` · `Duration` (ms) · `PlatformId` (open string) ·
+`ContributionRef { type: String /* "twitch.cheer", "acme.gift" */, plugin: Option<PluginId> /* required for a
+non-core slug, forbidden for a core slug (§4) */ }` · `RiskTier` (integer 0–4, §8.1) · `DryRunResult`, `PlanStep`
+(§8.1) · `AuthContext`, `Principal`, `ApprovalBinding` (§8.8).
 Plugin manifests reference them as `den://schemas/v0/<Name>.json` (resolved offline from the bundled catalog), so
 `{user.displayName}` means the same thing everywhere.
 
@@ -159,7 +175,8 @@ behaviour is in spec 03.
 ```rust
 pub struct Action {
     pub id: ActionId,
-    pub name: String,                  // unique per installation, case-insensitively; actions run by id or name
+    pub revision: u64,                 // server-assigned, +1 on every write; approvals bind to it (§8.8)
+    pub name: String,                  // unique per installation among non-draft actions, case-insensitively; actions run by id or name
     pub group: Option<String>,         // folder path "Alerts/Twitch"; organisation only
     pub enabled: bool,
     pub queue: QueueId,                // nil UUID = Default queue
@@ -171,7 +188,7 @@ pub struct Action {
     pub nodes: Vec<SubAction>,         // the sub-action tree, §6.4
     pub description: Option<String>,
     pub tags: Vec<String>,             // also used by scopes like actions:run:<tag>
-    pub origin: Origin,                // user | imported { from: "streamerbot", trusted: false } | ai_draft | plugin_template
+    pub origin: Origin,                // user | imported { from: "streamerbot", trusted: false } | ai_draft { draftOf?: ActionId } | plugin_template
 }
 pub struct Queue {
     pub id: QueueId, pub name: String,
@@ -189,7 +206,19 @@ applies them). **`origin` is server-assigned and read-only on the wire**: it is 
 session → `ai_draft`, importer → `imported`, UI or user token → `user`). It changes only through in-app user
 actions: *Apply* on an AI draft sets `user`; *Trust this action* on an imported one sets `imported { trusted:
 true }` after the consent screen. Editing an imported action does not change its trust. The same rule applies to
-`updatedBy` on variables (§6.3).
+`updatedBy` on variables (§6.3) and to `revision`, which the server bumps on every write.
+
+**Draft-first under MCP (tier-2 policy, §8.1).** A tier-2 operation called under an MCP context never mutates a
+live document. For **actions**: `actions.create` creates an `ai_draft` with `enabled: false`; `actions.update`
+creates a new action `ai_draft { draftOf: <target> }` holding the proposed content (it keeps the target's name,
+which is why uniqueness is checked among non-draft actions only) and leaves the target untouched. *Apply* in the
+"Pending AI changes" panel replaces the target's content (bumping its `revision`), sets `origin: user`, and deletes
+the draft; *Discard* deletes it. For **every other document kind** (queues, commands, overlays, settings) the
+draft is a `PendingChange { id, kind, draftOf?: EntityId, operation, params, createdBy: Principal }` document
+(§7.3, its own `schemaVersion`), which *Apply* replays under the user's context. Codegen adds the optional result
+field `draft?: DraftRef { id, kind }` to every tier-2 operation, set when the call was executed draft-first; `draft`
+is a reserved result key like `dryRun` (§8.1), so WS, REST and MCP results share one schema. Drafts never run (§8.8
+rule 6).
 
 ### 6.2 Trigger
 
@@ -199,8 +228,9 @@ filtered and with which operators, so the UI, MCP and plugins all get the same f
 ```rust
 pub struct Trigger {
     pub id: TriggerId,
-    pub r#type: EventType,             // "twitch.cheer", "acme.gift", "core.command", "core.timer"…
+    #[serde(flatten)] pub contribution: ContributionRef, // on the wire: { "type": "twitch.cheer" } or { "type": "acme.gift", "plugin": "io.github.alice.acmelive" }
     pub enabled: bool,
+    pub unresolved: bool,              // read-only, derived: `plugin` isn't installed; the trigger never fires until it is
     pub always_run: bool,              // fire even when a more specific trigger matched (Streamer.bot semantics)
     pub filters: Vec<Filter>,          // AND-ed
     pub config: serde_json::Value,     // type-specific settings (e.g. command text, timer interval), schema from the catalog
@@ -230,7 +260,8 @@ The catalog entry for each filterable field lists its allowed `ops`, an `options
 - **Names:** `^[A-Za-z_][A-Za-z0-9_]{0,63}$`, case-sensitive.
 - **Run context root** (what `{…}` resolves against). Reserved root names, which always resolve to the
   engine's value: `event` (full envelope), `user` (the event's `UserRef` plus `vars`), `trigger` (`id`,
-  `type`), `action` (`id`, `name`), `run` (`id`, `queuedAt`, `queue`, `isTest`), `globals`, `plugins`, `match`
+  `type`), `action` (`id`, `name`), `run` (`id`, `queuedAt`, `queue`, `isTest`, `principal`, `surface`, `maxTier`; §8.8),
+  `globals`, `plugins`, `match`
   (last regex captures), `args` (the whole args map), and `now`. Other names resolve against the args map,
   which is seeded with the event's top-level payload fields at run start; args set by later nodes overwrite
   earlier values, including seeded payload fields (`event.payload` keeps the original). Codegen and manifest
@@ -250,7 +281,7 @@ pub struct SubAction {
     #[serde(flatten)] pub node: Node,  // internally tagged by "kind"
 }
 pub enum Node {                        // #[serde(tag = "kind", rename_all = "snake_case")]
-    Op { r#type: OperationName, params: Value, save_as: Option<String> }, // any sub-action-exposed operation (§8.1)
+    Op { #[serde(flatten)] contribution: ContributionRef, params: Value, save_as: Option<String> }, // any sub-action-exposed operation (§8.1); wire: { "kind": "op", "type": "acme.send_chat", "plugin": "io.github…", "params": {…} }
     Group { name: String, color: Option<String>, random: bool, children: Vec<SubAction> },
     If { condition: Condition, then: Vec<SubAction>, r#else: Vec<SubAction> },
     Switch { value: Template, auto_type: bool, cases: Vec<Case>, default: Vec<SubAction> },
@@ -267,8 +298,12 @@ pub struct Condition { pub left: Template, pub op: CompareOp, pub right: Templat
 
 `CompareOp` covers the Streamer.bot set (`eq`, `ne`, `contains`, `regex`, `lt`, `gt`, `lte`, `gte`, `not_exists`,
 `is_null_or_empty`). Regex captures land in `match` (array plus named groups). Every `Op` node's `params` are
-validated against the operation's params schema at save time **and** at run time (plugins can change).
-`Template` fields are strings in the §10 syntax; `TemplateOr<T>` accepts a literal `T` or a template string.
+validated twice, against two generated schemas (§10.1): at save time against the operation's **authoring** schema
+(which admits templates only at template-eligible fields), and at run time, after rendering, against the
+**invocation** schema the operation actually executes with (plugins can change, and rendered values can violate
+ranges and enums). `Template` fields are strings in the §10 syntax; `TemplateOr<T>` is a value-mode field (§10.1)
+that accepts a literal `T` or one whole `{…}` form. Every node executes under the run's authorization context
+(§8.8): a node whose tier or scopes exceed that context fails before it runs.
 
 ## 7. Versioning
 
@@ -278,8 +313,8 @@ validated against the operation's params schema at save time **and** at run time
 |---|---|---|
 | App version | SemVer, `hello.version` | Every release |
 | **`protocolVersion`** | SemVer, top of `protocol.json` | Minor on any additive change; major together with `rpcVersion` |
-| **`rpcVersion`** | Integer, negotiated in the handshake (§8.3), also the `/api/v<rpcVersion>` URL major | Only on a breaking change to any WS/REST/stdio method, event envelope or shared type |
-| `payloadVersion` | Per event type | Breaking change to that one payload (§5.2) |
+| **`rpcVersion`** | Integer, negotiated in the handshake (§8.3), also the `/api/v<rpcVersion>` URL major | Only on a breaking change to any WS/REST/stdio method, event envelope, shared type or core event payload (§5.2) |
+| `payloadVersion` | Per event type, in `meta` and in `protocol.json` | Breaking change to that one payload. For core events always together with an `rpcVersion` bump: each `rpcVersion` fixes one payload version per core event type (§5.2). Plugin events: a plugin major version bump |
 | `pluginApi` | SemVer major.minor in manifests (`engines.pluginApi`) | Major on breaking host↔plugin changes; minor on additions |
 | `manifestVersion` | Integer in `plugin.json` | Breaking manifest changes. v0 = pre-stable (§11) |
 | `schemaVersion` | Integer per persisted document kind | Any change to the stored shape (§7.3) |
@@ -302,7 +337,8 @@ condition. Adding optional request fields, response fields, methods, event types
 breaking. Adding a variant to a **closed** union that clients receive (`Node`, `Fragment`, `FilterOp`) **is**
 breaking, unless the union is documented as extensible with a fallback (clients render an unknown `Node` as a
 read-only placeholder and an unknown `Fragment` as its text). `Node` and `Fragment` are documented that way;
-other closed enums are not. A breaking diff without an `rpcVersion` (or `payloadVersion`) bump fails CI.
+other closed enums are not. A breaking diff without an `rpcVersion` bump fails CI, and so does a core
+`payloadVersion` bump without an `rpcVersion` bump (§5.2).
 
 ### 7.3 Persisted documents and migrations
 
@@ -332,7 +368,7 @@ from that one definition:
 pub struct OperationDef {
     pub name: OperationName,          // "obs.set_scene", "actions.run", "acme.send_chat"
     pub title: L10nString, pub description: L10nString, pub category: Vec<String>,
-    pub params: Schema, pub result: Schema,     // JSON Schema 2020-12; params root MUST be `type: object` (§9.6)
+    pub params: Schema, pub result: Schema,     // JSON Schema 2020-12; params root MUST be `type: object` (§9.6); result root MUST be `type: object` for tier ≥ 1 (dry-run discrimination, below)
     pub tier: RiskTier,               // 0 read · 1 reversible write · 2 config change · 3 external/irreversible · 4 dangerous
     pub scopes: Vec<Scope>,           // e.g. ["obs:control"]
     pub expose: Exposure,             // { rpc: bool, sub_action: bool, mcp: bool }
@@ -346,13 +382,36 @@ pub struct OperationDef {
 }
 ```
 
-- `chat.send` is one operation: a WS method, a sub-action type and an MCP tool. Engine-management methods
-  (`actions.create`, `session.identify`) are `rpc` only. Control-flow nodes are not operations.
-- Tier ≥ 1 operations get an optional `dryRun: bool` param added by codegen; it returns
-  `{ plan, diff?, warnings, wouldRequireApproval }`. `dryRun` is a reserved param name.
+- `chat.send` is one operation: a WS method, a sub-action type and an MCP tool. Two kinds of callable are
+  distinguished: **protocol methods** (`hello`, `session.*`, `auth.*`, `system.ping`, `events.subscribe`,
+  `events.unsubscribe`, `batch.execute`; §12) are **not** operations: they live outside the catalog, have no tier,
+  and are never sub-actions or MCP tools. **Configuration operations**, which write persisted documents (§7.3:
+  `actions.create/update/delete`, `queues.create/update/delete`, commands, overlays, settings), are ordinary catalog
+  operations, tier 2, `expose: { rpc: true, subAction: <per op>, mcp: true }`; over MCP they follow the tier-2
+  draft-first policy (§6.1), which is how the D-030 draft workflow gets its tools (`actions_create`,
+  `actions_update` in the Lean profile, §9.6). Writes to runtime state that are not documents (`variables.set`,
+  `queues.pause`) are tier 1. Control-flow nodes are not operations.
+- **Reserved, codegen-added params.** `dryRun: bool` on every tier ≥ 1 operation (below), and `approvalId?:
+  ApprovalId` on every operation that can require approval: tier 3, plus the operations whose effective tier is
+  dynamic (`actions.run`, `plugins.call`, §8.8). A client that received `APPROVAL_REQUIRED` repeats the identical
+  call with `approvalId` set; both names are rejected in author-defined params and in results by `lint-catalog`.
+- **Dry run.** Tier ≥ 1 operations get an optional `dryRun: bool` param added by codegen, and their result root
+  MUST be `type: object` (so `actions.delete` returns `{ deleted: true }`, never `null`), which `lint-catalog`
+  enforces. The result contract has two shapes, both in `protocol.json`: `operations.<name>.result` (the normal
+  result) and `operations.<name>.dryRunResult`, which is always the shared type
+  `DryRunResult { dryRun: true, plan: Vec<PlanStep>, diff?: Value, warnings: Vec<String>, wouldRequireApproval:
+  bool, effectiveTier: RiskTier }` with `PlanStep { operation, params /* rendered, secrets redacted */, tier,
+  target?: String, description }`. The required literal `dryRun: true` discriminates the two shapes on the wire,
+  so `dryRun` is also a reserved **result** key and `lint-catalog` fails any result schema that defines it. The
+  contract is the same on WS, REST and MCP; generated clients expose it as overloads keyed on the `dryRun` literal
+  (§9.1), OpenAPI responses are `oneOf: [result, DryRunResult]`, and MCP applies its own wrapping afterwards
+  (§9.6). Every tier ≥ 1 operation ships at least one normal and one dry-run example, both validated in CI (§17).
 - **MCP exposure rules come from the tier, not the author:** tier 4 is **never** exposed over MCP (D-030: code
   execution, ending the stream), whatever the manifest says. Tier 3 requires in-app approval. Tier 2 creates
-  disabled drafts.
+  disabled drafts. The tier that counts is the **effective tier** of the call (§8.8): for `actions.run` that is
+  the maximum over everything the action would execute, re-checked at every node, so a `Code` node or an
+  end-stream operation reached through a stored action, a nested or queued `RunAction`, `plugins.call` or a batch
+  is refused under an MCP context exactly like a direct call.
 - Plugin operations are first-class methods (`acme.send_chat`). `plugins.call { plugin, method, params }`
   remains as a generic alias for clients that only know plugin IDs.
 
@@ -411,13 +470,13 @@ invalid params, -32603 internal). Application errors use **-32000** with a stabl
 | `data.code` | Meaning |
 |---|---|
 | `UNAUTHENTICATED` | No or invalid identify |
-| `PERMISSION_DENIED` | Scope missing; `details.required` lists it |
+| `PERMISSION_DENIED` | Scope missing (`details.required` lists it), or the call's effective tier exceeds the context's `maxTier` (`details.reason = "tier_exceeds_context"`, plus `details.node` when it happened inside a run, §8.8) |
 | `INVALID_PARAMS` | Schema validation failed. Always sent with JSON-RPC code **-32602** (the only `data.code` that doesn't use -32000); `fieldErrors` set |
-| `NOT_FOUND` · `CONFLICT` · `INVALID_STATE` | Entity missing · name or version clash · wrong state (e.g. queue paused) |
+| `NOT_FOUND` · `CONFLICT` · `INVALID_STATE` | Entity missing · name or version clash · wrong state (e.g. queue paused, running a disabled draft) |
 | `RATE_LIMITED` | `retryAfterMs` set |
 | `TIMEOUT` · `CANCELLED` | Operation deadline · cancelled by the client or by shutdown |
 | `PLUGIN_UNAVAILABLE` · `CONNECTION_UNAVAILABLE` · `UPSTREAM_ERROR` | Plugin not running · connector not connected · platform/app returned an error (`details.upstream`) |
-| `APPROVAL_REQUIRED` · `PAUSED` | In-app approval pending (`details.approvalId`) · "Pause AI control" or a global pause is on |
+| `APPROVAL_REQUIRED` · `PAUSED` | In-app approval pending (`details.approvalId`); `details.reason = "binding_mismatch"` when a supplied approval does not bind to this call (§8.8) · "Pause AI control" or a global pause is on |
 | `UNSUPPORTED_ON_PLATFORM` | OS-gated operation (`details.platforms`) |
 | `PAYLOAD_TOO_LARGE` | Size limit exceeded |
 | `UNSUPPORTED_VERSION` | Unsupported `rpcVersion` on REST (WS closes with 4002); `details.supported` gives the range |
@@ -443,6 +502,77 @@ Format `<area>:<verb>[:<qualifier>]`: `actions:read`, `actions:run[:<actionId|ta
 `events:read:<globs>` plus `variables:read:<names>`. Each operation lists its scopes in the catalog; the server
 checks them on every surface (WS, REST, MCP, plugin host calls).
 
+### 8.8 Authorization context and composite execution
+
+Checking the static tier of the outer operation is not enough: `actions.run` executes a stored tree that can hold a
+`Code` node, an end-stream operation, or a nested or queued `RunAction`. So every call and every run carries one
+**authorization context**, created at the entry surface and never widened afterwards:
+
+```rust
+pub struct AuthContext {
+    pub principal: Principal,          // kind-tagged, below
+    pub surface: Surface,              // rpc | mcp | sub_action | plugin_host | internal
+    pub scopes: Vec<Scope>,
+    pub max_tier: RiskTier,            // the highest tier this context may ever execute
+    pub approvals: Vec<ApprovalBinding>,
+    pub lineage: Vec<RunId>,           // runs this context has passed through (nested RunAction), newest last
+}
+pub enum Principal {                   // #[serde(tag = "kind")]
+    Token { token_id: TokenId, name: String, kind: TokenKind /* ui | api | overlay */ }, // max_tier: the token's limit, default 4
+    Mcp { token_id: TokenId, session_id: SessionId, client: ClientInfo },               // max_tier: 3, always (D-030)
+    Plugin { plugin_id: PluginId },                                                       // max_tier: from its permissions (spec 12)
+    Trigger { trigger_id: TriggerId, action_id: ActionId },                               // event-started runs; max_tier: 4
+    System,                                                                               // startup, timers, migrations; max_tier: 4
+}
+pub struct ApprovalBinding {
+    pub id: ApprovalId, pub operation: OperationName,
+    pub args_hash: Sha256,             // canonical JSON of the rendered params, minus `dryRun` and `approvalId`
+    pub action: Option<ActionRevisionRef>, // { id: ActionId, revision: u64 } (§3: no tuples on the wire)
+    pub tier3_descendants: Vec<OperationName>, // for actions.run: what the dry-run plan listed
+    pub session_grant: bool, pub expires_at: Timestamp,
+}
+```
+
+The rules are normative for every surface. Spec 03 (engine) and spec 06 (API/MCP) implement them; §17.9 tests
+them.
+
+1. **Propagation.** A run started by `actions.run` inherits the caller's context. Inline and queued `RunAction`
+   children, `Code` nodes, `Parallel` branches, `batch.execute` entries and `plugins.call` targets inherit the
+   context of the node or request that started them, with the run appended to `lineage`. A queued run keeps the
+   context it was enqueued with, however long it waits. Nothing executed on behalf of a context may exceed its
+   `max_tier` or use a scope it lacks, at any depth.
+2. **Effective tier.** `effectiveTier(action)` is the maximum tier over every enabled node reachable from the
+   action: `Op` → the operation's catalog tier (host classification included, §11); `Code` → 4; `RunAction` with a
+   static target → `effectiveTier(target)` (a cycle counts once); `RunAction` whose target is a template or is
+   otherwise unresolvable at check time → 4 ("unknown is dangerous"); `Placeholder`, control flow, disabled nodes
+   and disabled targets → 0. `actions.run` is tier 1 in the catalog, but a call's effective tier is
+   `max(1, effectiveTier(target))`, and tier policy (MCP exclusion, approval, draft-first) applies to the
+   **effective** tier. The same computation is exposed as `actions.effective_tier` (tier 0) and in every dry-run
+   `plan` (§8.1). Under an MCP context, `actions.run` on an action with effective tier 4 is refused with
+   `PERMISSION_DENIED` (`tier_exceeds_context`) before anything runs; effective tier 3 requires approval. The two
+   refusal codes are deliberate: a tier-4 *operation* is hidden from MCP entirely and so is `NOT_FOUND` (§9.6),
+   while an *action* the client can list is visible, so running it is a permission failure.
+3. **Enforcement at every node, not only at the entry.** Static checks go stale: plugins are reinstalled, actions
+   are edited between enqueue and execution, dynamic `RunAction` targets resolve at run time. The engine therefore
+   re-checks each node's tier and scopes against the run's context immediately before executing it. A node that
+   exceeds the context fails with `PERMISSION_DENIED` (`tier_exceeds_context`, `details.node`), the run **stops**
+   (it does not skip the node and continue), and the audit log records it. Under an MCP context a `Code` node
+   therefore never executes, whatever path led to it.
+4. **Approvals bind to what actually executes.** An approval covers one `operation` + `args_hash`, and for
+   `actions.run` also the target `ActionId` + `revision` (§6.1) and the tier-3 descendants the dry-run plan listed.
+   A call with a different hash, a bumped revision or a new tier-3 descendant gets `APPROVAL_REQUIRED` again with
+   `details.reason = "binding_mismatch"`. Session grants ("approve for 15 min") bind to `operation` + action +
+   revision, not to arguments. One approval covers one execution unless it is a session grant; the handle TTL (§4)
+   counts from issue. Untrusted text never satisfies an approval (§16).
+5. **Events start a new context.** Events emitted by a run carry `meta.causedBy`. Triggers that fire on them start
+   new runs under `Principal::Trigger` with an empty `lineage`, because a trigger is the user's own configuration,
+   not the caller's intent. The audit record links both runs through `causedBy`; loop protection stays in spec 03.
+   Whether MCP-caused chains should instead inherit MCP restrictions is Q-A6 (the spec's default is no).
+6. **Drafts never run.** `actions.run` on an `ai_draft`, or on any `enabled: false` action, fails with
+   `INVALID_STATE`; an MCP context cannot enable it (tier 2 is draft-first).
+7. **Visible, not settable.** The run context (§6.3) exposes `run.principal` (kind only), `run.surface` and
+   `run.maxTier` read-only for templates and scripts. No API input can set any part of an `AuthContext`.
+
 ## 9. Codegen
 
 ### 9.1 Pipeline
@@ -450,7 +580,9 @@ checks them on every surface (WS, REST, MCP, plugin host calls).
 ```
 crates/den-protocol (types + catalog registration: fn register(&mut Catalog))
   └─ cargo xtask codegen
-       ├─ schema/protocol.json        catalog: operations, events, shared types, errors, scopes, deprecations
+       ├─ schema/protocol.json        catalog: operations (params, paramsAuthoring, result, dryRunResult), events
+       │                              (payload schema per payloadVersion, payloadVersions per rpcVersion), shared
+       │                              types, errors, scopes, deprecations
        ├─ schema/plugin.schema.json   manifest schema (§11)
        ├─ schema/openapi.json         OpenAPI 3.1 via aide (REST resources + POST /api/v1/rpc)
        ├─ schema/asyncapi.yaml        AsyncAPI 3.0, emitted by xtask from protocol.json (WS events)
@@ -467,6 +599,13 @@ crates/den-protocol (types + catalog registration: fn register(&mut Catalog))
 - `cargo xtask codegen --check` regenerates into a temp dir and diffs. CI runs it on every PR, plus `git diff
   --exit-code`. Generated files are committed, marked `// @generated`, and never hand-edited (AGENTS.md).
 - Generator versions are pinned (Cargo.lock, `pnpm-lock.yaml`, `uv.lock`), so output only changes when sources do.
+- **Generated clients carry the dry-run contract** (§8.1). TS: `client.chat.send(params): Promise<ChatSendResult>`
+  and an overload `client.chat.send(params & { dryRun: true }): Promise<DryRunResult>`; the generic
+  `client.call(method, params)` returns the union. Python: `@overload` on `dry_run: Literal[True]`, with pydantic
+  models `ChatSendResult | DryRunResult` discriminated by `dryRun`. Clients validate incoming results against the
+  shape the request selected; a mismatch is a client-side protocol error, not a silently widened type.
+- **Authoring schemas are generated, never hand-written**: `paramsAuthoring` (§10.1) is derived from `params` by
+  xtask and is what the UI forms, `den validate` and the save-time validator use for `Op.params`.
 
 ### 9.2 TS: ts-rs, not specta
 
@@ -501,31 +640,41 @@ license or GPL is asked in Q-B6.
 
 ### 9.6 MCP tool generation
 
-From each operation with `expose.mcp = true` and tier ≤ 3:
+From each operation that passes the **exposure predicate** `expose.mcp = true && tier ≤ 3`. The same predicate,
+evaluated at runtime against the live catalog, filters every profile list and the meta-tools `search_operations`,
+`describe_operation` and `invoke_operation`, so no path reaches an operation a native tool could not. Protocol
+methods (§8.1, §12) are not operations: `invoke_operation` returns `NOT_FOUND` for them, as it does for tier 4.
+Per tool:
 - **name** = method with `.` → `_` (`obs.set_scene` → `obs_set_scene`). Codegen fails unless it matches
   `^[a-z0-9_]{1,64}$`. Renames keep an entry in `schema/mcp-aliases.json`.
 - **inputSchema** = params schema. Codegen **fails** if the root isn't `type: object` or has root
   `oneOf`/`anyOf`/`allOf` (rejected by the Claude API, flattened by Claude Code). Enums go inside a property.
   Small `$ref`s are inlined. Property names must match `^[A-Za-z0-9_.-]{1,64}$`.
 - **outputSchema** = the result schema **after** MCP transforms: `x-den-untrusted` string fields are replaced
-  by the wrapper schema `{ untrusted: true, source, text }`, and tier ≥ 1 tools get
-  `oneOf`-free `{ result?, dryRun? }` with the dry-run shape `{ plan, diff?, warnings, wouldRequireApproval }`,
-  so `structuredContent` always validates. The server also returns a JSON text block.
+  by the wrapper schema `{ untrusted: true, source, text }`, and tier ≥ 1 tools get the `oneOf`-free envelope
+  `{ result?: <result>, dryRun?: DryRunResult }` (the same `DryRunResult` as §8.1, wrapped so that
+  `structuredContent` always validates without a root union). The server also returns a JSON text block.
 - **annotations**, all four always set explicitly (MCP defaults `destructiveHint` to true when not read-only):
   tier 0 → `readOnlyHint: true`; tiers 1–2 → `readOnlyHint: false, destructiveHint: false`; tier 3 →
-  `destructiveHint: true` plus `_meta["anthropic/requiresUserInteraction"]`. `idempotentHint` comes from the
-  catalog. `openWorldHint: true` when the operation talks to an external platform or app (catalog flag
+  `destructiveHint: true` plus `_meta["anthropic/requiresUserInteraction"]`. Operations whose effective tier is
+  dynamic (`actions.run`, `plugins.call`, the `invoke_operation` meta-tool, §8.8) are annotated like tier 3,
+  because a given call may need approval; the dry-run plan tells the client in advance. `idempotentHint` comes
+  from the catalog. `openWorldHint: true` when the operation talks to an external platform or app (catalog flag
   `external`), otherwise false.
 - **Runtime as well as build time:** plugin operations appear at runtime, so the same name, length, schema and
   tier checks run when a manifest is validated (`den validate`), on install, and when building `tools/list`. A
   name collision after the `.` → `_` mapping (`a_b.c` vs `a.b_c`) rejects the later plugin's operation from
-  MCP with a UI notice. Tier 4 operations are excluded from `tools/list`, `search_operations`,
+  MCP with a UI notice. A plugin operation that declares `expose.mcp: true` but is raised to tier 4 by the host's
+  classification (§11) installs with a warning and is dropped from MCP (the host's classification wins; the author
+  may not know it); for core operations the same condition is a `lint-catalog` build failure. Tier 4 operations are excluded from `tools/list`, `search_operations`,
   `describe_operation` and `invoke_operation` alike.
 - **description:** the first line holds category and search keywords. Codegen warns above 1,024 chars and fails
   above 4,096.
 - Fields marked `x-den-untrusted` are returned wrapped as `{ untrusted: true, source, text }`.
-- The profiles (Lean, Full, Custom, Read-only) are lists of operation names in `mcp-tools.json`. Runtime
-  behaviour is in spec 06/13.
+- The profiles (Lean, Full, Custom, Read-only) are lists of operation names in `mcp-tools.json`, each filtered by
+  the exposure predicate at build and at run time. Lean contains the research §1.5 core list, including the
+  configuration operations `actions.create` and `actions.update` (tier 2, draft-first, §6.1) so an AI client can
+  propose disabled drafts; Read-only contains tier 0 only. Runtime behaviour is in spec 06/13.
 
 ### 9.7 CI checks (WS-02 owns them; WS-01 wires them into CI)
 
@@ -533,7 +682,7 @@ From each operation with `expose.mcp = true` and tier ≤ 3:
 |---|---|
 | `cargo xtask codegen --check` | Any generated artifact drifts |
 | `cargo xtask schema-compat --base <last-tag>` | Breaking change without a version bump (§7.2) |
-| `cargo xtask lint-catalog` | Missing doc comment/description/example; bad identifier; reserved run-context name; MCP name/schema rule violated; tier 4 marked `mcp` |
+| `cargo xtask lint-catalog` | Missing doc comment/description/example; bad identifier; reserved run-context name; MCP name/schema rule violated; a result schema defining `dryRun` or `draft`, or an author param named `dryRun` or `approvalId`; a tier ≥ 1 operation whose result root isn't `type: object` or that lacks a dry-run example; a leaf param without a resolved template mode, or a value-mode enum member starting with `{` (§10.1); a protocol method registered as an operation; a core tier-4 operation marked `mcp` |
 | `cargo nextest run -p den-protocol` | Round-trip, golden fixture or migration test fails |
 | `pnpm -C sdk/ts typecheck && pnpm -C sdk/ts test` | Generated TS doesn't compile or rejects fixtures |
 | `uv run pytest sdk/python` (plus pyright) | Generated models reject fixtures |
@@ -547,16 +696,17 @@ From each operation with `expose.mcp = true` and tier ≤ 3:
 | `{= expr}` | A small, pure expression: arithmetic, comparisons, `and/or/not`, ternary `a ? b : c`, and built-ins `min`, `max`, `abs`, `floor`, `ceil`, `random(a,b)`, `lookup(name)` (dynamic name, Streamer.bot `$parse$`). No I/O, no loops; evaluation has a step budget. |
 | `{{` and `}}` | Literal braces |
 
-- **Only template fields are parsed.** A field is a template only when its schema says so (`x-den-template:
-  true`, which `x-ui.variables: true` implies). Other strings, including JSON and HTTP bodies, are literal. In a
-  template field, a `{` that isn't followed by an identifier start, `=` or `{` is literal text (so
-  `{"a": 1}` stays as it is), and the editor warns about it. In declarative-plugin JSON bodies, templates only
-  apply to whole string values (`"{params.bri}"`), never to the JSON structure.
+- **Only template fields are parsed.** A field is a template only when its resolved template mode (§10.1) says so
+  (`x-den-template: "text"` or `"value"`; `x-ui.variables: true` implies `"text"`). Other strings, including JSON
+  and HTTP bodies, are literal. In a `text` field, a `{` that isn't followed by an identifier start, `=` or `{` is
+  literal text (so `{"a": 1}` stays as it is), and the editor warns about it. In declarative-plugin JSON bodies,
+  templates only apply to whole string values (`"{params.bri}"`, value mode), never to the JSON structure.
 
 - A missing value renders as an empty string (Streamer.bot behaviour), and the editor shows a lint warning.
   `| default:"…"` overrides it.
-- A field that holds a single `{path}` and nothing else keeps the value's JSON type (so `{amount}` in a numeric
-  param stays a number). Mixed text always renders to a string.
+- In `text` mode mixed text always renders to a string. In `value` mode the field is exactly one form: `{path}`
+  keeps the value's JSON type (so `{amount}` in a numeric param stays a number) and `{= expr}` yields a number,
+  boolean or string (§10.1).
 - Templates are parsed when saved, and parse errors are shown with their position. The parser lives in
   `den-core`; its grammar and AST types live in `den-protocol` so the UI can lint them with the same rules.
 - **Import (D-027):** `%x%` → `{x}`; `%x:fmt%` → `{x | number:"fmt"}` or `{x | date:"fmt"}` (by type);
@@ -564,6 +714,50 @@ From each operation with `expose.mcp = true` and tier ≤ 3:
   `{t | length}`; `$parse(n)$` → `{= lookup("n")}`; flattened names (`input0`, `rawInputEscaped`) → generated
   aliases or filters. Anything that can't be converted is kept literally, and the import report lists it. No
   runtime `%var%` mode is planned, because D-027 only asks for conversion on import.
+
+### 10.1 Template modes: authoring schema vs invocation schema
+
+A numeric schema rejects the string `"{amount}"`, and a schema widened to accept it would let unresolved templates
+through the public API. So every leaf field of an operation's `params`, and of a declarative plugin's request
+bodies (§11), has a **template mode**, which codegen resolves and writes into `protocol.json` as `x-den-template`,
+so no downstream tool guesses. Trigger `config` and plugin `settings` are always literal (mode `false`): they are
+evaluated at match time or activation time, when there is no run context.
+
+| Mode | Applies to | Meaning | Default for |
+|---|---|---|---|
+| `false` | any type | Literal. Never parsed; braces are plain characters (JSON and HTTP bodies, regexes, URLs). | `type: string` without `x-ui.variables` |
+| `"text"` | `type: string` | Mixed text and `{…}` forms; always renders to a string. | strings with `x-ui.variables: true` |
+| `"value"` | number, integer, boolean, enum string, array, object | The whole field is exactly one `{…}` form (`"{amount}"`, `"{= count * 2}"`); the rendered JSON value replaces the field. | number, integer, boolean, enum string |
+
+Arrays and objects are `false` unless the author marks them `"value"`. An author may set any mode explicitly. In a
+`value`-mode field a string that matches the `TemplateString` pattern **is** a template, never a literal, so
+`lint-catalog` rejects enum members that start with `{`; a literal brace in such a field is impossible by
+construction, and `text` mode is the place for literal braces (`{{`).
+
+- **Two generated schemas per operation.** `params` is the **invocation schema**: concrete types, what the engine
+  executes with and what WS, REST and MCP callers must send. `paramsAuthoring` is derived from it by xtask: every
+  `value`-mode leaf becomes `anyOf: [<concrete>, TemplateString]` where `TemplateString` is `{ "type": "string",
+  "pattern": "^\\{(=|[A-Za-z_]).*\\}$", "x-den-template": "value" }`; `text` leaves stay strings; `false`
+  leaves stay concrete. Required-ness, nesting and `additionalProperties` are unchanged, and the `anyOf` is never
+  at the root (§9.6 is unaffected because MCP tools use the invocation schema). The same derivation gives
+  `TemplateOr<T>` for Rust-typed domain fields such as `Delay.ms` (§6.4).
+- **Save time:** `Op.params` validate against `paramsAuthoring`, and every template string must parse (§10). A
+  stored document therefore never holds a value the engine cannot type.
+- **Run time:** render every template field in the run context → coerce → validate the rendered params against the
+  **invocation** schema → execute. Coercion applies only to `value`-mode leaves whose concrete type is number,
+  integer or boolean and whose rendered value is a string: it is accepted when it parses exactly (`"5"` → 5,
+  `"true"` → true; `"5.5"` for an integer fails), otherwise `INVALID_PARAMS` with `fieldErrors` naming the node
+  and field. Range, enum and pattern constraints apply to the rendered value (`{= volume * 2}` against `0..100`
+  passes at 40 and fails at 60, at run time, not at save time). A failed node follows spec 03 error handling; the
+  operation is never called with unvalidated params.
+- **Direct calls never carry templates.** WS, REST and MCP callers have no run context: their `params` validate
+  against the invocation schema, so `"{amount}"` in a numeric field is `INVALID_PARAMS`, and braces in string
+  fields are literal characters. `actions.run.args` are values, not templates; they become `{args.*}` in the run.
+- **Fixtures** (`den-protocol`, §17.11): numeric `{amount}`; `{= volume * 2}` against `0..100` at 40 and at 60;
+  enum `{globals.scene}` resolving to a non-member; nested `{ "source": { "name": "{args.src}" } }`; a
+  `false`-mode HTTP body `{"a":1}` left untouched; a `text` field mixing text and paths; the literal string
+  `"{scene}"` saved into a value-mode enum field is parsed as a template, not matched as a member; a direct RPC
+  call with `"{amount}"` rejected; coercion `"5"` → 5 accepted and `"5.5"` → integer rejected.
 
 ## 11. Plugin manifest schema v0
 
@@ -577,8 +771,8 @@ From each operation with `expose.mcp = true` and tier ≤ 3:
 | `engines` | `{ streamden: SemverRange, pluginApi: "^0.1" }` |
 | `runtime.kind` | `declarative` · `js` · `sidecar`. `wasm` is reserved and rejected in v0. |
 | `activation`, `permissions`, `connection`, `settings` | As in B2. `settings` is JSON Schema with `x-ui` hints (B2.4) and `x-secret`. |
-| `contributes.events` | Replaces B2 `triggers` (a trigger type **is** an event type, §6.2). Each: `id`, title, description, category, `payload` schema, `filters`, `highVolume`, `testPayload`. Becomes event type `<slug>.<id>`. |
-| `contributes.operations` | Replaces B2 `subActions` **and** `requests` (one catalog, §8.1). Each: `id`, title, `sentence`, category, `params`, `result`, `tier`, `scopes`, `expose: { rpc, subAction, mcp }`, `timeoutMs`, `platforms`. Becomes method `<slug>.<id>`. A declared tier lower than the host's classification of the permissions it uses is raised (e.g. any `process` permission makes it tier 4). |
+| `contributes.events` | Replaces B2 `triggers` (a trigger type **is** an event type, §6.2). Each: `id`, title, description, category, `payloadVersion` (starts at 1; a breaking change bumps it and the plugin's major version, §5.2), `payload` schema, `filters`, `highVolume`, `testPayload`. Becomes event type `<slug>.<id>`. |
+| `contributes.operations` | Replaces B2 `subActions` **and** `requests` (one catalog, §8.1). Each: `id`, title, `sentence`, category, `params`, `result`, `tier`, `scopes`, `expose: { rpc, subAction, mcp }`, `timeoutMs`, `platforms`. Becomes method `<slug>.<id>`. A declared tier lower than the host's classification of the permissions it uses is raised (e.g. any `process` permission makes it tier 4). Leaf fields of `params` may carry `x-den-template` (§10.1); the host resolves defaults and generates the authoring schema. |
 | `contributes.conditions`, `variables`, `chatSources`, `ttsVoices`, `overlayWidgets`, `panels`, `commands`, `templates` | As in B2; schemas fixed in spec 12. |
 | `definitions` | Local JSON Schema definitions, referenced as `#/definitions/<Name>`. Shared types are referenced as `den://schemas/v0/<Name>.json`. |
 | `l10n` | `%key%` placeholders in **manifest strings only** (VS Code style). These are not templates and are never evaluated at run time. |
@@ -589,8 +783,9 @@ always validates against its bundled copy, never the network.
 
 ## 12. API surface owned by this spec
 
-Only the protocol-level methods are defined here; resource methods (`actions.*`, `variables.*`, `chat.*`…) are
-defined by their owning spec, but always as catalog operations following §8.1.
+Only the **protocol methods** are defined here: they are not catalog operations, have no tier and are never
+sub-actions or MCP tools (§8.1). Resource and configuration methods (`actions.*`, `variables.*`, `chat.*`…) are
+defined by their owning spec, but always as catalog operations following §8.1 and §8.8.
 
 | Method / notification | Direction | Purpose |
 |---|---|---|
@@ -608,7 +803,8 @@ defined by their owning spec, but always as catalog operations following §8.1.
 
 - **Schema-driven forms:** every sub-action, trigger filter, setting and manifest form is rendered from the
   catalog schema plus `x-ui` hints (AGENTS.md: "never hand-write a form for something that has a schema").
-- **API explorer** (spec 07): browses `system.describe`, runs operations with `dryRun`, shows examples.
+- **API explorer** (spec 07): browses `system.describe`, runs operations with `dryRun` and renders the typed
+  `DryRunResult` plan (§8.1), shows the normal and dry-run examples.
 - **Deprecation and version notices:** a client that negotiated an old `rpcVersion` is flagged in
   *Settings → API Clients* (spec 06).
 - **Import report:** lists unconverted templates and `placeholder` nodes (spec 15).
@@ -649,6 +845,12 @@ import-originated data is.
   go through the same pipeline (validation → scope → tier policy → approval → rate limit → audit), so neither is a
   bypass.
 - Tier comes from the catalog and the host's classification, never only from the client or the plugin (§8.1, §11).
+- Authorization is transitive (§8.8): every node of every run is checked against the originating context's
+  `maxTier` and scopes right before it executes, approvals bind to the rendered arguments and the action revision,
+  and an MCP context can never reach tier 4 through `actions.run`, a nested or queued `RunAction`, `plugins.call` or
+  `batch.execute`.
+- Templates are rendered and the result re-validated against the concrete invocation schema before any operation
+  runs; direct API callers cannot submit templates at all (§10.1).
 - `x-secret` values never leave the keychain path; `x-den-untrusted` text is wrapped for AI consumers and never
   satisfies an approval.
 - Plugin events are validated against their manifest schema; invalid payloads are dropped and logged, and repeated
@@ -660,7 +862,9 @@ import-originated data is.
 ## 17. Test plan
 
 1. **Round-trip and golden tests** (`den-protocol`): every type serializes to its committed fixture and back
-   unchanged (property tests with `proptest` for the tree types).
+   unchanged (property tests with `proptest` for the tree types), including `#[serde(flatten)]` inside the
+   `Node::Op` variant through serde, schemars (`unevaluatedProperties`) and ts-rs; if ts-rs can't express it,
+   `ContributionRef` is written out as two fields and this test is what catches the drift.
 2. **Examples are tests:** every catalog example and `testPayload` validates against its JSON Schema, its TS type
    (tsc) and its pydantic model.
 3. **Catalog lint, codegen drift and schema-compat** as in §9.7.
@@ -674,13 +878,59 @@ import-originated data is.
    validators accept every Lean-profile tool.
 8. **Importer fixtures:** a corpus of Streamer.bot templates mapped to the expected `{…}` output (spec 15 extends
    it).
+9. **Authorization context** (§8.8), run over MCP and over an API token limited to `maxTier: 3`: `actions.run` on
+   an action with a direct `Code` node → `PERMISSION_DENIED` before execution; an inline `RunAction` child that
+   contains `Code` → refused; a queued `RunAction` child edited to add `Code` after enqueue → the node fails at
+   execution and the run stops; a template-targeted `RunAction` → tier 4; `actions.run` on an `ai_draft` →
+   `INVALID_STATE`; approval replay with changed args, a bumped revision or a new tier-3 descendant →
+   `APPROVAL_REQUIRED` with `binding_mismatch`; the same action succeeds under a `maxTier: 4` user token; a
+   follow-up run triggered by an event the MCP run emitted starts a new context (asserts the Q-A6 default).
+10. **Payload versions** (§5.2): two sessions on `rpcVersion` N and N−1 receive one upstream event in their
+    respective shapes, replay honours each session's version, and a core `payloadVersion` bump without an
+    `rpcVersion` bump fails `schema-compat`.
+11. **Template modes** (§10.1): the fixture list there, at save time against `paramsAuthoring` and at run time
+    against `params`, plus the direct-call rejection.
+12. **Contribution references** (§4): export from installation A, import into B where the plugin is (a) installed
+    under the same slug, (b) installed in a later version whose manifest renamed the slug (`type` rewritten), (c) absent (`placeholder` node,
+    `unresolved` trigger, both resolve on install), (d) a different plugin owns the slug (re-bound by plugin ID); a
+    core type with `plugin` set and a plugin type without `plugin` are rejected by the generated `if/then/else`
+    schema clause and by the save-time validator (§4).
+13. **MCP exposure** (§9.6): the Lean profile creates a disabled `ai_draft` through `actions_create` and through
+    `invoke_operation("actions.create")` with identical results; `invoke_operation` on a protocol method or a tier-4
+    operation → `NOT_FOUND`; `actions_update` yields an `ai_draft { draftOf }` with the target's name and leaves the
+    target untouched; `queues_update` yields a `PendingChange`; every tier-2 result carries `draft` on MCP and
+    validates against the same result schema on WS.
+14. **Dry-run results** (§8.1): every tier ≥ 1 operation's normal and dry-run examples validate against `result`
+    and `DryRunResult` respectively in JSON Schema, TS and pydantic, and the TS overload and Python `@overload`
+    resolve to the right type.
 
 ## 18. Open questions (added to [QUESTIONS.md](../QUESTIONS.md))
 
 - **Q-X4:** how much of the template expression language (§10) ships in v1.
 - **Q-B6:** license of `crates/den-protocol` itself.
 - **Q-B7:** host for the published schema `$id` URLs (needs a domain, ADR-0004 open item).
+- **Q-A6:** whether runs triggered by events that an MCP-initiated run caused inherit the MCP restrictions (§8.8
+  rule 5; the spec's default is no, with audit linkage).
 
 Assumptions made while writing this spec (reviewers, please check): D-027 already settles Q-X3, so §10 proposes
 only the details; LSP framing supersedes the research's newline-delimited sidecar framing (§8.6); MCP never
-exposes tier 4, per D-030, even with a per-token opt-in.
+exposes tier 4, per D-030, even with a per-token opt-in; binding core payload versions to `rpcVersion` (§5.2) is a
+protocol design choice made here, not a product decision, and is open to reviewer challenge.
+
+## 19. Revision history
+
+- **r1** (78db819): initial draft.
+- **r2**: resolves the Codex (Astra) review of r1. Finding 1 (P1): §8.8 authorization context, effective tier,
+  per-node enforcement, approval bindings, `Action.revision`, §17.9. Finding 2: core payload versions bound to
+  `rpcVersion` with a published mapping, plugin events separated (§5.2, §7.1, §7.2, §11, §17.10). Finding 3:
+  template modes, generated `paramsAuthoring` vs invocation `params`, coercion and direct-call rule (§10.1, §3,
+  §6.4, §9.1, §17.11). Finding 4: `ContributionRef` flattened into `Trigger` and `Node::Op`, `Trigger.unresolved`,
+  import re-binding rules (§4, §5.3, §6.2, §6.4, §17.12). Finding 5: protocol methods vs configuration operations,
+  one MCP exposure predicate for tools, profiles and meta-tools, draft-first `actions.create`/`actions.update`
+  with `Origin::ai_draft { draftOf }` (§6.1, §8.1, §9.6, §12, §17.13). Finding 6: `DryRunResult` as a
+  discriminated result contract on every transport, client overloads, examples validated (§8.1, §9.1, §9.6, §9.7,
+  §13, §17.14). New question Q-A6. A fresh-context Claude reviewer pass on r2 added: result root `type: object`
+  for tier ≥ 1, the reserved `approvalId` param, draft-first narrowed to document writes with `PendingChange` and
+  a reserved `draft` result field, the generated `if/then/else` clause for `ContributionRef.plugin`, tier-3
+  annotations for dynamic-tier MCP tools, trigger `config` and `settings` excluded from template modes, and
+  `ActionRevisionRef` instead of a tuple.
