@@ -1037,11 +1037,15 @@ Every run (including inline children, test runs, rejected and dropped runs) whos
 true` is stored as a `Run` record (§3) plus two snapshots: **`argsQueued`**, the args map at admission (for a
 queued `RunAction` child, the seeded map; for a trigger run, the seeded payload fields), and **`argsAfter`**, the
 map when the run ended. Both are stored as JSON with `x-secret` fields redacted (spec 02 §3) and truncated to
-`engine.history.maxSnapshotBytes` (256 KiB) with a `truncated: true` marker. The record's other variable-length
-fields are bounded at record time the same way, so no stored record is unbounded: `error.details` is truncated
+`engine.history.maxSnapshotBytes` (256 KiB) with a `truncated: true` marker. The record's free-text fields are
+bounded at record time the same way: `error.details` is truncated
 to `maxSnapshotBytes` with the same marker; `error.message`, `RunWarning.message` and `actionName` are cut to
 4,096 Unicode scalar values; `warnings` keeps at most 100 entries, the rest replaced by one final `RunWarning {
-code: "warnings_truncated", message: "<n> more" }`. The firing **event envelope is
+code: "warnings_truncated", message: "<n> more" }`. The record's **codes** are stored exactly as recorded:
+`error.code` (an open `ErrorCode`, spec 02 §8.5), `RunWarning.code` and `principalKind` are open strings whose
+value is their meaning, so the engine never cuts or rewrites one (a shortened code would be a different code),
+and this spec asserts no size bound on them or on a record that carries them; what one response may carry is
+decided when the response is built (§12.6). The firing **event envelope is
 copied into the run record** (`eventSnapshot`, redacted, counted against the same budget), because the event log
 (§12.5) is pruned sooner than history and never holds `highVolume` events (a run fired by
 `variables.user_updated` must still be inspectable and replayable). Each snapshot stores its own taint set
@@ -1139,20 +1143,27 @@ cursor?: String }` (tier 0) returns `{ runs: Vec<Run>, nextCursor: Option<String
   `parent`, `replayOf`, `stoppedBy`, `cancelReason`), omits `chain`, `error.details` and both taint lists (they
   are optional or default-empty on the wire), cuts `error.message` and `actionName` to 256 Unicode scalar values
   each, and replaces `warnings` by the single `RunWarning { code: "row_truncated", message: "<comma-separated
-  names of the reduced fields>" }`. Every field of the reduced row is therefore of fixed or capped size, so its
-  serialized size has a constant upper bound `K_row` (identifiers, timestamps, enums and the capped strings;
-  the implementation derives the exact constant from the schema and asserts it, below 8 KiB). A session whose
-  negotiated budget is below `K_row` plus the envelope cannot be served a list at all: `runs.list` fails
-  `PAYLOAD_TOO_LARGE` (`details.reason = "message_budget"`, `details.bytes`, `details.minimum = K_row`) instead
-  of returning an empty page, and nothing is skipped. The reduced row is a presentation of the stored record,
-  never a rewrite of it. A `runs.get` response is assembled in three **components**, the record (bounded by
-  §12.1: at most `maxSnapshotBytes` of `error.details` plus the capped strings and warnings), then the three
+  names of the reduced fields>" }`. The reduction shortens only the fields whose size the engine owns; the
+  open-string codes it retains (`error.code`, `principalKind`, §12.1) are carried verbatim, so a reduced row has
+  no constant size bound and this spec claims none. What decides is the **measurement**: the server serializes
+  the complete response that would carry the reduced row (the JSON-RPC envelope, the row and `nextCursor`) and
+  compares it with the budget. If it fits, the page holds that row and the cursor advances. If the reduced first
+  row still does not fit, **whatever the budget**, `runs.list` fails `PAYLOAD_TOO_LARGE` (`details.reason =
+  "message_budget"`, `details.bytes` = the measured size of that response, `details.minimum` = the same measured
+  size: the smallest budget a retry of the identical request needs to return that row) instead of returning an
+  empty page; the cursor does not advance and nothing is skipped. The same failure with the same `details`
+  covers a budget too small for the envelope plus an ordinary reduced row, so there is no separate threshold
+  and no refusal in advance. `details.minimum` is always the measured size of the exact response that failed,
+  envelope and cursor included, never a schema-derived constant. The reduced row is a presentation of the stored
+  record, never a rewrite of it. A `runs.get` response is assembled in three **components**, the record (its
+  free-text fields bounded by §12.1, its codes as recorded), then the three
   snapshots (`snapshots: true`, default), then the trace (`trace: true`); each component is added only if the
   response still fits, otherwise the call fails `PAYLOAD_TOO_LARGE` (`details.reason = "message_budget"`,
-  `details.bytes`, `details.component ∈ { "record", "snapshots", "trace" }`). `snapshots: false` and
-  `trace: false` therefore cure exactly the overflow their component caused; a record whose §12.1-bounded
-  `error.details` alone exceeds the budget is readable only after the session raises its budget, which the
-  error says. The `message_size` settings warning (§16) fires when three snapshots at `maxSnapshotBytes` plus a
+  `details.bytes`, `details.component ∈ { "record", "snapshots", "trace" }`, and for `component: "record"` also
+  `details.minimum`, the measured size of the envelope plus the record). `snapshots: false` and
+  `trace: false` therefore cure exactly the overflow their component caused; a record that alone exceeds the
+  budget (a `maxSnapshotBytes` `error.details`, a long `error.code`) is readable only after the session raises
+  its budget to `details.minimum`, which the error says. The `message_size` settings warning (§16) fires when three snapshots at `maxSnapshotBytes` plus a
   record with `maxSnapshotBytes` of `error.details` could exceed the default budget; it is advice, not a
   guarantee.
 
@@ -1436,8 +1447,11 @@ are `critical`.
 The engine's settings are **one persisted document** (`kind = 'settings'`, id = the nil UUID, `schemaVersion` 1,
 §13.2) whose `data` is the `Settings` type of spec 02 §6.5: one section per owning spec, `engine: EngineSettings`
 in v1 (spec 06 and later specs add their own sections additively, spec 02 §7.2). A key in the table is the JSON
-path of the field inside `data` (`engine.run.maxConcurrent` is `data.engine.run.maxConcurrent`), and that dotted
-form is what `fieldErrors[].path`, the `settings.update` result lists and the `settings.updated` event use. The
+path of the field inside `data` (`engine.run.maxConcurrent` is `data.engine.run.maxConcurrent`); that dotted
+**document key** is reserved for the places that name document fields: the `settings.update` result lists
+(`changed`, `applied`, `restartRequired`), `SettingsWarning.key`, the `dryRun` diff and the `settings.updated`
+event. `fieldErrors[].path` never uses it: a validation error points into the **request** params with the
+ordinary JSON Pointer (`/settings/engine/run/maxConcurrent`, spec 02 §8.5; §22.13), as for every operation. The
 schema carries every default and range below (`default`, `minimum`, `maximum`), the `x-ui` hints and
 `x-den-restart: true` on the keys that take effect only after a restart; the UI form is generated from it and
 `den-protocol` exports the restart-only keys as a constant list, so the form, the engine and the tests read one
@@ -1813,14 +1827,19 @@ and requires:
    a 2 MiB `error.details` is stored with both cut (4,096 scalars / `maxSnapshotBytes` with the marker) and 101
    warnings become 100 plus `warnings_truncated`; a first remaining record that alone exceeds a 16 KiB session
    budget is returned as a schema-valid reduced row (`row_truncated` with a non-empty `message` naming the
-   reduced fields, `error.message` ≤ 256 scalars, no `chain`, no `error.details`, empty taint lists) whose
-   serialized size is ≤ `K_row`, the measured response including the envelope is under the budget, and the
-   cursor advances; a session budget below `K_row` fails `runs.list` with `message_budget` and
-   `details.minimum`, never an empty page; `runs.get` of a run whose three snapshots exceed the budget fails
+   reduced fields, `error.message` ≤ 256 scalars, no `chain`, no `error.details`, empty taint lists), the
+   measured response including the envelope and `nextCursor` is under the budget, and the cursor advances; a
+   run failed with a 32 KiB **unknown `error.code`** and a short message is stored with the code intact, its
+   reduced row still does not fit a 16 KiB budget, so `runs.list` fails `PAYLOAD_TOO_LARGE` / `message_budget`
+   with `details.bytes` = `details.minimum` = the measured size of that reduced response, the cursor does not
+   advance, a retry with the budget raised to `details.minimum` returns the row, and `runs.get` then returns the
+   code byte-for-byte; a session budget too small for the envelope plus the reduced row of an ordinary run
+   fails the same way with `details.minimum`, never an empty page; `runs.get` of a run whose three snapshots
+   exceed the budget fails
    `PAYLOAD_TOO_LARGE` / `message_budget` / `component: "snapshots"` and succeeds with `snapshots: false`; a
    trace-only overflow fails with `component: "trace"` and succeeds with `trace: false`; a record whose bounded
-   `error.details` alone exceeds a small budget fails with `component: "record"` and succeeds after the budget
-   is raised.
+   `error.details` alone exceeds a small budget fails with `component: "record"` and `details.minimum`, and
+   succeeds after the budget is raised to it.
 7. **Timers and cron:** paused-clock tests for drift-free intervals, direct dispatch to the owning trigger, random ranges, `minChatLines` gate, `repeat:
    false` disabling, missed-tick coalescing after a simulated suspend; cron DST skip and fall-back, `catchUp`,
    time zone changes, leap day; **cron cursor:** a daily trigger fires, the engine restarts twice within the day
@@ -2170,6 +2189,15 @@ grammar"; signals are implemented as operations rather than new `Node` kinds so 
   behaviour (§16, §22.13); R2-3 `settings.get` under `source: "defaults"` returns the defaults the engine runs
   on as a valid `Settings`, a `reason`, the set-aside record's provenance and an empty `pendingRestart`, never
   the invalid stored bytes (§16, §22.13).
+  **Round 4** (the Codex Astra re-review of `a79acbd`, 2 P2, both resolved): R3-1 the constant reduced-row bound
+  `K_row` withdrawn, because `error.code`, `RunWarning.code` and `principalKind` are open strings the engine
+  never cuts or rewrites; the §12.1 record-time bounds restated as free-text bounds with codes stored as
+  recorded, the reduced row decided by the measured complete response (envelope and cursor included), a reduced
+  first row that still does not fit failing `runs.list` with `PAYLOAD_TOO_LARGE` / `message_budget` and a
+  measured `details.minimum` at any budget, the 32 KiB unknown-code witness added next to the 2 MiB cases
+  (§12.1, §12.6, §22.6); R3-2 the §16 introduction no longer lists `fieldErrors[].path` among the dotted-key
+  users: dotted document keys are reserved for the result lists, warnings, diff and event, and
+  `fieldErrors[].path` is the request JSON Pointer (§16).
   Owner answers applied: Q-E1–Q-E8 marked confirmed (D-039) where the text asked for confirmation (§6.3, §7.1,
   §9.5, §9.10, §10.8, §12.2, §24); the Q-H1 and Q-C5 answers of 2026-10-19 recorded where §12.5 and §13.6
   deferred to them (no behaviour change here; spec 08 owns the chat history store). Cards DEN-69, 70, 77, 82, 93,
