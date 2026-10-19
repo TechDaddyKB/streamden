@@ -565,8 +565,8 @@ fn published_examples_redact_marked_secrets() {
     }
     let mut params = catalog.schema_for::<Params>().to_value();
     params["properties"]["password"]["x-secret"] = json!(true);
-    // A pattern property (review round 2); its regex is not evaluated, every member not named in
-    // `properties` is checked against it.
+    // A pattern property (review round 2); its regex is evaluated against every member name, named in
+    // `properties` or not (round 3; `tests/redaction.rs` covers the overlap).
     params["patternProperties"] = json!({ "^k_": { "type": "string", "x-secret": true } });
     let mut def = op(
         "demo.read",
