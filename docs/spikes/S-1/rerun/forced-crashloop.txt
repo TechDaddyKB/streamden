@@ -1,0 +1,13 @@
+run 1 pid=399432 killed after 0.1s: {"level":0,"level_name":"defaults","source":"default"} first_paint_events=0 marker=present orphaned_children=0
+run 2 pid=399706 killed after 0.1s: {"level":1,"level_name":"early-gl-quirk","source":"crash-loop: previous run (pid 399432, level 0) never painted"} first_paint_events=0 marker=present orphaned_children=0
+run 3 pid=399854 killed after 0.1s: {"level":2,"level_name":"no-dmabuf","source":"crash-loop: previous run (pid 399706, level 1) never painted"} first_paint_events=0 marker=present orphaned_children=0
+run 4 pid=400406 killed after 0.1s: {"level":3,"level_name":"no-dmabuf+no-compositing","source":"crash-loop: previous run (pid 399854, level 2) never painted"} first_paint_events=0 marker=present orphaned_children=0
+run 5 pid=400880 killed after 0.1s: {"level":4,"level_name":"x11","source":"crash-loop: previous run (pid 400406, level 3) never painted"} first_paint_events=0 marker=present orphaned_children=0
+run 6 pid=401178: {"event":"crash_loop_bump","from":4,"pid":401178,"previous_pid":400880,"t_unix_ms":1792385875977,"to":5} {"env":[],"event":"startup","level":5,"level_name":"browser-fallback","pid":401178,"source":"crash-loop: previous run (pid 400880, level 4) never painted","t_unix_ms":1792385875977} {"event":"browser_fallback","open_browser":false,"pid":401178,"t_unix_ms":1792385875997} 
+run 6 windows: 0, children: 
+run 6 GET / -> 200 text/html
+run 6 GET /api/state -> {"level":5,"level_name":"browser-fallback","browser_fallback":true,"ticks":3}
+run 6 SSE (3 s): 3 tick events
+run 6 Host guard: evil Host -> 403, cross-origin POST -> 403
+run 6 tray: {"status":"Active","labels":["Show","Hide to tray (destroy webview)","Second window (chat)","","Open UI in browser","Quit"]}
+level file now: 5

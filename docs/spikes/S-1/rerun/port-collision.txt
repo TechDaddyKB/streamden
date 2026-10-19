@@ -1,0 +1,17 @@
+# P2 check 2026-10-19T00:04:01-05:00: two instances asking for --port 48200
+A pid=466146 http_listening: {"addr":"127.0.0.1:48200","event":"http_listening","pid":466146,"t_unix_ms":1792386241122}
+B pid=466251 http_listening: {"addr":"127.0.0.1:39389","event":"http_listening","pid":466251,"t_unix_ms":1792386241300}
+$ instance.sh A -> 127.0.0.1:48200
+$ instance.sh B -> 127.0.0.1:39389
+$ S1_ADDR=127.0.0.1:48200 S1_PID=466251 api.sh info
+127.0.0.1:48200 answers as pid 466146, not 466251
+exit=1
+$ S1_ADDR=<B's addr> S1_PID=466251 api.sh info
+{"action":"info","ok":true,"windows":[{"always_on_top":false,"fullscreen":false,"inner_size":[1000,700],"label":"main","
+exit=0
+$ api.sh info   (no S1_ADDR)
+scripts/api.sh: line 7: S1_ADDR: set S1_ADDR (see scripts/instance.sh)
+exit=1
+$ S1_ADDR=<A's addr> api.sh nosuchaction
+curl: (22) The requested URL returned error: 400
+exit=1

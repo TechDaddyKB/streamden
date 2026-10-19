@@ -1,0 +1,12 @@
+{"pid":323831,"comm":"s1-tauri-shell","render_nodes":"/dev/dri/renderD128=nvidia","nvidia_fds":18,"llvmpipe_threads":0,"level":1}
+{"pid":323894,"comm":"WebKitNetworkPr","render_nodes":"/dev/dri/renderD128=nvidia","nvidia_fds":0,"llvmpipe_threads":0,"level":1}
+{"pid":323902,"comm":"WebKitWebProces","render_nodes":"/dev/dri/renderD128=nvidia","nvidia_fds":24,"llvmpipe_threads":0,"level":1}
+{"pid":328021,"comm":"s1-tauri-shell","render_nodes":"/dev/dri/renderD128=nvidia","nvidia_fds":18,"llvmpipe_threads":0,"level":2}
+{"pid":328078,"comm":"WebKitNetworkPr","render_nodes":"","nvidia_fds":0,"llvmpipe_threads":0,"level":2}
+{"pid":328080,"comm":"WebKitWebProces","render_nodes":"","nvidia_fds":0,"llvmpipe_threads":0,"level":2}
+{"pid":331726,"comm":"s1-tauri-shell","render_nodes":"/dev/dri/renderD128=nvidia","nvidia_fds":18,"llvmpipe_threads":0,"level":3}
+{"pid":331784,"comm":"WebKitNetworkPr","render_nodes":"","nvidia_fds":0,"llvmpipe_threads":0,"level":3}
+{"pid":331786,"comm":"WebKitWebProces","render_nodes":"","nvidia_fds":0,"llvmpipe_threads":0,"level":3}
+{"pid":378773,"comm":"s1-tauri-shell","render_nodes":"/dev/dri/renderD128=nvidia","nvidia_fds":18,"llvmpipe_threads":0,"level":"0+__NV_DISABLE_EXPLICIT_SYNC=1"}
+{"pid":378834,"comm":"WebKitNetworkPr","render_nodes":"","nvidia_fds":0,"llvmpipe_threads":0,"level":"0+__NV_DISABLE_EXPLICIT_SYNC=1"}
+{"pid":378879,"comm":"WebKitWebProces","render_nodes":"/dev/dri/renderD128=nvidia","nvidia_fds":24,"llvmpipe_threads":0,"level":"0+__NV_DISABLE_EXPLICIT_SYNC=1"}
