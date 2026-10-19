@@ -32,8 +32,8 @@ repo="$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)"
 wt="$(dirname "$repo")/den-wt/$card"
 username="$vendor/$model"
 today="$(date +%F)"
-# Stable for same-vendor retries on this date, distinct across vendors and modes.
-claim_request_id="$card-$vendor-$mode-$today"
+# Generate once per dispatch; retries use the same ID embedded in the prompt.
+claim_request_id="$card-$vendor-$mode-$(date -u +%Y%m%dT%H%M%SZ)-$$-$RANDOM"
 
 if [[ "$mode" == work ]]; then
   # Bake-off style cards are worked by several vendors: give each vendor its own worktree.
@@ -46,12 +46,15 @@ if [[ "$mode" == work ]]; then
     git -C "$repo" fetch --quiet origin main || true
     base="origin/main"; git -C "$repo" rev-parse --verify --quiet "$base" >/dev/null || base="main"
     git -C "$repo" worktree add "$wt" -b "agent/$vendor/$card-$slug" "$base"
-    if [[ -f "$wt/package.json" && -f "$wt/pnpm-lock.yaml" ]]; then
-      if ! (cd "$wt" && pnpm install --frozen-lockfile --ignore-scripts); then
-        echo "Dependency install failed in $wt; agent not launched. Run pnpm install --frozen-lockfile --ignore-scripts there before retrying." >&2
-        exit 1
-      fi
+  fi
+  if [[ -f "$wt/package.json" && -f "$wt/pnpm-lock.yaml" ]]; then
+    echo "Installing frozen dependencies in $wt"
+    if ! (cd "$wt" && pnpm install --frozen-lockfile --ignore-scripts); then
+      echo "Dependency install failed in $wt; agent not launched. Run pnpm install --frozen-lockfile --ignore-scripts there before retrying." >&2
+      exit 1
     fi
+  else
+    echo "Dependency install skipped in $wt: package.json and pnpm-lock.yaml are both required."
   fi
   prompt="You are $username working on StreamDen board card $card (card #$n, project slug 'streamden').
 Follow AGENTS.md and docs/agents/board.md exactly:
@@ -71,7 +74,7 @@ else
 fi
 
 prompt="$prompt
-Claim safety (including shared bake-off cards): confirm the live claim with project_card_get using worktree_path=$wt and username=$username; require claim.yours=true before moving or releasing the card. A replayed claimed:true response alone is insufficient. If another vendor/session holds it, report the holder and stop this dispatch; never release or move another vendor's live claim. Retry the same claim request with client_request_id=$claim_request_id."
+Claim safety (including shared bake-off cards): confirm the live claim with project_card_get using worktree_path=$wt and username=$username; require claim.yours=true before working, moving or releasing the card. A replayed claimed:true response alone is insufficient. If another vendor/session holds it, report the holder and stop this dispatch; never release or move another vendor's live claim. If the card is unheld and the claim is not yours, report and stop; do not re-dispatch with the same ID. For transport retries within this dispatch only, reuse this exact client_request_id: $claim_request_id"
 
 cd "$wt"
 echo "Launching $wrapper in $wt ($mode $card)…"
