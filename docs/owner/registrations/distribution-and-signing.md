@@ -145,7 +145,9 @@ Rules to remember: only package files in the repo (no nested directories), `.SRC
 
 Without signing, Windows SmartScreen warns users who download the installer from a browser. Signing is not required to run the app. **EV certificates no longer get special SmartScreen treatment** (Microsoft removed it in 2024), and reputation builds per certificate, so sign every release with the same certificate.
 
-### 5A. SignPath Foundation (free for OSS): recommended if the license is OSI-approved
+### 5A. SignPath Foundation (free for OSS): chosen by the owner (Q-G3, D-055)
+
+> **Decided 2026-10-19:** SignPath is the Windows signer. Azure Artifact Signing (5B) is kept below as background only. Applying still waits for a public v0.1 release; Q-B10 (public-release signing prerequisites) is still open.
 
 Requirements (from SignPath's terms):
 
@@ -178,6 +180,8 @@ Acceptable until the first public release. Document the SmartScreen "More info >
 ---
 
 ## 6. Apple Developer Program (macOS), pending **Q-P2**
+
+> **Status 2026-10-19 (Q-G3, D-055):** the owner already has an Apple Developer account, so step 2 (enrolment and the fee) is done. Signing and notarization stay gated by Q-P2 (D-024: unsigned best-effort until v0.5).
 
 Recommendation in Q-P2: **(b)** ship unsigned (ad-hoc signed) macOS builds until v0.5, then enroll if there is demand. Do **not** pay yet unless Q-P2 says (a).
 
