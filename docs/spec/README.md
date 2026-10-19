@@ -12,7 +12,7 @@ links to the FEATURE-PARITY rows it covers.
 |---|---|---|
 | `01-build-release.md` | WS-01 Build, CI, packaging | not started |
 | `02-protocol.md` | WS-02 Protocol and contracts | not started |
-| `03-engine.md` | WS-03 Engine core | r3 draft, in Codex re-review (DEN-15) |
+| `03-engine.md` | WS-03 Engine core | r3, reviewer-approved; owner to confirm (DEN-15) |
 | `04-scripting.md` | WS-04 Scripting | not started |
 | `05-platforms.md` | WS-05 Platform connectors | not started |
 | `06-api-mcp.md` | WS-06 Local server, API, MCP | not started |
