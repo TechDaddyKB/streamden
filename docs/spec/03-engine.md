@@ -1,6 +1,7 @@
 # Spec 03: Engine core (WS-03)
 
-- **Status:** Revision 2, resolves the Codex (Astra) review of r1 (§25); in Codex re-review. Card: DEN-15.
+- **Status:** Revision 3, approved by the reviewer (Codex Astra, 2026-10-19; history in §25). Provisionally
+  approved by the coordinator on the owner's delegation (2026-10-19); owner confirmation of Q-E1–Q-E8 pending. Card: DEN-15.
 - **Owns:** `crates/den-core`: the event bus, trigger matching, commands, timers and cron, the run executor
   (sub-action tree), queues and scheduling, variables, Action History, and the SQLite storage layer. It also owns
   the engine-side implementation of the authorization rules in [spec 02 §8.8](02-protocol.md).
