@@ -22,5 +22,3 @@ Read [AGENTS.md](AGENTS.md) first. It's the single source of rules for every ven
 codex-orchestrator board (project `streamden`); see [docs/agents/board.md](docs/agents/board.md).
 How work is routed and how to prompt each vendor:
 [docs/agents/DELEGATION.md](docs/agents/DELEGATION.md) · [docs/agents/PROMPTING.md](docs/agents/PROMPTING.md).
-
-Temporary negative control: [missing](docs/does-not-exist.md)
