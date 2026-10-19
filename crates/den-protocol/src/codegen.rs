@@ -256,6 +256,26 @@ pub fn lint(catalog: &Catalog) -> Vec<LintError> {
                     example.title
                 ));
             }
+            // A plan step's `params` are redacted against the named operation's schema (§3). A step
+            // may name a target outside this catalog (a plugin operation, §8.1), but then its params
+            // cannot be checked, so they must hold no value: publication redacts them whole otherwise.
+            if example.shape != ResultShape::Normal
+                && let Some(Value::Array(plan)) = example.result.get("plan")
+            {
+                for (i, step) in plan.iter().enumerate() {
+                    let operation = step.get("operation").and_then(Value::as_str);
+                    let known = operation
+                        .is_some_and(|op| catalog.operations().keys().any(|k| k.as_str() == op));
+                    let empty = step.get("params").is_none_or(holds_no_value);
+                    if !known && !empty {
+                        err(format!(
+                            "example {:?}: plan step {i} names {} outside this catalog with non-empty params, which cannot be checked for secrets",
+                            example.title,
+                            operation.map_or("no operation".to_string(), |op| format!("`{op}`"))
+                        ));
+                    }
+                }
+            }
         }
         if def.tier == RiskTier::DANGEROUS && def.expose.mcp {
             err("a core tier-4 operation must not be marked `expose.mcp` (D-030)".into());
@@ -755,101 +775,250 @@ fn widen_to_template(schema: &mut Value) {
 /// The redacted form of a secret (§3).
 pub const REDACTED: &str = "***";
 
-/// Bound on schema depth followed while redacting one value.
+/// Bound on value nesting followed while redacting one value; a value nested deeper is redacted whole.
 const MAX_REDACT_DEPTH: usize = 64;
 
+/// Bound on the subschemas that may apply at one instance location once `$ref` chains, composition
+/// branches and conditionals are expanded; a position that needs more is redacted whole.
+const MAX_APPLICABLE: usize = 512;
+
 /// Redacts every value at an `x-secret: true` position of `schema` to `"***"` (§3), so examples never
-/// publish a secret. Schema-aware: follows `properties`, `patternProperties` (regexes evaluated; one
-/// that does not compile matches everything), `additionalProperties`, `items`, `prefixItems`, `$ref`
-/// chains (siblings included, so a secret marked on the reference counts) and every composition
-/// branch. The walk errs on the side of redaction: a composition branch that does not apply to the
-/// value can only redact more, never less, and a value nested deeper than the schema walk follows is
-/// redacted whole. Values the schema does not describe (an untyped `params` object, for instance) are
-/// left alone.
+/// publish a secret. The walk is structurally fail-closed rather than keyword-by-keyword:
+///
+/// - At every instance location the **union** of every subschema that could apply is consulted: the
+///   schema itself, the targets of its `$ref` chain (followed to the end; a cycle is visited once),
+///   every `allOf`/`anyOf`/`oneOf` branch, `if`, `then` *and* `else`, `not`, and every
+///   `dependentSchemas` entry, whether or not that branch would validate the value. A secret marked in
+///   any of them redacts the value. A branch that does not apply can only redact more, never less.
+/// - Object members collect their schemas from every applicable subschema: the named `properties`
+///   entry **and** every matching `patternProperties` entry (the regex is evaluated; one that does not
+///   compile matches everything), and when neither matched in that subschema its
+///   `additionalProperties` and `unevaluatedProperties` (whatever another subschema evaluated: the
+///   walk never decides which branch validated). Array items collect `prefixItems[i]`, else `items`,
+///   else `unevaluatedItems`, plus `contains` always.
+/// - Anything the walk cannot classify redacts the value whole instead of passing it through: a `$ref`
+///   that does not resolve to a shared type, an expansion past [`MAX_APPLICABLE`] subschemas, a value
+///   nested past [`MAX_REDACT_DEPTH`], a schema keyword this walk does not model, a keyword whose
+///   value has the wrong shape, or an `x-secret` that is not a boolean.
+///
+/// Values the schema does not describe at all (a member of an untyped `params` object, for instance)
+/// are left alone: an unmarked position is not a secret.
 pub fn redact_secrets(value: &mut Value, schema: &Value, types: &BTreeMap<String, Value>) {
-    redact(value, schema, types, 0);
+    redact(value, &[schema], types, 0);
 }
 
-/// Resolves a `$ref` chain (a target that is itself a `$ref`) with every hop's siblings merged in.
-fn resolve_ref_chain(
-    obj: &Map<String, Value>,
-    types: &BTreeMap<String, Value>,
-) -> Map<String, Value> {
-    let mut current = obj.clone();
-    for _ in 0..MAX_REF_DEPTH {
-        let Some(target) = resolve_ref(&current, types) else {
-            break;
-        };
-        current = merge_ref_target(&current, target);
+/// Why a position could not be classified. Every case redacts the value whole.
+#[derive(Debug)]
+enum Unclassifiable {
+    /// A `$ref` that is not `#/types/<Name>` or names no shared type.
+    UnresolvedRef,
+    /// More than [`MAX_APPLICABLE`] subschemas apply at one location.
+    Exhausted,
+    /// A schema position that is neither an object nor a boolean.
+    NotASchema,
+    /// A keyword the walk does not model, or a modelled keyword with a value of the wrong shape.
+    UnknownKeyword,
+    /// `x-secret` with a non-boolean value.
+    MalformedSecretMark,
+}
+
+/// Keywords this walk models, each with the value shape it accepts. Everything else that is not an
+/// annotation ([`is_annotation_key`]) is unknown and fails closed.
+fn check_keyword(key: &str, value: &Value) -> Result<(), Unclassifiable> {
+    let ok = match key {
+        // Identifiers and reserved locations: no effect on the instance at this location.
+        "$schema" | "$id" | "$anchor" | "$vocabulary" | "$dynamicAnchor" => true,
+        "$defs" | "definitions" => value.is_object(),
+        "$ref" => value.is_string(),
+        // Validation keywords without subschemas.
+        "type" | "enum" | "const" | "multipleOf" | "maximum" | "exclusiveMaximum" | "minimum"
+        | "exclusiveMinimum" | "maxLength" | "minLength" | "pattern" | "maxItems" | "minItems"
+        | "uniqueItems" | "maxContains" | "minContains" | "maxProperties" | "minProperties"
+        | "required" | "dependentRequired" | "format" | "contentMediaType" | "contentEncoding" => {
+            true
+        }
+        // `contentSchema` describes the *decoded* content of a string: a mark inside it names a secret
+        // this walk cannot see, so only the boolean form (no marks possible) is modelled.
+        "contentSchema" => value.is_boolean(),
+        // Applicators at this location.
+        "allOf" | "anyOf" | "oneOf" => value.is_array(),
+        // `propertyNames` constrains keys, which are published as-is: a mark in it redacts the object.
+        "if" | "then" | "else" | "not" | "propertyNames" => value.is_object() || value.is_boolean(),
+        "dependentSchemas" => value.is_object(),
+        // Applicators for children.
+        "properties" | "patternProperties" => value.is_object(),
+        "additionalProperties"
+        | "unevaluatedProperties"
+        | "items"
+        | "contains"
+        | "unevaluatedItems" => value.is_object() || value.is_boolean(),
+        "prefixItems" => value.is_array(),
+        other => is_annotation_key(other),
+    };
+    if ok {
+        Ok(())
+    } else {
+        Err(Unclassifiable::UnknownKeyword)
     }
-    current
 }
 
-fn redact(value: &mut Value, schema: &Value, types: &BTreeMap<String, Value>, depth: usize) {
-    if depth > MAX_REDACT_DEPTH {
+/// Every subschema that applies at one instance location, expanded from `roots` (§3): `$ref` targets
+/// (chains followed completely, each shared type visited once per location), composition branches,
+/// both conditional branches and the condition itself, `not`, and `dependentSchemas` entries. Boolean
+/// schemas carry no marks and no children and are dropped. The expansion is a union: it never decides
+/// which branch validates. Every keyword of every subschema is checked on the way.
+fn applicable<'a>(
+    roots: &[&'a Value],
+    types: &'a BTreeMap<String, Value>,
+) -> Result<Vec<&'a Map<String, Value>>, Unclassifiable> {
+    let mut out: Vec<&'a Map<String, Value>> = Vec::new();
+    let mut seen_refs: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut stack: Vec<&'a Value> = roots.iter().rev().copied().collect();
+    while let Some(schema) = stack.pop() {
+        let obj = match schema {
+            Value::Bool(_) => continue,
+            Value::Object(obj) => obj,
+            _ => return Err(Unclassifiable::NotASchema),
+        };
+        if out.len() >= MAX_APPLICABLE {
+            return Err(Unclassifiable::Exhausted);
+        }
+        out.push(obj);
+        for (key, member) in obj {
+            check_keyword(key, member)?;
+            match key.as_str() {
+                "$ref" => {
+                    let name = shared_type_name(obj).ok_or(Unclassifiable::UnresolvedRef)?;
+                    let target = types.get(&name).ok_or(Unclassifiable::UnresolvedRef)?;
+                    if seen_refs.insert(name) {
+                        stack.push(target);
+                    }
+                }
+                "allOf" | "anyOf" | "oneOf" => {
+                    if let Some(branches) = member.as_array() {
+                        stack.extend(branches.iter().rev());
+                    }
+                }
+                "if" | "then" | "else" | "not" | "propertyNames" => stack.push(member),
+                "dependentSchemas" => {
+                    if let Some(entries) = member.as_object() {
+                        stack.extend(entries.values().rev());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The shared type a `$ref` names, and nothing else: `protocol.json` has no other reference target,
+/// so a pointer anywhere else (a local `$defs`, the document root, another document) is unresolvable.
+fn shared_type_name(obj: &Map<String, Value>) -> Option<String> {
+    obj.get("$ref")?
+        .as_str()?
+        .strip_prefix("#/types/")
+        .map(str::to_owned)
+}
+
+/// Whether any applicable subschema marks this position secret; a non-boolean mark is unclassifiable.
+fn marked_secret(applicable: &[&Map<String, Value>]) -> Result<bool, Unclassifiable> {
+    let mut marked = false;
+    for obj in applicable {
+        match obj.get("x-secret") {
+            None | Some(Value::Bool(false)) => {}
+            Some(Value::Bool(true)) => marked = true,
+            Some(_) => return Err(Unclassifiable::MalformedSecretMark),
+        }
+    }
+    Ok(marked)
+}
+
+/// Redacts `value` against the union of `schemas` (every schema that applies at its location).
+fn redact(value: &mut Value, schemas: &[&Value], types: &BTreeMap<String, Value>, depth: usize) {
+    if schemas.is_empty() {
+        return;
+    }
+    let classified = if depth > MAX_REDACT_DEPTH {
+        None
+    } else {
+        applicable(schemas, types)
+            .and_then(|a| marked_secret(&a).map(|m| (a, m)))
+            .ok()
+    };
+    let Some((applicable, marked)) = classified else {
         // Fail closed: a value the walk cannot classify is not published.
         *value = Value::String(REDACTED.into());
         return;
-    }
-    let Some(obj) = schema.as_object() else {
-        return;
     };
-    let merged;
-    let obj = if obj.contains_key("$ref") {
-        merged = resolve_ref_chain(obj, types);
-        &merged
-    } else {
-        obj
-    };
-    if obj.get("x-secret") == Some(&Value::Bool(true)) {
+    if marked {
         *value = Value::String(REDACTED.into());
         return;
-    }
-    for key in ["oneOf", "anyOf", "allOf"] {
-        if let Some(Value::Array(branches)) = obj.get(key) {
-            for branch in branches {
-                redact(value, branch, types, depth + 1);
-            }
-        }
     }
     match value {
         Value::Object(map) => {
             for (name, member) in map.iter_mut() {
-                if let Some(prop) = obj.get("properties").and_then(|p| p.get(name)) {
-                    redact(member, prop, types, depth + 1);
-                    continue;
-                }
-                let mut matched = false;
-                if let Some(Value::Object(patterns)) = obj.get("patternProperties") {
-                    for (pattern, pattern_schema) in patterns {
-                        let applies = regex::Regex::new(pattern)
-                            .map(|re| re.is_match(name))
-                            .unwrap_or(true);
-                        if applies {
-                            matched = true;
-                            redact(member, pattern_schema, types, depth + 1);
+                let mut child: Vec<&Value> = Vec::new();
+                for obj in &applicable {
+                    let mut matched = false;
+                    if let Some(prop) = obj.get("properties").and_then(|p| p.get(name)) {
+                        matched = true;
+                        child.push(prop);
+                    }
+                    if let Some(Value::Object(patterns)) = obj.get("patternProperties") {
+                        for (pattern, pattern_schema) in patterns {
+                            let applies = regex::Regex::new(pattern)
+                                .map(|re| re.is_match(name))
+                                .unwrap_or(true);
+                            if applies {
+                                matched = true;
+                                child.push(pattern_schema);
+                            }
+                        }
+                    }
+                    // A member this subschema did not evaluate itself falls to its
+                    // `additionalProperties`, and (whatever the other subschemas evaluated) to its
+                    // `unevaluatedProperties`.
+                    if !matched {
+                        for key in ["additionalProperties", "unevaluatedProperties"] {
+                            if let Some(fallback) = obj.get(key) {
+                                child.push(fallback);
+                            }
                         }
                     }
                 }
-                if !matched
-                    && let Some(additional) = obj.get("additionalProperties")
-                    && additional.is_object()
-                {
-                    redact(member, additional, types, depth + 1);
-                }
+                redact(member, &child, types, depth + 1);
             }
         }
         Value::Array(items) => {
-            let prefix = obj.get("prefixItems").and_then(Value::as_array);
             for (i, item) in items.iter_mut().enumerate() {
-                if let Some(prefixed) = prefix.and_then(|p| p.get(i)) {
-                    redact(item, prefixed, types, depth + 1);
-                } else if let Some(items_schema) = obj.get("items") {
-                    redact(item, items_schema, types, depth + 1);
+                let mut child: Vec<&Value> = Vec::new();
+                for obj in &applicable {
+                    if let Some(prefixed) = obj.get("prefixItems").and_then(|p| p.get(i)) {
+                        child.push(prefixed);
+                    } else if let Some(items_schema) = obj.get("items") {
+                        child.push(items_schema);
+                    } else if let Some(unevaluated) = obj.get("unevaluatedItems") {
+                        child.push(unevaluated);
+                    }
+                    if let Some(contains) = obj.get("contains") {
+                        child.push(contains);
+                    }
                 }
+                redact(item, &child, types, depth + 1);
             }
         }
         _ => {}
+    }
+}
+
+/// Whether a value is a container with no scalar anywhere inside (`{}`, `[]`, `{ "a": [] }`): nothing
+/// in it can be a secret.
+fn holds_no_value(value: &Value) -> bool {
+    match value {
+        Value::Object(map) => map.values().all(holds_no_value),
+        Value::Array(items) => items.iter().all(holds_no_value),
+        _ => false,
     }
 }
 
@@ -1026,7 +1195,9 @@ impl ProtocolDocument {
     /// The publication boundary of §3: replaces every `x-secret` position of every operation and event
     /// example with `"***"`, guided by the published schemas ([`redact_secrets`]). Plan steps of dry-run
     /// and draft examples name the operation they would call, so their `params` are redacted against
-    /// that operation's invocation schema. Idempotent.
+    /// that operation's invocation schema; a step naming a target outside this document keeps its
+    /// `params` only when they hold no value, and is published with them redacted whole otherwise.
+    /// Idempotent.
     pub fn redact_examples(&mut self) {
         let types = &self.types;
         let op_params: BTreeMap<String, Value> = self
@@ -1053,15 +1224,20 @@ impl ProtocolDocument {
                     && let Some(Value::Array(plan)) = example.result.get_mut("plan")
                 {
                     for step in plan {
-                        let Some(schema) = step
+                        let schema = step
                             .get("operation")
                             .and_then(Value::as_str)
-                            .and_then(|op| op_params.get(op))
-                        else {
+                            .and_then(|op| op_params.get(op));
+                        let Some(params) = step.get_mut("params") else {
                             continue;
                         };
-                        if let Some(params) = step.get_mut("params") {
-                            redact_secrets(params, schema, types);
+                        match schema {
+                            Some(schema) => redact_secrets(params, schema, types),
+                            // A target outside this document (a plugin operation) cannot be checked:
+                            // its params are published only when they hold no value at all (the
+                            // lint demands that); anything else is redacted whole. Fail closed.
+                            None if holds_no_value(params) => {}
+                            None => *params = Value::String(REDACTED.into()),
                         }
                     }
                 }
