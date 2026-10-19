@@ -7,29 +7,34 @@
 ## 1. Process model
 
 ```
-┌──────────────────────── streamden (Tauri 2 desktop app — one OS process) ─────────────────────────┐
-│ Tauri shell (thin): windows, tray, single-instance, autostart, deep links, updater, graphics-compat    │
-│      │ in-proc typed channel  (or WS to an external `streamdend` when "attach to daemon")         │
-│ ┌────▼───────────────────────────── den-core (Rust lib, Tokio) ───────────────────────────────────────┐ │
-│ │ EventBus ─► TriggerMatcher ─► ActionEngine (queues, concurrency, sub-action tree, variables)        │ │
-│ │ Connectors: Twitch · YouTube · Kick · X · OBS · VTube Studio · VMC/OSC · … (all via plugin trait)    │ │
-│ │ ChatHub (unified messages, emotes, filters)   AlertQueue   Timers/Cron   FileWatch   MIDI   Hotkeys │ │
-│ │ Audio buses (cpal/rodio) · TTS (sherpa-onnx / OS / cloud) · STT (optional)                         │ │
-│ │ Scripting: JsHost (rquickjs, in-proc) · WorkerPool<python> · WorkerPool<dotnet> (JSON-RPC/stdio)    │ │
-│ │ PluginHost: declarative · sidecar (JSON-RPC) · embedded JS · (WASM later)                           │ │
-│ │ Storage: SQLite · secrets in OS keychain                                                            │ │
-│ │ den-server (axum): /api REST+OpenAPI · /ws JSON-RPC events · /mcp · /ui SPA · /o/* overlays · /dock/* │ │
-│ └─────────────────────────────────────────────────────────────────────────────────────────────────────┘ │
-└──────┬─────────────────────────────────────────────────────────────────────────────────────────────────┘
-       │ webview (WebKitGTK / WebView2 / WKWebView) shows the UI only; closed when minimised to tray
- child processes: python workers · C# worker (optional) · sidecar plugins · isolated-JS worker
+┌──────── streamden-engine (always running · engine + tray · never loads WebKit) ────────────────────┐
+│ Tray: show/quit, single-instance, autostart, deep links, updater                                    │
+│ ┌───────────────────────────────── den-core (Rust lib, Tokio) ────────────────────────────────────┐ │
+│ │ EventBus ─► TriggerMatcher ─► ActionEngine (queues, concurrency, sub-action tree, variables)    │ │
+│ │ Connectors: Twitch · YouTube · Kick · X · OBS · VTube Studio · VMC/OSC · … (all via plugin trait)│ │
+│ │ ChatHub (unified messages, emotes, filters)   AlertQueue   Timers/Cron   FileWatch   MIDI  Hotkeys│ │
+│ │ Audio buses (cpal/rodio) · TTS (sherpa-onnx / OS / cloud) · STT (optional)                      │ │
+│ │ Scripting: JsHost (rquickjs, in-proc) · WorkerPool<python> · WorkerPool<dotnet> (JSON-RPC/stdio)│ │
+│ │ PluginHost: declarative · sidecar (JSON-RPC) · embedded JS · (WASM later)                       │ │
+│ │ Storage: SQLite · secrets in OS keychain                                                        │ │
+│ │ den-server (axum): /api REST+OpenAPI · /ws JSON-RPC events · /mcp · /ui SPA · /o/* · /dock/*    │ │
+│ └─────────────────────────────────────────────────────────────────────────────────────────────────┘ │
+└───────▲───────────────────────────────────────────────────────────────────────────────────────────┘
+        │ local API (127.0.0.1): same typed messages as /ws — or a remote `streamdend` ("attach to daemon")
+┌───────┴─── streamden-ui (Tauri 2 shell · on-demand · separate OS process) ──────────────────────────┐
+│ Windows, graphics-compat setting, webview (WebKitGTK / WebView2 / WKWebView) showing the UI only.   │
+│ Started from the tray; fully exited when the last window closes (close-to-tray).                    │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ child processes (owned by the engine): python workers · C# worker (optional) · sidecar plugins · isolated-JS worker
  external clients: OBS browser sources + docks · browsers (LAN mode) · Stream Deck/OpenDeck · phone deck ·
                    MCP clients (Claude, Codex, ChatGPT, Cursor…) · third-party apps via WS/REST
 ```
 
 - `streamdend` is the **same engine without a GUI** (headless daemon, optional systemd user unit). The
-  desktop app can attach to a running daemon, e.g. a daemon on the stream PC controlled from the gaming PC.
-- **The UI is just another API client.** In-process it uses Tauri IPC carrying the *same* typed messages as `/ws`.
+  UI process can attach to a running daemon instead of the local engine, e.g. a daemon on the stream PC
+  controlled from the gaming PC.
+- **The UI is just another API client.** It talks to the engine over the local API (`/ws` JSON-RPC and REST),
+  with no private UI-only endpoints.
 - **Process split (from spike S-1, to be specified in spec 07):** the always-running process is the engine plus
   tray and **never loads WebKit** (52 MB PSS / 92 MB RSS measured). The UI windows run in a separate, on-demand
   Tauri process that talks to the engine over the local API, and is fully exited when the last window closes.
