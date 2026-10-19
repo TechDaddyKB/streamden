@@ -45,6 +45,7 @@ jobs:
       - name: Generated protocol drift
         run: cargo xtask codegen --check
       - name: Protocol tests (including doctests)
+        if: ${{ !cancelled() }}
         run: cargo test -p den-protocol --locked
       - name: Verify checks leave tracked files unchanged
         run: git diff --exit-code

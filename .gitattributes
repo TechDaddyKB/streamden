@@ -1,0 +1,3 @@
+# Generated protocol artifacts must be byte-identical on every platform (Spec 02 §14).
+schema/** text eol=lf linguist-generated=true
+sdk/ts/src/gen/** text eol=lf linguist-generated=true
