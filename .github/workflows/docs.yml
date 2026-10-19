@@ -1,5 +1,5 @@
-# Local reproduction: pnpm dlx markdownlint-cli2@0.18.1 'docs/**/*.md'
-# and lychee --config .lychee.toml 'docs/**/*.md' (lychee 0.24.2).
+# Local reproduction: run the selection step with RUNNER_TEMP set to a temp dir,
+# then the lint and link commands below (lychee 0.24.2).
 name: Docs
 
 on:
@@ -13,7 +13,7 @@ permissions:
 
 concurrency:
   group: docs-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   docs:
@@ -30,8 +30,19 @@ jobs:
         with:
           node-version: '22'
           cache: pnpm
+      - name: Select tracked Markdown
+        # One NUL-delimited input for both tools: includes root, module rules,
+        # tasks and hidden directories; omits dependencies and generated output.
+        run: |
+          git ls-files -z -- ':(icase)*.md' ':(icase)*.markdown' \
+            ':(glob,exclude)**/node_modules/**' \
+            ':(glob,exclude)**/vendor/**' \
+            ':(glob,exclude)**/generated/**' \
+            ':(glob,exclude)**/target/**' \
+            ':(glob,exclude)**/dist/**' \
+            ':(glob,exclude)**/build/**' > "$RUNNER_TEMP/markdown-files"
       - name: Markdown lint
-        run: pnpm dlx markdownlint-cli2@0.18.1 'docs/**/*.md'
+        run: xargs -0 -r pnpm dlx markdownlint-cli2@0.18.1 < "$RUNNER_TEMP/markdown-files"
       - name: Install lychee 0.24.2 (verified release archive)
         run: |
           curl --fail --location --retry 3 \
@@ -40,8 +51,8 @@ jobs:
           echo "1f4e0ef7f6554a6ed33dd7ac144fb2e1bbed98598e7af973042fc5cd43951c9a  $RUNNER_TEMP/lychee.tar.gz" | sha256sum --check
           tar -xzf "$RUNNER_TEMP/lychee.tar.gz" -C "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/lychee-x86_64-unknown-linux-gnu" >> "$GITHUB_PATH"
-      - name: Relative links across docs
-        run: lychee --config .lychee.toml 'docs/**/*.md'
+      - name: Relative links across tracked Markdown
+        run: xargs -0 -r lychee --config .lychee.toml -- < "$RUNNER_TEMP/markdown-files"
 
   commits:
     if: github.event_name == 'pull_request'
