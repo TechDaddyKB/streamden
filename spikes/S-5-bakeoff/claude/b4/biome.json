@@ -1,0 +1,7 @@
+{
+  "files": {
+    "includes": ["packages/**", "!**/src/generated", "!**/node_modules"]
+  },
+  "formatter": { "indentStyle": "space", "indentWidth": 2 },
+  "linter": { "rules": { "preset": "recommended" } }
+}

@@ -1,0 +1,12 @@
+[package]
+name = "b4-codegen"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+b4-core = { path = "../b4-core" }
+
+[lints]
+workspace = true

@@ -1,0 +1,15 @@
+{
+  "name": "b4-root",
+  "private": true,
+  "license": "GPL-3.0-or-later",
+  "packageManager": "pnpm@12.14.0",
+  "engines": { "node": ">=22.18" },
+  "scripts": {
+    "typecheck": "pnpm -r --if-present run typecheck",
+    "lint": "biome ci .",
+    "test": "pnpm -r --if-present run test"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15"
+  }
+}

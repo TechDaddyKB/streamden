@@ -1,0 +1,196 @@
+# StreamDen B-4 bake-off entry (Claude): CI for a Cargo + pnpm monorepo.
+# Inactive where it sits (GitHub only runs workflows from the repo-root .github/workflows).
+# Activate by copying to .github/workflows/ci.yml and setting the default `working-directory`
+# below to "." (or call it from another workflow via `workflow_call`). See ../../README.md.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: Directory holding Cargo.toml, package.json and pnpm-lock.yaml
+        type: string
+        required: false
+        default: spikes/S-5-bakeoff/claude/b4
+
+# Least privilege: nothing here writes to the repo, packages, PRs or OIDC.
+permissions:
+  contents: read
+
+# One run per PR / branch. A new push cancels the superseded run; pushes to main are
+# queued instead so every main commit gets a result. The suffix avoids deadlocking with a
+# caller workflow that uses the same group name when this runs via workflow_call.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-den-ci
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: short
+  NEXTEST_VERSION: 0.9.148
+  NODE_VERSION: "22"
+
+jobs:
+  fmt:
+    name: fmt
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      WD: ${{ inputs.working-directory || 'spikes/S-5-bakeoff/claude/b4' }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ inputs.working-directory || 'spikes/S-5-bakeoff/claude/b4' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  rust:
+    name: rust (${{ matrix.id }})
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: ubuntu-22.04
+            os: ubuntu-22.04
+            container: ""
+          - id: fedora-44
+            os: ubuntu-24.04
+            container: fedora:44@sha256:43b29f65a41eb9c35e1cd5323e3bdf3b655c2357a9f4f1ff2f9c2798e5045d80
+          - id: arch
+            os: ubuntu-24.04
+            container: archlinux:latest@sha256:3c64b538588416593f69a1aebd2f2ec0f2541b29159f32556fa7def2167147a0
+          - id: windows
+            os: windows-latest
+            container: ""
+          - id: macos
+            os: macos-latest
+            container: ""
+    env:
+      WD: ${{ inputs.working-directory || 'spikes/S-5-bakeoff/claude/b4' }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # Container images ship without git; install it first so checkout makes a real clone.
+      # Package lists follow the Tauri 2 Linux prerequisites (WebKitGTK 4.1, not 4.0).
+      - name: Tauri deps (Fedora)
+        if: startsWith(matrix.id, 'fedora')
+        run: |
+          dnf -y install --setopt=install_weak_deps=False \
+            git gcc gcc-c++ make pkgconf-pkg-config wget file \
+            webkit2gtk4.1-devel openssl-devel libappindicator-gtk3-devel librsvg2-devel libxdo-devel
+      - name: Tauri deps (Arch)
+        if: matrix.id == 'arch'
+        run: |
+          pacman -Syu --noconfirm --needed \
+            git base-devel curl wget file \
+            webkit2gtk-4.1 openssl libappindicator librsvg xdotool
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Tauri deps (Ubuntu)
+        if: startsWith(matrix.id, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config curl wget file \
+            libwebkit2gtk-4.1-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: ${{ env.WD }} -> target
+          key: ${{ matrix.id }}
+          # Only main writes the cache; PRs restore from it and cannot evict it.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-nextest@${{ env.NEXTEST_VERSION }}
+      - name: clippy
+        working-directory: ${{ env.WD }}
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: nextest
+        working-directory: ${{ env.WD }}
+        run: cargo nextest run --workspace --all-features --locked --no-tests=warn
+      - name: doctests
+        working-directory: ${{ env.WD }}
+        run: cargo test --workspace --doc --locked
+
+  web:
+    name: web (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-latest, macos-latest]
+    env:
+      WD: ${{ inputs.working-directory || 'spikes/S-5-bakeoff/claude/b4' }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ inputs.working-directory || 'spikes/S-5-bakeoff/claude/b4' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: ${{ env.WD }}/package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: ${{ env.WD }}/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test
+
+  # Placeholder for protocol bindings (ts-rs / schemars output after DEN-19): regenerate,
+  # then fail if the committed files differ or new untracked files appear.
+  codegen-drift:
+    name: codegen drift
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      WD: ${{ inputs.working-directory || 'spikes/S-5-bakeoff/claude/b4' }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ inputs.working-directory || 'spikes/S-5-bakeoff/claude/b4' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: ${{ env.WD }} -> target
+          key: codegen
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: regenerate bindings
+        run: cargo run --locked -p b4-codegen
+      - name: fail on drift
+        run: |
+          git add --intent-to-add --all .
+          if ! git diff --exit-code --stat .; then
+            echo "::error::Generated files are stale. Run 'cargo run -p b4-codegen' and commit the result."
+            git diff .
+            exit 1
+          fi
