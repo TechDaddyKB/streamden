@@ -8,11 +8,12 @@ use den_protocol::auth::{AuthContext, Principal};
 use den_protocol::catalog::{ArgWrites, Catalog, ResultShape};
 use den_protocol::codegen;
 use den_protocol::domain::{
-    Action, ActionRef, CodeSource, Filter, Origin, PendingChange, Queue, StoredDocument, SubAction,
-    Trigger, VariableRecord,
+    Action, ActionRef, CodeSource, Filter, Node, OnError, Origin, PendingChange, Queue,
+    StoredDocument, SubAction, Trigger, UpdatedBy, VariableRecord,
 };
 use den_protocol::events::Event;
-use den_protocol::manifest::PluginManifest;
+use den_protocol::manifest::{ManifestError, PluginManifest};
+use den_protocol::records::{Command, CommandMode, Run, Timer};
 use den_protocol::results::{DraftResult, DryRunResult, PluginCallParams, PluginCallResult};
 use den_protocol::rpc::{
     BatchExecuteParams, BatchExecuteResult, EventNotification, EventsDroppedNotification,
@@ -127,8 +128,9 @@ fn every_node_kind_round_trips() {
     let files = fixture_files("sub_action");
     assert_eq!(
         files.len(),
-        19,
-        "one fixture per Node kind plus the TemplateOr/ActionRef/CodeSource forms and the unknown-kind fallback"
+        25,
+        "one fixture per Node kind plus the TemplateOr/ActionRef/CodeSource forms, the unknown-kind fallback, \
+         `onError`, both ForEach forms and the §17.12 engine-namespace ops"
     );
     check_dir::<SubAction>("sub_action", true);
     let kinds: Vec<String> = files
@@ -141,6 +143,7 @@ fn every_node_kind_round_trips() {
         "if",
         "switch",
         "while",
+        "for_each",
         "break_loop",
         "continue_loop",
         "stop",
@@ -154,7 +157,73 @@ fn every_node_kind_round_trips() {
             kinds.iter().any(|k| k == kind),
             "missing fixture for Node kind {kind}"
         );
+        assert!(
+            Node::KNOWN_KINDS.contains(&kind),
+            "{kind} must be a known kind"
+        );
     }
+}
+
+/// Spec 02 r6 (§6.4, §17.1): `onError` on a node, `ForEach` with a literal and with a templated
+/// collection, and a `Case` with two values.
+#[test]
+fn r6_node_shapes_decode() {
+    let node: SubAction =
+        serde_json::from_value(load("sub_action/on_error_continue.json")).unwrap();
+    assert_eq!(node.on_error, OnError::Continue);
+    let plain: SubAction = serde_json::from_value(load("sub_action/op_core.json")).unwrap();
+    assert_eq!(plain.on_error, OnError::Stop, "the default is stop (A1)");
+    assert!(
+        serde_json::to_value(&plain)
+            .unwrap()
+            .get("onError")
+            .is_none(),
+        "the default is omitted on the wire so existing documents round-trip unchanged"
+    );
+
+    let literal: SubAction =
+        serde_json::from_value(load("sub_action/for_each_literal.json")).unwrap();
+    match &literal.node {
+        Node::ForEach {
+            items,
+            item_var,
+            index_var,
+            max_iterations,
+            children,
+        } => {
+            assert_eq!(items.as_value(), Some(&serde_json::json!(["alice", "bob"])));
+            assert_eq!(item_var, "name");
+            assert_eq!(index_var.as_deref(), Some("i"));
+            assert_eq!(*max_iterations, Some(50));
+            assert_eq!(children.len(), 1);
+        }
+        other => panic!("expected for_each, got {}", other.kind()),
+    }
+    let templated: SubAction =
+        serde_json::from_value(load("sub_action/for_each_template.json")).unwrap();
+    match &templated.node {
+        Node::ForEach { items, .. } => {
+            assert_eq!(
+                items.as_template().map(|t| t.as_str()),
+                Some("{globals.raiders}")
+            );
+        }
+        other => panic!("expected for_each, got {}", other.kind()),
+    }
+
+    let switch: SubAction = serde_json::from_value(load("sub_action/switch.json")).unwrap();
+    match &switch.node {
+        Node::Switch { cases, .. } => {
+            assert_eq!(cases[0].values.len(), 2, "a Case with two values (§17.1)");
+        }
+        other => panic!("expected switch, got {}", other.kind()),
+    }
+    let strict = validator(strict_root_schema_for::<SubAction>().to_value());
+    let empty = load("invalid/switch_case_without_values.json");
+    assert!(
+        !strict.is_valid(&empty),
+        "a case needs at least one value (§6.4)"
+    );
 }
 
 #[test]
@@ -178,6 +247,18 @@ fn every_tagged_union_variant_round_trips() {
     check_dir::<ActionRef>("action_ref", true);
     check_dir::<CodeSource>("code_source", true);
     check_dir::<ArgWrites>("arg_writes", false);
+    check_dir::<UpdatedBy>("updated_by", true);
+    assert_eq!(
+        fixture_files("updated_by").len(),
+        5,
+        "all five UpdatedBy kinds (§6.1, §17.1)"
+    );
+    check_dir::<CommandMode>("command_mode", true);
+    assert_eq!(
+        fixture_files("command_mode").len(),
+        2,
+        "both CommandMode kinds (§6.5, §17.1)"
+    );
 }
 
 #[test]
@@ -188,6 +269,109 @@ fn documents_round_trip_and_validate_strictly() {
     check_dir::<VariableRecord>("variable", true);
     check_dir::<PendingChange>("pending_change", true);
     check_dir::<StoredDocument>("stored_document", true);
+    // §6.5 engine records: Command and Timer are configuration documents, Run a history record.
+    check_dir::<Command>("command", true);
+    check_dir::<Timer>("timer", true);
+    check_dir::<Run>("run", false);
+    let strict = validator(strict_root_schema_for::<Timer>().to_value());
+    assert!(
+        !strict.is_valid(&load("invalid/timer_interval_too_short.json")),
+        "intervalMs is at least 1000 (§6.5)"
+    );
+    let strict = validator(strict_root_schema_for::<Command>().to_value());
+    assert!(
+        !strict.is_valid(&load("invalid/command_without_aliases.json")),
+        "a command has at least one alias (§6.5)"
+    );
+    let pending: PendingChange =
+        serde_json::from_value(load("pending_change/delete.json")).unwrap();
+    assert_eq!(
+        pending.target_kind, "action",
+        "renamed from `kind` in r6 (§6.1)"
+    );
+    let record: VariableRecord = serde_json::from_value(load("variable/record.json")).unwrap();
+    assert!(record.persisted && !record.untrusted);
+    assert_eq!(record.updated_by, UpdatedBy::User);
+    let queue: Queue = serde_json::from_value(load("queue/bounded.json")).unwrap();
+    assert_eq!(queue.max_run_ms, Some(60_000), "A9");
+    for kind in [
+        "command",
+        "timer",
+        "view_state",
+        "export_meta",
+        "pending_change",
+    ] {
+        assert!(StoredDocument::is_known_kind(kind), "{kind} (§7.3)");
+    }
+}
+
+/// §17.12: for every namespace the engine registers, a core reference without `plugin` saves, the same
+/// reference with `plugin` set is rejected by the generated `if/then/else` clause and by the save-time
+/// validator, and a plugin cannot claim the slug.
+#[test]
+fn engine_namespaces_are_reserved_for_core() {
+    for slug in [
+        "runs", "signals", "commands", "timers", "schedule", "settings", "catalog", "http",
+    ] {
+        assert!(
+            den_protocol::version::is_reserved_slug(slug),
+            "{slug} is reserved (§4)"
+        );
+    }
+    let trigger_schema = validator(root_schema_for::<Trigger>().to_value());
+    for rel in [
+        "trigger/core_commands_triggered.json",
+        "trigger/core_schedule_timer_fired.json",
+    ] {
+        let fixture = load(rel);
+        assert_valid(&trigger_schema, &fixture, rel);
+        let typed: Trigger = serde_json::from_value(fixture.clone()).unwrap();
+        assert!(typed.contribution.is_core() && typed.contribution.validate().is_ok());
+        let mut with_plugin = fixture;
+        with_plugin["plugin"] = serde_json::json!("io.github.alice.acmelive");
+        assert!(
+            !trigger_schema.is_valid(&with_plugin),
+            "{rel}: a core reference with `plugin` fails the generated clause"
+        );
+        let typed: Trigger = serde_json::from_value(with_plugin).unwrap();
+        assert!(typed.contribution.validate().is_err());
+    }
+    let node_schema = validator(root_schema_for::<SubAction>().to_value());
+    for rel in [
+        "sub_action/op_core_signals_wait.json",
+        "sub_action/op_core_timers_set_state.json",
+        "sub_action/op_core_runs_replay.json",
+    ] {
+        let fixture = load(rel);
+        assert_valid(&node_schema, &fixture, rel);
+        let mut with_plugin = fixture;
+        with_plugin["plugin"] = serde_json::json!("io.github.alice.acmelive");
+        assert!(
+            !node_schema.is_valid(&with_plugin),
+            "{rel}: a core op with `plugin` fails the generated clause"
+        );
+        let typed: SubAction = serde_json::from_value(with_plugin).unwrap();
+        match typed.node {
+            Node::Op { contribution, .. } => assert!(contribution.validate().is_err()),
+            other => panic!("expected op, got {}", other.kind()),
+        }
+    }
+    let manifest_schema = validator(codegen::plugin_manifest_schema());
+    let valid = load("manifest/valid_acme.json");
+    for slug in ["runs", "signals", "commands", "timers", "schedule"] {
+        let mut claimed = valid.clone();
+        claimed["slug"] = serde_json::json!(slug);
+        assert!(
+            !manifest_schema.is_valid(&claimed),
+            "a manifest claiming the reserved slug {slug} fails schema validation (§4)"
+        );
+        let typed: PluginManifest = serde_json::from_value(claimed).unwrap();
+        assert_eq!(
+            typed.validate(),
+            Err(ManifestError::ReservedSlug(slug.into())),
+            "and is refused at install"
+        );
+    }
 }
 
 #[test]
@@ -449,12 +633,19 @@ fn plugin_manifest_validates_strictly() {
             "{rel}"
         );
     }
-    let reserved: PluginManifest =
-        serde_json::from_value(load("manifest/invalid_reserved_slug.json")).expect("shape is fine");
+    let fixture = load("manifest/invalid_reserved_slug.json");
     assert!(
-        den_protocol::version::is_reserved_slug(reserved.slug.as_str()),
-        "the reserved-slug rule is enforced by the install-time validator, not the schema (§4)"
+        !v.is_valid(&fixture),
+        "a reserved slug fails manifest validation (§4, r6)"
     );
+    let reserved: PluginManifest = serde_json::from_value(fixture).expect("shape is fine");
+    assert_eq!(
+        reserved.validate(),
+        Err(ManifestError::ReservedSlug("twitch".into())),
+        "and the install-time validator refuses it too"
+    );
+    let valid: PluginManifest = serde_json::from_value(load("manifest/valid_acme.json")).unwrap();
+    assert_eq!(valid.validate(), Ok(()));
 }
 
 #[test]
@@ -498,14 +689,51 @@ fn golden_protocol_json_is_deterministic_and_complete() {
         "PluginManifest",
         "Action",
         "SubAction",
+        "OnError",
+        "UpdatedBy",
+        "Run",
+        "RunState",
+        "CancelReason",
+        "RunError",
+        "RunWarning",
+        "Command",
+        "CommandMode",
+        "Cooldown",
+        "Permissions",
+        "UserKey",
+        "CounterPolicy",
+        "Timer",
+        "GroupId",
     ] {
         assert!(
             doc.types.contains_key(name),
             "shared type {name} must be published under types"
         );
     }
-    assert_eq!(doc.errors.len(), 17);
+    assert_eq!(doc.errors.len(), 18);
+    assert!(doc.errors.contains_key("INTERNAL"), "A8 (§8.5)");
     assert!(doc.scopes.iter().any(|s| s == "admin"));
+    for scope in ["events:simulate", "events:emit"] {
+        assert!(doc.scopes.iter().any(|s| s == scope), "{scope} (§8.7)");
+    }
+    assert_eq!(
+        doc.dynamic_tier_operations,
+        vec!["actions.run", "plugins.call", "runs.replay"],
+        "the constant dynamic-tier set is published (§8.1, A8)"
+    );
+    for slug in [
+        "runs", "signals", "commands", "timers", "schedule", "settings", "catalog", "http",
+    ] {
+        assert!(doc.reserved_slugs.iter().any(|s| s == slug), "{slug}");
+    }
+    let node_kinds = &doc.types["UnknownNode"]["properties"]["kind"]["not"]["enum"];
+    assert!(
+        node_kinds
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("for_each")),
+        "the fallback excludes the new kind"
+    );
     assert_eq!(doc.close_codes.len(), 9);
     assert!(
         doc.events.is_empty(),

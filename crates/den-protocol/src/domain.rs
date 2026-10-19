@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::auth::Principal;
-use crate::ids::{ActionId, EntityId, NodeId, OperationName, QueueId, TriggerId};
+use crate::ids::{
+    ActionId, EntityId, LocalId, NodeId, OperationName, PluginId, QueueId, TriggerId,
+};
 use crate::shared::ContributionRef;
 use crate::template::{Template, TemplateOr};
 use crate::timestamp::Timestamp;
@@ -109,8 +111,41 @@ pub enum Origin {
         #[ts(optional)]
         draft_of: Option<ActionId>,
     },
-    /// Created from a template a plugin ships.
-    PluginTemplate,
+    /// Created from a template a plugin ships (spec 12); D-029 treats it like imported content.
+    PluginTemplate {
+        /// The plugin that ships the template.
+        plugin: PluginId,
+        /// The `localId` of the template contribution.
+        template: LocalId,
+    },
+}
+
+/// The server-assigned writer identity on everything that records one (§6.1, A7): `VariableRecord.updatedBy`,
+/// the `variables.*_updated` payloads, audit rows. Derived from the writing context's origin principal
+/// (§8.8 rule 5): `Token` → `user`, `Mcp` → `mcp`, `Plugin` → `plugin`, `System` → `system`, an unchained
+/// `Trigger` → `user`; with a chain the `chain.originPrincipal` decides; the importer → `imported`. Distinct
+/// from [`Origin`] (where a document came from) and [`Principal`] (who acts).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum UpdatedBy {
+    /// The user, through the UI, a user token or their own stored automation.
+    #[default]
+    User,
+    /// The importer.
+    Imported,
+    /// An MCP session, directly or through a `causedBy` chain it started.
+    Mcp,
+    /// A plugin.
+    Plugin {
+        /// The plugin.
+        plugin_id: PluginId,
+    },
+    /// The engine itself (startup, timers, migrations, `queues.pause` write-back).
+    System,
 }
 
 /// A run queue (§6.1).
@@ -133,6 +168,11 @@ pub struct Queue {
     /// What happens when `maxPending` is reached.
     #[serde(default)]
     pub overflow: Overflow,
+    /// A run exceeding it is cancelled (`cancelReason: timeout`, spec 03 §9.11); absent means no limit.
+    /// Capped by `engine.queue.maxRunCeilingMs` (A9).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub max_run_ms: Option<u64>,
 }
 
 /// Queue overflow policy (§6.1).
@@ -232,10 +272,36 @@ pub struct SubAction {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub note: Option<String>,
+    /// What a failure of this node does to the run (A1); default `stop`. Authorization and approval
+    /// failures always stop the run whatever this says (§8.8 rule 3).
+    #[serde(default, skip_serializing_if = "OnError::is_stop")]
+    pub on_error: OnError,
     /// The node, internally tagged by `kind`.
     #[serde(flatten)]
     #[ts(flatten)]
     pub node: Node,
+}
+
+/// What a node failure does to the run (§6.4, A1). Applies to node failures only: an operation error,
+/// rendered params or a result that do not validate, a timeout, an unavailable `RunAction` target, a
+/// raising `Code` node.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize, JsonSchema, TS,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum OnError {
+    /// End the run `Failed { error }`.
+    #[default]
+    Stop,
+    /// Record the failure as a `RunWarning`, set `run.lastError` (§6.3) and go on with the next sibling.
+    Continue,
+}
+
+impl OnError {
+    /// Whether this is the default, which the wire form omits.
+    pub fn is_stop(&self) -> bool {
+        *self == Self::Stop
+    }
 }
 
 /// The node kinds of the sub-action tree (§6.4). Extensible with a fallback: a `kind` this build does not
@@ -310,6 +376,28 @@ pub enum Node {
     While {
         /// The condition, evaluated before every iteration.
         condition: Condition,
+        /// Safety bound on iterations; absent means the engine default (spec 03).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        max_iterations: Option<u32>,
+        /// The loop body.
+        #[serde(default)]
+        children: Vec<SubAction>,
+    },
+    /// Iterate over a collection (A2; semantics spec 03 §9.5, writer contract §8.8). Writes `itemVar` and
+    /// `indexVar` (0-based) as ordinary run args; reserved roots are refused at save time.
+    ForEach {
+        /// The collection: a literal, or one `{…}` form rendered once per loop to an array (element
+        /// order) or an object (`{ key, value }` pairs in sorted key order). `null` or a missing value is
+        /// zero iterations; any other scalar fails the node with `INVALID_PARAMS` (`not_iterable`).
+        #[ts(as = "TemplateOr<serde_json::Value>")]
+        items: TemplateOr<serde_json::Value>,
+        /// The run arg that receives the current element.
+        item_var: String,
+        /// The run arg that receives the 0-based index, when wanted.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        index_var: Option<String>,
         /// Safety bound on iterations; absent means the engine default (spec 03).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
@@ -399,9 +487,10 @@ fn unknown_node_kind<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Case {
-    /// The literal to compare the switch value with (after `autoType` coercion when enabled).
-    #[ts(as = "serde_json::Value")]
-    pub value: serde_json::Value,
+    /// The values to compare the switch value with: at least one; the case matches when any renders
+    /// equal to the switch value (`eq`, with `autoType` coercion when enabled).
+    #[schemars(length(min = 1))]
+    pub values: Vec<Template>,
     /// Nodes run when this case matches.
     #[serde(default)]
     pub children: Vec<SubAction>,
@@ -523,14 +612,22 @@ pub enum CodeSource {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct VariableRecord {
-    /// The value (any JSON value).
+    /// The value (any JSON value). Its provenance is decided per value: MCP wraps it, and the engine seeds
+    /// taint from it, exactly when the sibling `untrusted` is `true` (§3, A10).
     #[ts(as = "serde_json::Value")]
+    #[schemars(extend("x-den-untrusted" = "conditional"))]
     pub value: serde_json::Value,
+    /// Survives a restart; an attribute of the entry, not part of its key (A11).
+    pub persisted: bool,
+    /// The provenance flag spec 03 §21 writes (chat-derived, plugin-, MCP- or import-written values).
+    /// Never a client input: a write replaces value and flag together. Server-assigned, read-only.
+    #[schemars(extend("readOnly" = true))]
+    pub untrusted: bool,
     /// When it was last written.
     pub updated_at: Timestamp,
-    /// Who last wrote it. Server-assigned, read-only.
+    /// Who last wrote it (A7). Server-assigned, read-only.
     #[schemars(extend("readOnly" = true))]
-    pub updated_by: Origin,
+    pub updated_by: UpdatedBy,
 }
 
 /// A deferred configuration write created by a tier-2 operation under an MCP context (§6.1). *Apply*
@@ -540,8 +637,9 @@ pub struct VariableRecord {
 pub struct PendingChange {
     /// The pending change ID.
     pub id: EntityId,
-    /// The kind of entity the change targets: `action`, `queue`, `command`, `overlay`, `settings`.
-    pub kind: String,
+    /// The kind of entity the change targets: `action`, `queue`, `command`, `timer`, `overlay`,
+    /// `settings` (open). Named `targetKind` because the stored envelope's own `kind` is `pending_change`.
+    pub target_kind: String,
     /// The live entity the change targets, when it targets an existing one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -561,7 +659,7 @@ pub struct PendingChange {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct StoredDocument {
-    /// The document kind: `action`, `queue`, `settings`, `export`, `design`, `plugin_data`, `pending_change`.
+    /// The document kind, one of [`StoredDocument::KINDS`] (§7.3).
     pub kind: String,
     /// The stored shape's version; migrations chain from N to N+1 on load.
     pub schema_version: u32,
@@ -571,12 +669,59 @@ pub struct StoredDocument {
 }
 
 impl StoredDocument {
+    /// The `action` document kind (§6.1).
+    pub const KIND_ACTION: &'static str = "action";
+    /// The `queue` document kind (§6.1).
+    pub const KIND_QUEUE: &'static str = "queue";
+    /// The `command` document kind (§6.5).
+    pub const KIND_COMMAND: &'static str = "command";
+    /// The `timer` document kind (§6.5).
+    pub const KIND_TIMER: &'static str = "timer";
+    /// The `pending_change` document kind (§6.1).
+    pub const KIND_PENDING_CHANGE: &'static str = "pending_change";
+    /// The `settings` document kind (spec 03 §16).
+    pub const KIND_SETTINGS: &'static str = "settings";
+    /// The `export` document kind (spec 03 §13.4).
+    pub const KIND_EXPORT: &'static str = "export";
+    /// The `export_meta` document kind (spec 03 §13.4).
+    pub const KIND_EXPORT_META: &'static str = "export_meta";
+    /// The `design` document kind (spec 09).
+    pub const KIND_DESIGN: &'static str = "design";
+    /// The `view_state` document kind (spec 07).
+    pub const KIND_VIEW_STATE: &'static str = "view_state";
+    /// The `plugin_data` document kind (spec 12).
+    pub const KIND_PLUGIN_DATA: &'static str = "plugin_data";
+
+    /// Every persisted document kind of §7.3. Spec 03 §13.2 stores the engine's kinds.
+    pub const KINDS: &'static [&'static str] = &[
+        Self::KIND_ACTION,
+        Self::KIND_QUEUE,
+        Self::KIND_COMMAND,
+        Self::KIND_TIMER,
+        Self::KIND_PENDING_CHANGE,
+        Self::KIND_SETTINGS,
+        Self::KIND_EXPORT,
+        Self::KIND_EXPORT_META,
+        Self::KIND_DESIGN,
+        Self::KIND_VIEW_STATE,
+        Self::KIND_PLUGIN_DATA,
+    ];
+
     /// `schemaVersion` of the `action` document kind written by this build.
     pub const ACTION_SCHEMA_VERSION: u32 = 1;
     /// `schemaVersion` of the `queue` document kind written by this build.
     pub const QUEUE_SCHEMA_VERSION: u32 = 1;
+    /// `schemaVersion` of the `command` document kind written by this build (§6.5).
+    pub const COMMAND_SCHEMA_VERSION: u32 = 1;
+    /// `schemaVersion` of the `timer` document kind written by this build (§6.5).
+    pub const TIMER_SCHEMA_VERSION: u32 = 1;
     /// `schemaVersion` of the `pending_change` document kind written by this build.
     pub const PENDING_CHANGE_SCHEMA_VERSION: u32 = 1;
+
+    /// Whether `kind` is one of the document kinds this build knows (§7.3).
+    pub fn is_known_kind(kind: &str) -> bool {
+        Self::KINDS.contains(&kind)
+    }
 }
 
 impl Node {
@@ -587,6 +732,7 @@ impl Node {
         "if",
         "switch",
         "while",
+        "for_each",
         "break_loop",
         "continue_loop",
         "stop",
@@ -605,6 +751,7 @@ impl Node {
             Self::If { .. } => "if",
             Self::Switch { .. } => "switch",
             Self::While { .. } => "while",
+            Self::ForEach { .. } => "for_each",
             Self::BreakLoop => "break_loop",
             Self::ContinueLoop => "continue_loop",
             Self::Stop => "stop",

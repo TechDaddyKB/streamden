@@ -1,0 +1,13 @@
+{
+  "id": "018f7a8c-8888-7000-8000-000000000001",
+  "revision": 1,
+  "name": "Socials",
+  "enabled": true,
+  "intervalMs": 900000,
+  "randomUpperMs": 1200000,
+  "repeat": true,
+  "minChatLines": 5,
+  "origin": {
+    "kind": "user"
+  }
+}

@@ -19,8 +19,21 @@ use crate::template::template_string_schema;
 use crate::version::{
     DYNAMIC_TIER_OPERATIONS, KNOWN_SCOPES, PROTOCOL_METHODS, PROTOCOL_VERSION,
     RESERVED_RUN_CONTEXT_ROOTS, RESERVED_SLUGS, RPC_VERSION, RPC_VERSION_MIN, is_protocol_method,
-    is_reserved_run_context_root,
+    is_reserved_run_context_root, is_reserved_slug,
 };
+
+/// The reserved filter path an event payload must never declare as a top-level field (§6.2, A12): it
+/// resolves against the envelope's `platform`, as `user.*` does against the envelope's user.
+pub const RESERVED_FILTER_PATH_PLATFORM: &str = "platform";
+
+/// The `x-den-untrusted` value of a field whose provenance is decided per value (§3, A10).
+pub const UNTRUSTED_CONDITIONAL: &str = "conditional";
+
+/// The annotation naming the sibling boolean that gates a conditional field (§3).
+pub const UNTRUSTED_FLAG_KEY: &str = "x-den-untrusted-flag";
+
+/// The sibling flag a conditional field is gated on when `x-den-untrusted-flag` is absent (§3).
+pub const UNTRUSTED_FLAG_DEFAULT: &str = "untrusted";
 
 /// Marker written into every generated file.
 pub const GENERATED_MARKER: &str =
@@ -59,6 +72,10 @@ pub struct ProtocolDocument {
     pub reserved_slugs: Vec<String>,
     /// Reserved run-context roots (§6.3).
     pub reserved_run_context_roots: Vec<String>,
+    /// Operations whose effective tier is only known at call time (§8.1, §8.8 rule 2, A8): codegen adds
+    /// `approvalId` to them and MCP annotates them like tier 3. A constant of this crate, never a plugin
+    /// declaration.
+    pub dynamic_tier_operations: Vec<String>,
     /// Deprecated items (§7.4), as `<kind>:<name>` keys.
     pub deprecations: BTreeMap<String, crate::catalog::Deprecation>,
 }
@@ -179,7 +196,9 @@ pub fn is_valid_mcp_property_name(name: &str) -> bool {
 pub const MCP_DESCRIPTION_MAX: usize = 4096;
 
 /// Lints the catalog (§9.7). Structural checks only; example validation against the generated schemas
-/// happens in `xtask` and in the crate's tests, where a JSON Schema validator is available.
+/// is [`validate_examples`]. A [`Catalog`] holds **core** registrations (`register(&mut Catalog)`, §9.1):
+/// plugin contributions arrive through manifests (§11) and never through it, so the reserved-prefix rule
+/// of §4 applies to every entry.
 pub fn lint(catalog: &Catalog) -> Vec<LintError> {
     let mut errors = Vec::new();
     let types: BTreeMap<String, Value> = catalog.peek_definitions().into_iter().collect();
@@ -193,6 +212,12 @@ pub fn lint(catalog: &Catalog) -> Vec<LintError> {
         };
         if is_protocol_method(name.as_str()) {
             err("is a protocol method (§12), never a catalog operation".into());
+        }
+        if !is_reserved_slug(name.slug()) {
+            err(format!(
+                "core operation under the unreserved prefix {:?}: every namespace a core register(&mut Catalog) uses must be in RESERVED_SLUGS (§4)",
+                name.slug()
+            ));
         }
         if def.title.as_str().trim().is_empty() {
             err("missing title".into());
@@ -300,6 +325,8 @@ pub fn lint(catalog: &Catalog) -> Vec<LintError> {
         lint_value_mode_enums(def.params.as_value(), "params", &types, &mut err);
         lint_secret_marks(def.params.as_value(), "params", &types, &mut err);
         lint_secret_marks(def.result.as_value(), "result", &types, &mut err);
+        lint_untrusted_marks(def.params.as_value(), "params", &types, &mut err);
+        lint_untrusted_marks(def.result.as_value(), "result", &types, &mut err);
     }
     let mut tool_names: BTreeMap<String, &OperationName> = BTreeMap::new();
     for (name, def) in catalog.operations() {
@@ -320,6 +347,12 @@ pub fn lint(catalog: &Catalog) -> Vec<LintError> {
                 message,
             })
         };
+        if !is_reserved_slug(r#type.slug()) {
+            err(format!(
+                "core event under the unreserved prefix {:?}: every namespace a core register(&mut Catalog) uses must be in RESERVED_SLUGS (§4)",
+                r#type.slug()
+            ));
+        }
         if def.title.as_str().trim().is_empty() {
             err("missing title".into());
         }
@@ -329,12 +362,24 @@ pub fn lint(catalog: &Catalog) -> Vec<LintError> {
         if def.payload_version == 0 {
             err("payloadVersion starts at 1".into());
         }
+        for message in lint_payload_versions(
+            &catalog.payload_versions(r#type),
+            def.payload_version,
+            RPC_VERSION_MIN..=RPC_VERSION,
+        ) {
+            err(message);
+        }
         lint_object_root(def.payload.as_value(), "payload", &mut err);
         if let Some(props) = properties_of(def.payload.as_value()) {
             for prop in props.keys() {
                 if is_reserved_run_context_root(prop) {
                     err(format!(
                         "payload declares the reserved run-context root {prop:?}"
+                    ));
+                }
+                if prop == RESERVED_FILTER_PATH_PLATFORM {
+                    err(format!(
+                        "payload declares a top-level {prop:?} field, the reserved filter path that resolves against the envelope (§6.2, A12)"
                     ));
                 }
             }
@@ -359,9 +404,186 @@ pub fn lint(catalog: &Catalog) -> Vec<LintError> {
             ));
         }
         lint_secret_marks(def.payload.as_value(), "payload", &types, &mut err);
+        lint_untrusted_marks(def.payload.as_value(), "payload", &types, &mut err);
+    }
+    for r#type in catalog.payload_versions_registered().keys() {
+        if !catalog.events().contains_key(r#type) {
+            errors.push(LintError {
+                subject: format!("event:{type}"),
+                message:
+                    "payload version functions registered for an event type that is not registered"
+                        .into(),
+            });
+        }
     }
     errors.extend(lint_shared_types(&types));
     errors
+}
+
+/// The payload-version lint of §5.2 and §9.7 (A13) for one event whose current `payloadVersion` is
+/// `current` and whose build serves the `rpcVersion`s in `served`: the newest served `rpcVersion`
+/// delivers the current `payloadVersion`, no `rpcVersion` delivers a newer one, and every step between
+/// consecutive delivered versions has both its upgrade and its downgrade registered. Returns the
+/// findings; [`lint`] calls it with the build's served range.
+pub fn lint_payload_versions(
+    versions: &crate::catalog::PayloadVersions,
+    current: u32,
+    served: std::ops::RangeInclusive<u32>,
+) -> Vec<String> {
+    let mut errors = Vec::new();
+    let mut err = |message: String| errors.push(message);
+    let newest = *served.end();
+    for (rpc, version) in &versions.by_rpc_version {
+        if !served.contains(rpc) {
+            err(format!(
+                "payloadVersions registers rpcVersion {rpc}, which this build does not serve ({}..={newest})",
+                served.start()
+            ));
+        }
+        if *version == 0 {
+            err(format!(
+                "payloadVersions maps rpcVersion {rpc} to payload version 0; payload versions start at 1"
+            ));
+        }
+    }
+    let table = versions.table_for(served, current);
+    if table.get(&newest) != Some(&current) {
+        err(format!(
+            "payloadVersions maps the current rpcVersion {newest} to payload version {:?}, not the event's payloadVersion {current}",
+            table.get(&newest)
+        ));
+    }
+    for (rpc, version) in &table {
+        if *version > current {
+            err(format!(
+                "payloadVersions maps rpcVersion {rpc} to payload version {version}, above the event's payloadVersion {current}"
+            ));
+        }
+    }
+    let delivered = crate::catalog::PayloadVersions::delivered(&table);
+    for pair in delivered.windows(2) {
+        let (from, to) = (pair[0], pair[1]);
+        let step = versions.steps.get(&(from, to)).copied().unwrap_or_default();
+        if step.upgrade.is_none() {
+            err(format!(
+                "payload version step {from} → {to} has no upgrade function registered (§5.2, A13: register_payload_upgrade)"
+            ));
+        }
+        if step.downgrade.is_none() {
+            err(format!(
+                "payload version step {from} → {to} has no downgrade function registered (§5.2: register_payload_downgrade)"
+            ));
+        }
+    }
+    for (from, to) in versions.steps.keys() {
+        if *to > current {
+            err(format!(
+                "payload version step {from} → {to} goes above the event's payloadVersion {current}"
+            ));
+        }
+    }
+    errors
+}
+
+/// The sibling flag a conditional field is gated on: `x-den-untrusted-flag`, else `untrusted` (§3).
+pub fn untrusted_flag_of(property: &Map<String, Value>) -> Option<&str> {
+    match property.get(UNTRUSTED_FLAG_KEY) {
+        None => Some(UNTRUSTED_FLAG_DEFAULT),
+        Some(Value::String(flag)) => Some(flag),
+        Some(_) => None,
+    }
+}
+
+/// Whether `schema` describes a boolean: `type: boolean`, or the required-nullable form of §3
+/// (`anyOf: [boolean, null]` or `type: [boolean, null]`), following `$ref`s to shared types.
+fn is_boolean_schema(schema: &Value, types: &BTreeMap<String, Value>) -> bool {
+    let Some(obj) = schema.as_object() else {
+        return false;
+    };
+    if let Some(target) = resolve_ref(obj, types) {
+        return is_boolean_schema(target, types);
+    }
+    match obj.get("type") {
+        Some(Value::String(t)) => return t == "boolean",
+        Some(Value::Array(ts)) => {
+            return ts.iter().all(|t| t == "boolean" || t == "null")
+                && ts.iter().any(|t| t == "boolean");
+        }
+        _ => {}
+    }
+    if let Some(Value::Array(branches)) = obj.get("anyOf").or_else(|| obj.get("oneOf")) {
+        return !branches.is_empty()
+            && branches
+                .iter()
+                .all(|b| b == &json!({ "type": "null" }) || is_boolean_schema(b, types))
+            && branches.iter().any(|b| b != &json!({ "type": "null" }));
+    }
+    false
+}
+
+/// Lints the `x-den-untrusted` marks of a schema (§3, §9.7): a mark is `true` or `"conditional"`; a
+/// conditional mark sits on a property whose object also has the flag it names (`x-den-untrusted-flag`,
+/// default `untrusted`) as a boolean or required-nullable boolean property; the flag annotation only
+/// goes with a conditional mark.
+fn lint_untrusted_marks(
+    schema: &Value,
+    path: &str,
+    types: &BTreeMap<String, Value>,
+    err: &mut impl FnMut(String),
+) {
+    for_each_subschema(schema, path, &mut |at, obj| {
+        match obj.get("x-den-untrusted") {
+            None | Some(Value::Bool(true)) => {}
+            Some(Value::String(s)) if s == UNTRUSTED_CONDITIONAL => {
+                let under_properties = at
+                    .rsplit('/')
+                    .nth(1)
+                    .is_some_and(|parent| parent == "properties");
+                if !under_properties {
+                    err(format!(
+                        "{at}: `x-den-untrusted: \"conditional\"` must sit on a property, next to the boolean flag that gates it (§3)"
+                    ));
+                }
+            }
+            Some(other) => err(format!(
+                "{at}: x-den-untrusted must be `true` or \"conditional\", got {other}"
+            )),
+        }
+        if obj.contains_key(UNTRUSTED_FLAG_KEY)
+            && obj.get("x-den-untrusted") != Some(&Value::String(UNTRUSTED_CONDITIONAL.into()))
+        {
+            err(format!(
+                "{at}: `{UNTRUSTED_FLAG_KEY}` only goes with `x-den-untrusted: \"conditional\"` (§3)"
+            ));
+        }
+        let Some(Value::Object(props)) = obj.get("properties") else {
+            return;
+        };
+        for (name, prop) in props {
+            let Some(prop_obj) = prop.as_object() else {
+                continue;
+            };
+            if prop_obj.get("x-den-untrusted") != Some(&Value::String(UNTRUSTED_CONDITIONAL.into()))
+            {
+                continue;
+            }
+            let Some(flag) = untrusted_flag_of(prop_obj) else {
+                err(format!(
+                    "{at}/properties/{name}: `{UNTRUSTED_FLAG_KEY}` must be a string naming a sibling property"
+                ));
+                continue;
+            };
+            match props.get(flag) {
+                None => err(format!(
+                    "{at}/properties/{name}: conditional field names the sibling flag {flag:?}, which the object does not declare (§3, §9.7)"
+                )),
+                Some(sibling) if !is_boolean_schema(sibling, types) => err(format!(
+                    "{at}/properties/{name}: the sibling flag {flag:?} must be a boolean or required-nullable boolean property (§3, §9.7)"
+                )),
+                Some(_) => {}
+            }
+        }
+    });
 }
 
 /// The `x-secret` lint over every shared type. [`lint`] runs it on the catalog as registered;
@@ -371,12 +593,14 @@ fn lint_shared_types(types: &BTreeMap<String, Value>) -> Vec<LintError> {
     let mut errors = Vec::new();
     for (name, schema) in types {
         let subject = format!("type:{name}");
-        lint_secret_marks(schema, "", types, &mut |message| {
+        let mut err = |message: String| {
             errors.push(LintError {
                 subject: subject.clone(),
                 message,
             })
-        });
+        };
+        lint_secret_marks(schema, "", types, &mut err);
+        lint_untrusted_marks(schema, "", types, &mut err);
     }
     errors
 }
@@ -1343,6 +1567,18 @@ pub fn build_unredacted(mut catalog: Catalog) -> Result<ProtocolDocument, BuildE
 
     let mut ops: Vec<OperationDef> = catalog.operations().values().cloned().collect();
     let mut evs: Vec<EventDef> = catalog.events().values().cloned().collect();
+    let payload_tables: BTreeMap<String, BTreeMap<String, u32>> = evs
+        .iter()
+        .map(|def| {
+            let table = catalog
+                .payload_versions(&def.r#type)
+                .table(def.payload_version)
+                .into_iter()
+                .map(|(rpc, version)| (rpc.to_string(), version))
+                .collect();
+            (def.r#type.to_string(), table)
+        })
+        .collect();
     for def in &mut ops {
         catalog.finish_schema(&mut def.params);
         catalog.finish_schema(&mut def.result);
@@ -1390,10 +1626,10 @@ pub fn build_unredacted(mut catalog: Catalog) -> Result<ProtocolDocument, BuildE
 
     let mut events = BTreeMap::new();
     for def in evs {
-        let mut payload_versions = BTreeMap::new();
-        for rpc in RPC_VERSION_MIN..=RPC_VERSION {
-            payload_versions.insert(rpc.to_string(), def.payload_version);
-        }
+        let payload_versions = payload_tables
+            .get(def.r#type.as_str())
+            .cloned()
+            .unwrap_or_default();
         events.insert(
             def.r#type.to_string(),
             EventEntry {
@@ -1449,6 +1685,10 @@ pub fn build_unredacted(mut catalog: Catalog) -> Result<ProtocolDocument, BuildE
         scopes: KNOWN_SCOPES.iter().map(|s| (*s).to_owned()).collect(),
         reserved_slugs: RESERVED_SLUGS.iter().map(|s| (*s).to_owned()).collect(),
         reserved_run_context_roots: RESERVED_RUN_CONTEXT_ROOTS
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect(),
+        dynamic_tier_operations: DYNAMIC_TIER_OPERATIONS
             .iter()
             .map(|s| (*s).to_owned())
             .collect(),
@@ -1622,9 +1862,67 @@ impl ProtocolDocument {
     }
 
     /// A schema that validates an instance against the subschema at `pointer` (a JSON pointer such as
-    /// `/operations/plugins.call/result`), resolving `#/types/<Name>` references.
+    /// `/operations/plugins.call/result`), resolving `#/types/<Name>` references. This is the
+    /// **receiver's** view: the receiving-only fallback branches of `Node` and `Fragment` (§7.2) are in.
     pub fn schema_at(&self, pointer: &str) -> Value {
         let mut root = serde_json::to_value(self).expect("protocol document serializes");
+        Self::point(&mut root, pointer);
+        root
+    }
+
+    /// [`ProtocolDocument::schema_at`] as a **producer** must satisfy it (§7.2, §9.7): every
+    /// receiving-only fallback branch (a union branch referencing a type whose `kind` is constrained to
+    /// the unknown tags, [`crate::schema::unknown_tag_schema`]) is removed from every published schema
+    /// (the shared types, and the operation and event schemas, which inline structured shared types), so
+    /// an example or document whose `kind` is not one this build knows fails validation instead of
+    /// decoding into the fallback. Examples are validated against this view.
+    pub fn producer_schema_at(&self, pointer: &str) -> Value {
+        let mut root = self.producer_root();
+        Self::point(&mut root, pointer);
+        root
+    }
+
+    /// The document with every receiving-only fallback branch stripped ([`ProtocolDocument::producer_schema_at`]),
+    /// before a pointer is set; [`validate_examples`] builds it once and points it per schema.
+    fn producer_root(&self) -> Value {
+        let mut root = serde_json::to_value(self).expect("protocol document serializes");
+        let fallbacks: Vec<String> = self
+            .types
+            .iter()
+            .filter(|(_, schema)| is_receiving_fallback_type(schema))
+            .map(|(name, _)| name.clone())
+            .collect();
+        if let Some(Value::Object(types)) = root.get_mut("types") {
+            for schema in types.values_mut() {
+                strip_fallback_branches(schema, &fallbacks);
+            }
+        }
+        if let Some(Value::Object(operations)) = root.get_mut("operations") {
+            for entry in operations.values_mut() {
+                for key in [
+                    "params",
+                    "paramsAuthoring",
+                    "result",
+                    "dryRunResult",
+                    "draftResult",
+                ] {
+                    if let Some(schema) = entry.get_mut(key) {
+                        strip_fallback_branches(schema, &fallbacks);
+                    }
+                }
+            }
+        }
+        if let Some(Value::Object(events)) = root.get_mut("events") {
+            for entry in events.values_mut() {
+                if let Some(schema) = entry.get_mut("payload") {
+                    strip_fallback_branches(schema, &fallbacks);
+                }
+            }
+        }
+        root
+    }
+
+    fn point(root: &mut Value, pointer: &str) {
         if let Some(obj) = root.as_object_mut() {
             obj.insert("$ref".into(), Value::String(format!("#{pointer}")));
             obj.insert(
@@ -1632,7 +1930,222 @@ impl ProtocolDocument {
                 Value::String("https://json-schema.org/draft/2020-12/schema".into()),
             );
         }
-        root
+    }
+}
+
+/// Whether a shared type is a receiving-only fallback (§7.2): its `kind` property is constrained to any
+/// string outside a set of known tags, the shape [`crate::schema::unknown_tag_schema`] produces.
+fn is_receiving_fallback_type(schema: &Value) -> bool {
+    schema
+        .get("properties")
+        .and_then(|p| p.get("kind"))
+        .and_then(|k| k.get("not"))
+        .and_then(|n| n.get("enum"))
+        .is_some_and(Value::is_array)
+}
+
+/// Whether a union branch is a receiving-only fallback: a `$ref` to one of `fallbacks`, the fallback's
+/// shape inlined (operation schemas inline structured shared types, [`derive_param_schemas`]), or either
+/// kept whole as an `allOf` member ([`merge_ref_target`]).
+fn is_fallback_branch(branch: &Value, fallbacks: &[String]) -> bool {
+    let Some(obj) = branch.as_object() else {
+        return false;
+    };
+    if shared_type_name(obj).is_some_and(|name| fallbacks.contains(&name))
+        || is_receiving_fallback_type(branch)
+    {
+        return true;
+    }
+    obj.get("allOf")
+        .and_then(Value::as_array)
+        .is_some_and(|members| members.iter().any(|m| is_fallback_branch(m, fallbacks)))
+}
+
+/// Removes every receiving-only fallback branch ([`is_fallback_branch`]) from the unions of `schema` and
+/// its subschemas.
+fn strip_fallback_branches(schema: &mut Value, fallbacks: &[String]) {
+    let Some(obj) = schema.as_object_mut() else {
+        return;
+    };
+    for key in ["oneOf", "anyOf"] {
+        if let Some(Value::Array(branches)) = obj.get_mut(key) {
+            branches.retain(|branch| !is_fallback_branch(branch, fallbacks));
+        }
+    }
+    for (key, member) in obj.iter_mut() {
+        // Annotation values (`default`, `examples`, `x-…`) are data, not schemas.
+        if is_annotation_key(key) {
+            continue;
+        }
+        match member {
+            Value::Object(_) => strip_fallback_branches(member, fallbacks),
+            Value::Array(items) => {
+                for item in items {
+                    strip_fallback_branches(item, fallbacks);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// A validation failure described without the instance (DEN-53, §3): the values the example validator
+/// checks are the authored ones, secrets exposed, and both the validator's `Display` and the `Debug` of
+/// its error kind echo the instance (an `anyOf`/`oneOf` kind carries every branch's error with its
+/// instance). This names the failing keyword, its location in the schema (which holds no instance data)
+/// and the instance path with every member name the schema does not itself spell out replaced by
+/// `<key>`: a member reached through `additionalProperties`, `patternProperties` or
+/// `unevaluatedProperties` is an authored map key, which can be anything, a secret included.
+pub fn describe_validation_error(e: &jsonschema::ValidationError<'_>) -> String {
+    format!(
+        "`{}` failed at schema location {:?}, instance path {:?}",
+        e.kind().keyword(),
+        e.schema_path().as_str(),
+        safe_instance_path(e.instance_path().as_str(), e.evaluation_path().as_str())
+    )
+}
+
+/// The instance path with authored map keys masked (see [`describe_validation_error`]). The evaluation
+/// path says how each instance segment was reached: `properties/<name>` spells the member out, the
+/// array applicators yield indices, and the map applicators yield authored keys. Should the two paths
+/// not line up (a keyword that fails without descending, such as `additionalProperties: false`, adds a
+/// step the instance path lacks), every segment is masked: a digits-only authored key is still a key.
+fn safe_instance_path(instance_path: &str, evaluation_path: &str) -> String {
+    let segments: Vec<&str> = instance_path.split('/').skip(1).collect();
+    if instance_path.is_empty() {
+        return String::new();
+    }
+    let mut mask = Vec::with_capacity(segments.len());
+    let mut tokens = evaluation_path.split('/').skip(1).peekable();
+    while let Some(token) = tokens.next() {
+        match token {
+            "properties" => {
+                tokens.next();
+                mask.push(false);
+            }
+            "patternProperties" => {
+                tokens.next();
+                mask.push(true);
+            }
+            "additionalProperties" | "unevaluatedProperties" => mask.push(true),
+            "items" | "contains" | "unevaluatedItems" => mask.push(false),
+            "prefixItems" => {
+                tokens.next();
+                mask.push(false);
+            }
+            "allOf" | "anyOf" | "oneOf" | "dependentSchemas" => {
+                tokens.next();
+            }
+            _ => {}
+        }
+    }
+    let aligned = mask.len() == segments.len();
+    let mut out = String::new();
+    for (i, segment) in segments.iter().enumerate() {
+        out.push('/');
+        let masked = !aligned || mask[i];
+        out.push_str(if masked { "<key>" } else { segment });
+    }
+    out
+}
+
+/// Examples are tests (§8.1, §17.2): every example's params validate against the invocation schema and
+/// its result against exactly the shape it declares; every event example validates against its payload
+/// schema. The values checked are the authored ones (a typed example keeps them aside with secrets
+/// exposed; its published form is already withheld, §3), against the producer's view of the schemas
+/// ([`ProtocolDocument::producer_schema_at`]), so an example with an unknown `Node` or `Fragment` kind
+/// fails (§7.2, §9.7). Failures are described without the instance ([`describe_validation_error`]).
+pub fn validate_examples(doc: &ProtocolDocument) -> Result<(), Vec<String>> {
+    let mut failures = Vec::new();
+    // One producer view, pointed at each schema in turn: the compiled validator owns what it needs.
+    let mut root = doc.producer_root();
+    let mut compile = |pointer: &str| {
+        ProtocolDocument::point(&mut root, pointer);
+        jsonschema::validator_for(&root).map_err(|e| format!("{pointer} does not compile: {e}"))
+    };
+    for (name, entry) in &doc.operations {
+        let params_validator = match compile(&format!("/operations/{name}/params")) {
+            Ok(v) => v,
+            Err(e) => {
+                failures.push(format!("operation {name}: {e}"));
+                continue;
+            }
+        };
+        let mut shape_validators: Vec<(ResultShape, jsonschema::Validator)> = Vec::new();
+        for (shape, key, present) in [
+            (ResultShape::Normal, "result", true),
+            (
+                ResultShape::DryRun,
+                "dryRunResult",
+                entry.dry_run_result.is_some(),
+            ),
+            (
+                ResultShape::Draft,
+                "draftResult",
+                entry.draft_result.is_some(),
+            ),
+        ] {
+            if !present {
+                continue;
+            }
+            match compile(&format!("/operations/{name}/{key}")) {
+                Ok(v) => shape_validators.push((shape, v)),
+                Err(e) => failures.push(format!("operation {name}: {e}")),
+            }
+        }
+        for example in &entry.def.examples {
+            let label = format!("operation {name}, example {:?}", example.title);
+            let (params, result) = (example.authored_params(), example.authored_result());
+            if let Err(e) = params_validator.validate(params) {
+                failures.push(format!(
+                    "{label}: params invalid: {}",
+                    describe_validation_error(&e)
+                ));
+            }
+            if !shape_validators.iter().any(|(s, _)| *s == example.shape) {
+                failures.push(format!(
+                    "{label}: declares the {:?} shape, which this operation does not have",
+                    example.shape
+                ));
+            }
+            for (shape, validator) in &shape_validators {
+                let expected = *shape == example.shape;
+                match validator.validate(result) {
+                    Err(e) if expected => failures.push(format!(
+                        "{label}: result does not match its {shape:?} shape: {}",
+                        describe_validation_error(&e)
+                    )),
+                    Ok(()) if !expected && entry.dry_run_result.is_some() => {
+                        failures.push(format!(
+                            "{label}: result also matches the {shape:?} shape; shapes must be disjoint"
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    for (r#type, entry) in &doc.events {
+        let validator = match compile(&format!("/events/{type}/payload")) {
+            Ok(v) => v,
+            Err(e) => {
+                failures.push(format!("event {type}: {e}"));
+                continue;
+            }
+        };
+        for i in 0..entry.def.examples.len() {
+            if let Err(e) = validator.validate(entry.def.authored_example(i)) {
+                failures.push(format!(
+                    "event {type}, example {i}: {}",
+                    describe_validation_error(&e)
+                ));
+            }
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures)
     }
 }
 
@@ -1688,6 +2201,9 @@ ts_roots!(
     crate::domain::VariableRecord,
     crate::domain::PendingChange,
     crate::domain::StoredDocument,
+    crate::records::Command,
+    crate::records::Timer,
+    crate::records::Run,
     crate::results::DryRunResult,
     crate::results::DraftResult,
     crate::results::PluginCallParams,

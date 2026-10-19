@@ -6,14 +6,16 @@
 //! typed when spec 12 fixes them.
 
 use std::collections::BTreeMap;
+use std::fmt;
 
-use schemars::{JsonSchema, Schema};
+use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::catalog::{Exposure, FilterableField, L10nString, OperationExample};
 use crate::ids::{LocalId, PluginId, Scope, Slug};
 use crate::shared::{Os, RiskTier};
+use crate::version::{RESERVED_SLUGS, is_reserved_slug};
 
 /// `plugin.json` (§11). Required: `id`, `slug`, `name`, `version`, `license`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
@@ -27,7 +29,9 @@ pub struct PluginManifest {
     pub manifest_version: u32,
     /// Reverse-DNS plugin ID (§4).
     pub id: PluginId,
-    /// Short slug: the prefix of every contribution (§4). Must not be a reserved slug.
+    /// Short slug: the prefix of every contribution (§4). A reserved slug fails manifest validation (the
+    /// schema and [`PluginManifest::validate`] alike) and is refused at install.
+    #[schemars(schema_with = "plugin_slug_schema")]
     pub slug: Slug,
     /// Display name.
     pub name: L10nString,
@@ -91,6 +95,46 @@ pub struct PluginManifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional, as = "Option<serde_json::Value>")]
     pub l10n: Option<serde_json::Value>,
+}
+
+/// The schema of `PluginManifest.slug` (§4): a [`Slug`] that is not reserved for core.
+fn plugin_slug_schema(generator: &mut SchemaGenerator) -> Schema {
+    let slug = generator.subschema_for::<Slug>();
+    json_schema!({
+        "allOf": [slug],
+        "not": { "enum": RESERVED_SLUGS }
+    })
+}
+
+/// Why a manifest is refused by the install-time validator (§4, §11) beyond what the schema says.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ManifestError {
+    /// `slug` is reserved for core (§4).
+    ReservedSlug(String),
+}
+
+impl fmt::Display for ManifestError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ReservedSlug(slug) => write!(
+                f,
+                "plugin slug {slug:?} is reserved for core and cannot be claimed by a plugin (§4)"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ManifestError {}
+
+impl PluginManifest {
+    /// The install-time checks of §4 that the typed shape alone does not enforce: the slug is not one
+    /// reserved for core. Run after schema validation, before anything the manifest declares is registered.
+    pub fn validate(&self) -> Result<(), ManifestError> {
+        if is_reserved_slug(self.slug.as_str()) {
+            return Err(ManifestError::ReservedSlug(self.slug.to_string()));
+        }
+        Ok(())
+    }
 }
 
 /// The plugin author (§11, B2).

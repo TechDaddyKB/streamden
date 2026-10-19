@@ -138,6 +138,10 @@ uuid_id! {
     /// Identifies any persisted entity when the kind is carried separately (drafts, pending changes).
     EntityId
 }
+uuid_id! {
+    /// Identifies a user group (defined by spec 08; reserved here for `Command.permissions`, §6.5).
+    GroupId
+}
 
 impl QueueId {
     /// The Default queue (§4): the nil UUID, matching Streamer.bot's export convention.

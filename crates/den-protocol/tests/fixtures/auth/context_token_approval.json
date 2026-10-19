@@ -30,13 +30,15 @@
             "argsHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "dynamicFields": [
               "/message"
-            ]
+            ],
+            "untrustedFields": []
           },
           {
             "plugin": "io.github.alice.acmelive",
             "operation": "acme.send_chat",
             "argsHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "dynamicFields": []
+            "dynamicFields": [],
+            "untrustedFields": []
           }
         ]
       },

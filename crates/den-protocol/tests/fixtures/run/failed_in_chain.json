@@ -1,0 +1,47 @@
+{
+  "id": "018f7a8c-4444-7000-8000-000000000003",
+  "action": "018f7a8c-3e6b-7c1d-9a2b-5f4e3d2c1b0a",
+  "actionName": "Cheer alert",
+  "actionRevision": 3,
+  "queue": "00000000-0000-0000-0000-000000000000",
+  "state": "failed",
+  "queuedAt": "2026-10-18T20:16:00.000Z",
+  "startedAt": "2026-10-18T20:16:00.004Z",
+  "completedAt": "2026-10-18T20:16:00.020Z",
+  "durationMs": 16,
+  "principalKind": "trigger",
+  "surface": "event",
+  "chain": {
+    "originRun": "018f7a8c-4444-7000-8000-000000000001",
+    "originPrincipal": {
+      "kind": "mcp",
+      "tokenId": "018f7a8c-5555-7000-8000-000000000001",
+      "sessionId": "ses_abcdefghijklmnopqrstuv",
+      "client": {
+        "name": "Claude Code",
+        "version": "2.0"
+      }
+    },
+    "hops": 1
+  },
+  "parent": "018f7a8c-4444-7000-8000-000000000001",
+  "inline": false,
+  "test": false,
+  "replayOf": "018f7a8c-4444-7000-8000-000000000002",
+  "untrustedArgsQueued": [],
+  "untrustedArgsAfter": [],
+  "error": {
+    "code": "PERMISSION_DENIED",
+    "node": "018f7a8c-0000-7000-8000-00000000000c",
+    "message": "Code node exceeds the context's maxTier",
+    "details": {
+      "reason": "tier_exceeds_context",
+      "chain": {
+        "originRun": "018f7a8c-4444-7000-8000-000000000001",
+        "hops": 1
+      }
+    }
+  },
+  "stoppedBy": "018f7a8c-0000-7000-8000-00000000000c",
+  "warnings": []
+}

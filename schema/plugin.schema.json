@@ -274,6 +274,11 @@
         "^x-": true
       },
       "properties": {
+        "caseInsensitive": {
+          "default": false,
+          "description": "`eq`, `ne`, `in` and `not_in` compare strings case-insensitively for this field (A5; `contains`\nis case-insensitive regardless, spec 03 §6.2).",
+          "type": "boolean"
+        },
         "field": {
           "description": "Dotted path into the payload.",
           "type": "string"
@@ -286,12 +291,12 @@
           "type": "array"
         },
         "optionsFrom": {
-          "description": "An operation name whose result feeds the value picker, when the field has known values.",
-          "type": "string"
+          "$ref": "#/$defs/OperationName",
+          "description": "An operation whose result feeds the value picker, when the field has known values."
         },
         "specificity": {
-          "default": 0,
-          "description": "Rank used by spec 03's \"specific beats any\" precedence; higher is more specific.",
+          "default": 1,
+          "description": "Rank spec 03 §6.3 multiplies by the operator weight for \"specific beats any\" precedence; higher is\nmore specific. Default 1 (A5); `core.custom.name` is 4 (§5.2).",
           "format": "uint32",
           "minimum": 0,
           "type": "integer"
@@ -436,6 +441,10 @@
         "result"
       ],
       "type": "object"
+    },
+    "OperationName": {
+      "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$",
+      "type": "string"
     },
     "Os": {
       "description": "Operating systems an operation can be gated to (§8.1, §14).",
@@ -707,8 +716,61 @@
       "description": "Plugin-wide settings: a JSON Schema with `x-ui` hints and `x-secret` (B2.4). Always literal (§10.1)."
     },
     "slug": {
-      "$ref": "#/$defs/Slug",
-      "description": "Short slug: the prefix of every contribution (§4). Must not be a reserved slug."
+      "allOf": [
+        {
+          "$ref": "#/$defs/Slug"
+        }
+      ],
+      "description": "Short slug: the prefix of every contribution (§4). A reserved slug fails manifest validation (the\nschema and [`PluginManifest::validate`] alike) and is refused at install.",
+      "not": {
+        "enum": [
+          "core",
+          "system",
+          "session",
+          "auth",
+          "actions",
+          "triggers",
+          "queues",
+          "variables",
+          "events",
+          "chat",
+          "tts",
+          "audio",
+          "plugins",
+          "obs",
+          "twitch",
+          "youtube",
+          "kick",
+          "x",
+          "bluesky",
+          "discord",
+          "vts",
+          "vmc",
+          "mcp",
+          "ai",
+          "code",
+          "ui",
+          "overlay",
+          "deck",
+          "util",
+          "batch",
+          "global",
+          "globals",
+          "user",
+          "event",
+          "run",
+          "trigger",
+          "action",
+          "runs",
+          "signals",
+          "commands",
+          "timers",
+          "schedule",
+          "settings",
+          "catalog",
+          "http"
+        ]
+      }
     },
     "version": {
       "description": "SemVer version.",

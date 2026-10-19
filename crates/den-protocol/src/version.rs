@@ -86,6 +86,15 @@ pub const RESERVED_SLUGS: &[&str] = &[
     "run",
     "trigger",
     "action",
+    // Engine namespaces (spec 03 §15, §16) and core primitives, reserved in Spec 02 r6 (§4, §5.2).
+    "runs",
+    "signals",
+    "commands",
+    "timers",
+    "schedule",
+    "settings",
+    "catalog",
+    "http",
 ];
 
 /// Reserved root names of the run context (§6.3). An event payload must not declare a top-level
@@ -109,12 +118,14 @@ pub const KNOWN_SCOPES: &[&str] = &[
     "tts:speak",
     "plugins:call[:<pluginId>]",
     "plugins:manage",
+    "events:simulate",
+    "events:emit",
     "admin",
 ];
 
 /// Operations whose effective tier is only known at call time (§8.1, §8.8 rule 2). Codegen adds the
 /// reserved `approvalId` param to them, and MCP annotates them like tier 3.
-pub const DYNAMIC_TIER_OPERATIONS: &[&str] = &["actions.run", "plugins.call"];
+pub const DYNAMIC_TIER_OPERATIONS: &[&str] = &["actions.run", "plugins.call", "runs.replay"];
 
 /// Protocol methods and notifications owned by Spec 02 §12. They are **not** catalog operations:
 /// registering one as an operation is a catalog lint failure (§8.1, §9.7).

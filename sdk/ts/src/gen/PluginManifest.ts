@@ -26,7 +26,8 @@ manifestVersion: number,
  */
 id: PluginId, 
 /**
- * Short slug: the prefix of every contribution (§4). Must not be a reserved slug.
+ * Short slug: the prefix of every contribution (§4). A reserved slug fails manifest validation (the
+ * schema and [`PluginManifest::validate`] alike) and is refused at install.
  */
 slug: Slug, 
 /**

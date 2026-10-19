@@ -1,0 +1,11 @@
+{
+  "id": "018f7a8c-8888-7000-8000-000000000003",
+  "revision": 1,
+  "name": "Too fast",
+  "enabled": true,
+  "intervalMs": 500,
+  "repeat": true,
+  "origin": {
+    "kind": "user"
+  }
+}

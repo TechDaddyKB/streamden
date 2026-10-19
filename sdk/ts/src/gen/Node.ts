@@ -92,6 +92,28 @@ maxIterations?: number,
 /**
  * The loop body.
  */
+children: Array<SubAction>, } | { "kind": "for_each", 
+/**
+ * The collection: a literal, or one `{…}` form rendered once per loop to an array (element
+ * order) or an object (`{ key, value }` pairs in sorted key order). `null` or a missing value is
+ * zero iterations; any other scalar fails the node with `INVALID_PARAMS` (`not_iterable`).
+ */
+items: TemplateOr<JsonValue>, 
+/**
+ * The run arg that receives the current element.
+ */
+itemVar: string, 
+/**
+ * The run arg that receives the 0-based index, when wanted.
+ */
+indexVar?: string, 
+/**
+ * Safety bound on iterations; absent means the engine default (spec 03).
+ */
+maxIterations?: number, 
+/**
+ * The loop body.
+ */
 children: Array<SubAction>, } | { "kind": "break_loop" } | { "kind": "continue_loop" } | { "kind": "stop" } | { "kind": "parallel", 
 /**
  * The branches.
