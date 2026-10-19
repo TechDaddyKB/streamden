@@ -1,0 +1,12 @@
+{
+  "name": "@b4/sample",
+  "version": "0.1.0",
+  "private": true,
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit --allowJs --checkJs src/index.js",
+    "lint": "node --check src/index.js && node --check test/index.test.js",
+    "test": "node --test"
+  }
+}

@@ -1,0 +1,137 @@
+name: B-4 Cargo and pnpm
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+concurrency:
+  group: b4-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+    working-directory: spikes/S-5-bakeoff/codex/b4
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+
+jobs:
+  fmt:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  checks:
+    name: Rust and pnpm (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu
+            runner: ubuntu-22.04
+            container: null
+          - platform: fedora
+            runner: ubuntu-22.04
+            container: fedora:44@sha256:43b29f65a41eb9c35e1cd5323e3bdf3b655c2357a9f4f1ff2f9c2798e5045d80
+          - platform: arch
+            runner: ubuntu-22.04
+            container: archlinux:base@sha256:3c64b538588416593f69a1aebd2f2ec0f2541b29159f32556fa7def2167147a0
+          - platform: windows
+            runner: windows-latest
+            container: null
+          - platform: macos
+            runner: macos-latest
+            container: null
+    steps:
+      # Containers run as root; these steps must precede checkout and Rust setup.
+      - name: Fedora prerequisites
+        if: matrix.platform == 'fedora'
+        working-directory: /
+        run: >-
+          dnf install -y --allowerasing git gcc gcc-c++ make curl ca-certificates pkgconf-pkg-config
+          webkit2gtk4.1-devel openssl-devel libappindicator-gtk3-devel
+          librsvg2-devel libxdo-devel file wget
+      - name: Arch prerequisites
+        if: matrix.platform == 'arch'
+        working-directory: /
+        run: >-
+          pacman -Syu --noconfirm --needed git base-devel curl ca-certificates
+          pkgconf webkit2gtk-4.1 openssl appmenu-gtk-module libappindicator-gtk3
+          librsvg xdotool file wget
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Ubuntu prerequisites
+        if: matrix.platform == 'ubuntu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential curl wget file \
+            pkg-config libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
+            libayatana-appindicator3-dev librsvg2-dev
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+          components: clippy
+      - name: Rust cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            spikes/S-5-bakeoff/codex/b4/target
+          key: b4-rust-${{ matrix.platform }}-${{ runner.arch }}-${{ hashFiles('spikes/S-5-bakeoff/codex/b4/**/Cargo.lock') }}-${{ github.sha }}
+          restore-keys: |
+            b4-rust-${{ matrix.platform }}-${{ runner.arch }}-${{ hashFiles('spikes/S-5-bakeoff/codex/b4/**/Cargo.lock') }}-
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: Install nextest
+        run: cargo install cargo-nextest --version 0.9.114 --locked
+      - run: cargo nextest run --workspace --all-targets --all-features --locked
+      # nextest does not execute doctests.
+      - run: cargo test --workspace --doc --locked
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          package_json_file: spikes/S-5-bakeoff/codex/b4/package.json
+          run_install: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: spikes/S-5-bakeoff/codex/b4/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test
+
+  codegen:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - name: Codegen placeholder and drift check
+        run: |
+          node scripts/codegen.mjs
+          git diff --exit-code -- generated/
+          test -z "$(git ls-files --others --exclude-standard -- generated/)"

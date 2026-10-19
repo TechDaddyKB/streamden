@@ -1,0 +1,14 @@
+{
+  "name": "streamden-b4-codex",
+  "version": "0.1.0",
+  "private": true,
+  "license": "GPL-3.0-or-later",
+  "packageManager": "pnpm@10.11.0",
+  "scripts": {
+    "typecheck": "pnpm -r typecheck",
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r test",
+    "codegen": "node scripts/codegen.mjs"
+  },
+  "devDependencies": { "typescript": "5.9.3" }
+}
