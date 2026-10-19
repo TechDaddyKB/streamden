@@ -1,6 +1,9 @@
 # Spec 03: Engine core (WS-03)
 
-- **Status:** Revision 6 (DEN-68, pending review): closes the gaps the DEN-65 slicing found (settings document and
+- **Status:** Revision 6 (DEN-68), reviewed by Codex Astra and accepted by the owner 2026-10-19 (D-058)
+  at exact `67627c5e169b4a85cd1f15bd243a7368f0e76061` for remaining CI and contract planning; text only.
+  Dedicated design/contract approvals, implementation approval and owner merge remain separate.
+  Closes the gaps the DEN-65 slicing found (settings document and
   operations, engine-wide dispatch order, `actions.run` queue override, `runs.list` paging, bot accounts, data
   directory ownership, the one OS gate, UI template lint) and records the owner's Q-E1–Q-E8 answers (D-039) in
   the text. r5 (DEN-49) is on `main`. r3 was approved by the reviewer (Codex Astra, 2026-10-19; history in §25),

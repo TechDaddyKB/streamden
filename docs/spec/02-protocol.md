@@ -1,6 +1,9 @@
 # Spec 02: Protocol and contracts (WS-02)
 
-- **Status:** Revision 7 (DEN-68, pending review): the additions spec 03 r6 requests (A14–A16 there), text only;
+- **Status:** Revision 7 (DEN-68), reviewed by Codex Astra and accepted by the owner 2026-10-19 (D-058)
+  at exact `67627c5e169b4a85cd1f15bd243a7368f0e76061` for remaining CI and contract planning.
+  Dedicated design/contract approvals, implementation approval and owner merge remain separate.
+  The additions spec 03 r6 requests (A14–A16 there) are text only;
   the `den-protocol` code lands with DEN-69 and DEN-118. r6 is on `main`. r4 was approved by the reviewer (Codex
   Astra, 2026-10-19; history in §19) and
   provisionally approved by the coordinator on the owner's delegation (2026-10-19); approved by the owner 2026-10-19 (D-039).

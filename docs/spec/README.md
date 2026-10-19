@@ -11,8 +11,8 @@ links to the FEATURE-PARITY rows it covers.
 | File | Workstream | Status |
 |---|---|---|
 | [01-build-release.md](01-build-release.md) | WS-01 Build, CI, packaging | r1 proposed; Claude review and owner decisions pending (DEN-66) |
-| `02-protocol.md` | WS-02 Protocol and contracts | r7 (DEN-68, text only, pending review); r6 approved by the owner 2026-10-19 |
-| `03-engine.md` | WS-03 Engine core | r6 (DEN-68, pending review); r5 approved by the owner 2026-10-19 |
+| `02-protocol.md` | WS-02 Protocol and contracts | r7 (DEN-68, text only), reviewed by Codex Astra and approved by the owner 2026-10-19 (D-058); r6 approved by the owner 2026-10-19 |
+| `03-engine.md` | WS-03 Engine core | r6 (DEN-68, text only), reviewed by Codex Astra and approved by the owner 2026-10-19 (D-058); r5 approved by the owner 2026-10-19 |
 | `04-scripting.md` | WS-04 Scripting | not started |
 | `05-platforms.md` | WS-05 Platform connectors | not started |
 | `06-api-mcp.md` | WS-06 Local server, API, MCP | not started |
