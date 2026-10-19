@@ -483,17 +483,22 @@ providers can power it (local models too)? Disclosure (the EU AI Act Art. 50 tra
 Replies pass moderation, the approval queue is the default, disclosure is on, and there's a hard budget cap.
 **Answer:**
 
-### Q-A6 — Do MCP-caused event chains inherit the MCP restrictions? 🟥 (Round 3)
+### Q-A6 — Do MCP-caused event chains inherit the MCP restrictions? 🟨 (Round 3)
 [Spec 02 §8.8](spec/02-protocol.md) makes authorization transitive: a run started over MCP can never reach tier 4
 (code, end stream) through nested or queued actions. But an MCP run can emit events (a chat message, a variable
-change), and the user's own triggers on those events start new runs. Options: (a) **new runs start under the
-trigger's authority** (tier 4 allowed): a trigger is the user's configuration, so this is user intent; the audit log
-links the chain through `causedBy`; (b) runs with MCP lineage inherit the MCP `maxTier: 3` for N hops of
-`causedBy`, which also blocks legitimate user automations whenever an AI client is active; (c) configurable per
-MCP token, default (a).
-**Recommendation:** (a), which the spec implements as its default, plus a UI lint that warns when a trigger listens
-to events that MCP-exposed operations can emit and its action has effective tier 4.
-**Answer:**
+change), and the user's own triggers on those events start new runs. Options: (a) new runs start under the
+trigger's authority (tier 4 allowed): a trigger is the user's configuration, so this is user intent; the audit log
+links the chain through `causedBy`; (b) **runs with MCP lineage inherit the MCP restrictions** (`maxTier: 3`,
+scopes, approval policy) for every hop of `causedBy`, which also blocks legitimate user automations whenever an AI
+client is active; (c) configurable per MCP token, default (a).
+**Recommendation:** (a) was the spec author's recommendation; the Codex re-review (2026-10-19) rated resetting
+authority at each event a P1 privilege-widening path, and the coordinator chose (b).
+**Answer (provisional, coordinator 2026-10-19, owner to confirm):** (b). Event chains caused by an MCP-originated
+run inherit the MCP restrictions for the whole `causedBy` chain (no hop limit), with audit linkage through
+`causedBy` and `run.chain`. Spec 02 §8.8 rule 5 is written that way, applies the same rule to every restricted
+principal (a plugin's limited permissions follow its chains too; a user token or system run is unaffected), stops a
+chained tier-3 node as `APPROVAL_REQUIRED` / `unattended` because nobody can answer, and keeps the UI lint. Events
+without `causedBy` (upstream events, including a platform echoing the engine's own message) are not covered.
 
 ---
 
