@@ -1,0 +1,29 @@
+DEN-8 bake-off started 2026-10-18T23:35:14-05:00 (claude, codex, grok)
+DEN-8 codex: done-when pass Y, 3m19s, commit blocked by coordinator sandbox config (not a Codex fault) 2026-10-18T23:38:13-05:00
+DEN-8 claude: committed 6797512, ~9m51s (started 23:34:59 after dispatch), first-run done-when per handoff 2026-10-18T23:44:51-05:00
+DEN-9 claude+codex started 2026-10-18T23:45:43-05:00
+DEN-9 grok started 2026-10-18T23:49:06-05:00
+DEN-9 codex: committed a3acdc7, 4m28s, 20 tests pass first run 2026-10-18T23:50:11-05:00
+DEN-9 claude: 4a1d436 feat(spike): typed Twitch EventSub parsing for bake-off B-2 (DEN-9) finished 2026-10-18T23:53:30-05:00
+DEN-10 claude+codex started 2026-10-18T23:53:41-05:00
+DEN-10 codex: 38b4b95 feat(ui): add Codex searchable sub-action picker spike (DEN-10) finished 2026-10-19T00:00:31-05:00
+DEN-11 codex started 2026-10-19T00:00:42-05:00
+DEN-8 grok: 0200459 ~29m (23:35→00:04) 2026-10-19T00:04:05-05:00
+DEN-10 claude: 5cdef2b 10m02s
+DEN-10 grok + DEN-11 claude started 2026-10-19T00:04:19-05:00
+DEN-11 codex: a31801b 3m34s
+DEN-9 grok: 8b0e290 feat(spike): parse Twitch EventSub frames with golden tests (DEN-9) finished 2026-10-19T00:05:11-05:00 (started 23:49)
+DEN-11 grok started 2026-10-19T00:05:22-05:00
+DEN-11 claude: 5542353 ci(spike): Claude B-4 bake-off CI workflow for Cargo + pnpm (DEN-11) duration=5m 41s 
+DEN-11 grok: b658c51 finished 2026-10-19T00:15:17-05:00
+DEN-10 grok: 7a02907 feat(spike): add Grok sub-action picker for bake-off B-3 (DEN-10) finished 2026-10-19T00:20:33-05:00 (started ~00:00)
+
+Wall-clock per first run (wrapper duration; Grok from launch/commit timestamps):
+B-1 DEN-8:  claude 9m51s | codex 3m19s (commit blocked by coordinator sandbox misconfig, re-run 58s to commit) | grok ~29m
+B-2 DEN-9:  claude 7m51s | codex 4m28s | grok ~16m (23:49→00:05)
+B-3 DEN-10: claude 10m02s | codex 6m43s | grok ~16m (00:04→00:20)
+B-4 DEN-11: claude 5m41s | codex 3m34s | grok ~10m (00:05→00:15)
+Notes: all runs headless with the same dispatch prompt + the same autonomy note; default effort/models (claude-opus-5-5, gpt-6.1-sol, grok-4.7).
+Codex ran with workspace-write sandbox for the first B-1 run only (read-only .git); all later Codex runs danger-full-access.
+Quota used: not measured per run (wrapper quota telemetry unavailable for Claude; Codex 168h window ~7% at 00:05).
+Owner quality rating: pending (owner).

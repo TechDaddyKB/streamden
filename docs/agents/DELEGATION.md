@@ -18,8 +18,8 @@
 | Task type | Primary | Reviewer | Confidence |
 |---|---|---|---|
 | Architecture, specs, ADRs | Claude Opus 5.5 (Fable 5.1 for the gnarliest) | GPT-6 Astra (adversarial critic) | Medium |
-| Rust engine and systems code | Claude Opus 5.5 | GPT-6.1 Sol | Low–medium |
-| Protocol, parsers, algorithms, rate limiting | GPT-6.1 Sol (Astra if hard) | Claude Opus 5.5 | Medium |
+| Rust engine and systems code | Claude Opus 5.5 | GPT-6.1 Sol | Medium: on B-1 the Claude entry had no findings; Grok's had concurrency bugs and Codex's had admission and requirement gaps *(from bake-off 2026-10, owner to confirm)* |
+| Protocol, parsers, algorithms, rate limiting | GPT-6.1 Sol (Astra if hard); Claude Opus 5.5 writes the first drift-tolerant wire parser that later ones copy *(from bake-off 2026-10, owner to confirm)* | Claude Opus 5.5 (GPT-6.1 Sol for the Claude-written parser) *(from bake-off 2026-10, owner to confirm)* | Low: on B-2 Codex had a P1 (a typed-parse failure drops the frame) and Claude had no findings *(from bake-off 2026-10, owner to confirm)* |
 | TypeScript/React UI, designer | Claude Sonnet 5.5 (Opus for visual bug-fixing) | GPT-6.1 Sol | Medium |
 | CI, packaging, release, build scripts | GPT-6.1 Sol / Astra | Claude Opus 5.5 | Medium |
 | Tests | GPT-6.1 Sol, **for code another vendor wrote** | Claude Sonnet 5.5 | Low |
@@ -28,15 +28,17 @@
 | Live API/platform research, X data | Grok 4.7 | Claude or Codex verifies against official docs | Medium–high |
 | Code review | **Always a different vendor from the author** | — | Medium |
 
+Evidence for the rows marked *from bake-off 2026-10*: [bakeoff-2026-10.md](bakeoff-2026-10.md) (one run per vendor per task, so the evidence is directional).
+
 ## 3. Routing by workstream (from PLAN.md §4)
 
 | WS | Workstream | Spec author | Implementer(s) | Reviewer | Why |
 |---|---|---|---|---|---|
 | WS-01 | Build, CI, packaging, release | Codex Astra | Codex Sol | Claude Opus | Ops/CI is OpenAI's strongest independent result |
 | WS-02 | Protocol and contracts | Claude Opus | Claude Opus | Codex Astra | Highest-leverage design; keep one author |
-| WS-03 | Engine core | Claude Opus | Claude Opus (+ Codex Sol for isolated algorithms: expression parser, queue scheduler) | Codex Sol | Long-horizon Rust plus tricky concurrency |
+| WS-03 | Engine core | Claude Opus | Claude Opus, including the queue scheduler (+ Codex Sol for isolated algorithms such as the expression parser) *(from bake-off 2026-10, owner to confirm)* | Codex Sol | Long-horizon Rust plus tricky concurrency; B-1 showed the queue scheduler needs it *(from bake-off 2026-10, owner to confirm)* |
 | WS-04 | Scripting runtimes | Claude Opus | Claude Opus | Codex Sol | Sandboxing and FFI need care |
-| WS-05 | Platform connectors | Claude Opus (one spec) | Codex Sol (Twitch first, then YouTube, Kick, X…) | Claude Opus | Protocol-heavy; Grok feeds API-change research |
+| WS-05 | Platform connectors | Claude Opus (one spec) | Claude Opus writes the Twitch wire model and parsing pattern, then Codex Sol does the rest of Twitch, YouTube, Kick, X… *(from bake-off 2026-10, owner to confirm)* | Claude Opus (Codex Sol for the Claude-written pattern) *(from bake-off 2026-10, owner to confirm)* | Protocol-heavy; Grok feeds API-change research; B-2 showed that tolerating schema drift is the hard part *(from bake-off 2026-10, owner to confirm)* |
 | WS-06 | Local server, API, MCP | Claude Opus | Codex Sol | Claude Opus | JSON-RPC, auth, framing |
 | WS-07 | Shell and core UI | Claude Opus | Claude Sonnet | Codex Sol | UI strength; Opus for visual bugs |
 | WS-08 | Multichat | Claude Opus | Codex Sol (message model, emote/badge parsers) + Claude Sonnet (UI) | swap | Split by layer |
