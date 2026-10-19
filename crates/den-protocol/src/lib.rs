@@ -23,6 +23,7 @@ pub mod rpc;
 pub mod schema;
 pub mod secret;
 pub mod shared;
+mod tagged;
 pub mod template;
 pub mod timestamp;
 pub mod version;
