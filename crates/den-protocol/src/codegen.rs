@@ -671,9 +671,10 @@ fn lint_secret_marks(
     err: &mut impl FnMut(String),
 ) {
     for_each_subschema(schema, path, &mut |at, obj| {
-        if obj.contains_key("$ref") && ref_name(obj).is_none() {
+        if obj.contains_key("$ref") && !ref_name(obj).is_some_and(|name| types.contains_key(&name))
+        {
             err(format!(
-                "{at}: $ref must use the canonical `#/types/<Name>` prefix (§9.1)"
+                "{at}: $ref must use the canonical `#/types/<Name>` prefix and name an existing shared type (§9.1)"
             ));
         }
         match obj.get("x-secret") {
@@ -697,13 +698,14 @@ fn lint_secret_marks(
 
 /// Schema literals are published verbatim. A whole-value mark also protects every descendant and
 /// referenced type, including siblings of a mark in a same-value composition. Never print literals
-/// in diagnostics. Track reference cycles on the current path so recursive types terminate.
+/// in diagnostics. Each referenced target is walked with inherited secrecy, independent of the
+/// incoming path, so visit it once per lint root to bound shared DAGs as well as cycles.
 fn lint_secret_literals(
     schema: &Value,
     path: &str,
     types: &BTreeMap<String, Value>,
     inherited_secret: bool,
-    visiting: &mut std::collections::BTreeSet<String>,
+    seen: &mut std::collections::BTreeSet<String>,
     err: &mut impl FnMut(String),
 ) {
     let Some(obj) = schema.as_object() else {
@@ -725,22 +727,109 @@ fn lint_secret_literals(
         }
         if let Some(name) = ref_name(obj)
             && let Some(target) = types.get(&name)
-            && visiting.insert(name.clone())
+            && seen.insert(name.clone())
         {
             lint_secret_literals(
                 target,
                 &format!("{path}/$ref/{name}"),
                 types,
                 true,
-                visiting,
+                seen,
                 err,
             );
-            visiting.remove(&name);
         }
     }
     for_each_child_schema(obj, path, &mut |at, child| {
-        lint_secret_literals(child, at, types, secret, visiting, err);
+        lint_secret_literals(child, at, types, secret, seen, err);
     });
+}
+
+#[cfg(test)]
+mod secret_literal_lint_tests {
+    use super::*;
+
+    const LITERAL: &str = "SYNTHETIC_SECRET";
+
+    /// Every node has a literal so the callback bounds repeated work before a broken walk can
+    /// allocate exponentially many diagnostics. Two edges per level represent 2^depth paths.
+    #[test]
+    fn shared_dag_literals_are_visited_once_per_type() {
+        for depth in [4, 10, 20] {
+            let mut types = BTreeMap::new();
+            for i in 0..=depth {
+                let mut node = json!({ "type": "object", "default": LITERAL });
+                if i < depth {
+                    let edge = json!({ "$ref": format!("#/types/D{}", i + 1) });
+                    node["properties"] = json!({ "a": edge, "b": edge });
+                }
+                types.insert(format!("D{i}"), node);
+            }
+            let root = json!({ "$ref": "#/types/D0", "x-secret": true });
+            let mut findings = Vec::new();
+            lint_secret_marks(&root, "params", &types, &mut |message| {
+                assert!(!message.contains(LITERAL));
+                assert!(findings.len() < types.len(), "repeated shared-type work");
+                findings.push(message);
+            });
+            assert_eq!(findings.len(), types.len());
+            for i in 0..=depth {
+                let suffix = format!("/$ref/D{i}/default: `default` is forbidden");
+                assert_eq!(findings.iter().filter(|f| f.contains(&suffix)).count(), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn shared_cycles_terminate_without_suppressing_local_literals() {
+        let types = BTreeMap::from([
+            (
+                "A".into(),
+                json!({ "$ref": "#/types/B", "default": LITERAL }),
+            ),
+            ("B".into(), json!({ "$ref": "#/types/A", "const": LITERAL })),
+        ]);
+        let root = json!({ "x-secret": true, "properties": {
+            "a": { "$ref": "#/types/A", "examples": [LITERAL] },
+            "b": { "$ref": "#/types/B", "enum": [LITERAL] }
+        } });
+        let mut findings = Vec::new();
+        lint_secret_marks(&root, "params", &types, &mut |message| {
+            assert!(!message.contains(LITERAL));
+            assert!(findings.len() < 4, "repeated shared-type work");
+            findings.push(message);
+        });
+        assert_eq!(findings.len(), 4);
+        for key in ["default", "const", "examples", "enum"] {
+            assert_eq!(
+                findings
+                    .iter()
+                    .filter(|f| f.contains(&format!("`{key}` is forbidden")))
+                    .count(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn unmarked_reference_does_not_hide_a_later_secret_use() {
+        let types = BTreeMap::from([("Leaf".into(), json!({ "default": LITERAL }))]);
+        let root = json!({ "properties": {
+            "a_public": { "$ref": "#/types/Leaf" },
+            "b_secret": { "$ref": "#/types/Leaf", "x-secret": true },
+            "c_secret": { "$ref": "#/types/Leaf", "x-secret": true }
+        } });
+        let mut findings = Vec::new();
+        lint_secret_marks(&root, "params", &types, &mut |message| {
+            assert!(!message.contains(LITERAL));
+            findings.push(message);
+        });
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].contains("/b_secret/$ref/Leaf/default"));
+        // Each lint root owns its set: a prior call must not suppress this result.
+        let mut next = Vec::new();
+        lint_secret_marks(&root, "params", &types, &mut |message| next.push(message));
+        assert_eq!(findings, next);
+    }
 }
 
 /// The first shared type reachable from `name` whose schema marks the whole value secret (or carries

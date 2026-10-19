@@ -1666,6 +1666,10 @@ fn lint_requires_canonical_reference_prefixes() {
         "#/$defs/Marked",
         "#/definitions/Marked",
         "other.json#/types/Marked",
+        "#/types/Marked/properties/token",
+        "#/types/Marked/",
+        "#/types/NoSuchType",
+        "#/types/",
     ] {
         let mut catalog = Catalog::new();
         catalog.register_type::<Marked>();
@@ -1704,6 +1708,7 @@ fn lint_requires_canonical_reference_prefixes() {
                 "{errors:#?}"
             );
         }
+        assert!(codegen::build_unredacted(catalog).is_err());
     }
     fn bad_ref(schema: &mut Schema) {
         *schema = schemars::json_schema!({ "$ref": "#/$defs/Marked" });
