@@ -1,0 +1,101 @@
+# Artifacts only. No release publishing, signing credentials or updater payloads.
+name: Packaging
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: packaging-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+
+jobs:
+  bundles:
+    name: Bundles (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            bundles: deb,rpm,appimage
+          - os: windows-2025
+            bundles: msi,nsis
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Tauri Linux prerequisites
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config curl wget file libwebkit2gtk-4.1-dev \
+            libssl-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev \
+            patchelf libfuse2t64
+      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+        with:
+          run_install: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: pnpm
+      # Never reduce minimumReleaseAge or use --ignore-minimum-release-age.
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: packaging-${{ matrix.os }}
+          save-if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+      - run: cargo install tauri-cli --version 2.12.3 --locked
+      - name: Pin AppImage tooling
+        if: runner.os == 'Linux'
+        run: bash packaging/fetch-appimage-tools.sh
+      - name: Build unsigned installers
+        id: installers
+        working-directory: apps/desktop
+        env:
+          BUNDLE_TARGETS: ${{ matrix.bundles }}
+        run: cargo tauri build --bundles "$BUNDLE_TARGETS" -- --locked
+      - name: Debian install and launch
+        if: runner.os == 'Linux'
+        run: |
+          docker run --rm -v "$PWD:/work:ro" debian:trixie-slim@sha256:918311b7b6c4c6f68b232ba516584925f6c78ad82b6fd534b98979df6438e483 bash -euxc '
+            apt-get update
+            apt-get install -y /work/target/release/bundle/deb/*.deb xvfb xauth dbus-x11
+            useradd -m probe
+            runuser -u probe -- bash /work/packaging/smoke-launch.sh
+          '
+      - name: Fedora install and launch
+        if: ${{ always() && runner.os == 'Linux' && steps.installers.outcome == 'success' }}
+        run: |
+          docker run --rm -v "$PWD:/work:ro" fedora:44@sha256:be9d65e2344d805cc11114319c685ecaa96b6d9b4350a0a6460cdb931babbd19 bash -euxc '
+            dnf install -y /work/target/release/bundle/rpm/*.rpm xorg-x11-server-Xvfb xorg-x11-xauth dbus-x11
+            useradd -m probe
+            runuser -u probe -- bash /work/packaging/smoke-launch.sh
+          '
+      - name: Upload installers
+        if: ${{ always() && steps.installers.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: streamden-${{ matrix.os }}-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            target/release/bundle/deb/*.deb
+            target/release/bundle/rpm/*.rpm
+            target/release/bundle/appimage/*.AppImage
+            target/release/bundle/msi/*.msi
+            target/release/bundle/nsis/*.exe

@@ -24,7 +24,43 @@
     }
   },
   "bundle": {
-    "active": false,
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/icon.png", "icons/icon.ico"]
+    "active": true,
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/icon.png",
+      "icons/icon.ico"
+    ],
+    "targets": [
+      "deb",
+      "rpm",
+      "appimage",
+      "msi",
+      "nsis"
+    ],
+    "publisher": "Tech Daddy Digital",
+    "homepage": "https://github.com/tech-daddy-digital/streamden",
+    "license": "GPL-3.0-or-later",
+    "category": "Utility",
+    "shortDescription": "StreamDen streaming automation hub",
+    "createUpdaterArtifacts": false,
+    "windows": {
+      "allowDowngrades": false,
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      },
+      "wix": {
+        "upgradeCode": "544682fc-4369-5784-9d8b-20cea11a1e99",
+        "language": "en-US"
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": [
+          "English"
+        ],
+        "compression": "lzma"
+      }
+    }
   }
 }

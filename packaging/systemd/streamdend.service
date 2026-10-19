@@ -1,0 +1,15 @@
+# P1 draft: not installed or enabled by the P0 desktop packages.
+[Unit]
+Description=StreamDen headless engine
+Documentation=https://github.com/tech-daddy-digital/streamden
+ConditionFileIsExecutable=/usr/bin/streamdend
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/streamdend
+# No restart until the daemon has a persistent engine loop.
+Restart=no
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target
