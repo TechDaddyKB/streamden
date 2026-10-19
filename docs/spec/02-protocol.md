@@ -2,7 +2,8 @@
 
 - **Status:** Revision 5. r4 was approved by the reviewer (Codex Astra, 2026-10-19; history in §19) and
   provisionally approved by the coordinator on the owner's delegation (2026-10-19); owner confirmation pending.
-  r5 is the DEN-30 follow-up (`plugins.call` classification), pending review. Card: DEN-14.
+  r5 is the DEN-30 follow-up (`plugins.call` classification) plus the DEN-31 tier-0 MCP outputSchema fix, pending
+  review. Card: DEN-14.
 - **Owns:** `crates/den-protocol` (single-writer), the codegen pipeline (`cargo xtask codegen`), and every generated
   artifact (`protocol.json`, OpenAPI, AsyncAPI, TS, Python, plugin manifest schema, MCP tool catalog).
 - **Builds on:** [architecture.md](../architecture.md) §2–4, [plugin-sdk-and-api.md](../research/plugin-sdk-and-api.md)
@@ -375,7 +376,7 @@ from that one definition:
 pub struct OperationDef {
     pub name: OperationName,          // "obs.set_scene", "actions.run", "acme.send_chat"
     pub title: L10nString, pub description: L10nString, pub category: Vec<String>,
-    pub params: Schema, pub result: Schema,     // JSON Schema 2020-12; params root MUST be `type: object` (§9.6); result root MUST be `type: object` for tier ≥ 1 (dry-run discrimination, below)
+    pub params: Schema, pub result: Schema,     // JSON Schema 2020-12; params root MUST be `type: object` (§9.6); result root MUST be `type: object` for tier ≥ 1 (dry-run discrimination, below); tier 0 may use any root, MCP wraps it (§9.6)
     pub tier: RiskTier,               // 0 read · 1 reversible write · 2 config change · 3 external/irreversible · 4 dangerous
     pub scopes: Vec<Scope>,           // e.g. ["obs:control"]
     pub expose: Exposure,             // { rpc: bool, sub_action: bool, mcp: bool }
@@ -839,8 +840,11 @@ Per tool:
 - **outputSchema** = the result schema **after** MCP transforms: `x-den-untrusted` string fields are replaced
   by the wrapper schema `{ untrusted: true, source, text }`, and tier ≥ 1 tools get the `oneOf`-free envelope
   `{ result?: <result>, dryRun?: DryRunResult, draft?: DraftResult }` (the same types as §8.1 and §6.1, wrapped so
-  that `structuredContent` always validates without a root union; exactly one key is set). The server also returns
-  a JSON text block.
+  that `structuredContent` always validates without a root union; exactly one key is set). Tier-0 tools get
+  `{ result: <result> }` with `result` required, whatever the result root (object, array, scalar or `null`, the
+  key present for `null`), because MCP `structuredContent` must be an object and tier-0 result roots are not
+  constrained (§8.1); so on every tool the normal result is `structuredContent.result`. The WS and REST result
+  is unchanged. The server also returns a JSON text block.
 - **annotations**, all four always set explicitly (MCP defaults `destructiveHint` to true when not read-only):
   tier 0 → `readOnlyHint: true`; tiers 1–2 → `readOnlyHint: false, destructiveHint: false`; tier 3 →
   `destructiveHint: true` plus `_meta["anthropic/requiresUserInteraction"]`. Operations whose effective tier is
@@ -1136,7 +1140,11 @@ import-originated data is.
     target in place, and the result validates against `DraftResult` (no `deleted` key); `dryRun: true` on
     `actions_create` returns `DryRunResult` and creates no draft; `queues_update` yields a `PendingChange`; every
     tier-2 draft result validates against `draftResult` on WS and inside the MCP envelope; the same calls under a
-    user token return the normal result. **`plugins.call`** (§8.1): `plugins_call` is in `tools/list` and
+    user token return the normal result. **Tier-0 tools:** for each of a tier-0 operation whose result root is
+    an array, a scalar, `null` and an object (fixture operations if the core catalog lacks one), both core and
+    plugin-contributed, the native tool returns `structuredContent` `{ result: <WS result> }` (key present for
+    `null`) that validates against its outputSchema, whose root is `type: object` with `result` required, and
+    `invoke_operation` returns the same object. **`plugins.call`** (§8.1): `plugins_call` is in `tools/list` and
     `invoke_operation("plugins.call")` is accepted; both, and the WS method, return `PluginCallResult` whose
     `value` equals the native plugin tool's result (on MCP, the native envelope's `result`) for an MCP-exposed
     tier-1 target, including the wrapped `x-den-untrusted` fields; for tier-0 targets returning an array, a
@@ -1228,3 +1236,9 @@ protocol design choice made here, not a product decision, and is open to reviewe
   tier ≥ 1 rules: `PluginCallResult { value }` wraps the target's result, the dry run is always `DryRunResult`
   (built by the alias for a tier-0 target, after the target checks), there is no alias draft result, and MCP
   always applies the tier-1 envelope, with tier-0 conformance tests (§8.1, §8.8 rule 2, §9.6, §12, §17.13).
+  DEN-31 closes the same gap for native tier-0 tools: MCP wraps every tier-0 result as `{ result }`, so each
+  outputSchema has an object root (§8.1, §9.6, §17.13). Wrapping at the MCP layer, not a catalog-level
+  `{ value }` like `PluginCallResult`: the gap exists only on MCP, `plugins.call` needs its wrapper because its
+  target is unknown statically, and requiring object roots everywhere would contradict §8.1's tier-0 targets
+  returning arrays or scalars and burden plugin authors. Always wrapping, rather than only non-object roots, gives
+  one rule with no root-union edge cases and matches the tier ≥ 1 envelope's `result` key.
