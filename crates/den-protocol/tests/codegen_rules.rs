@@ -1299,6 +1299,117 @@ fn examples_with_unknown_kinds_are_rejected() {
     assert!(!v.is_valid(&json!({ "kind": "sticker", "text": "hi" })));
 }
 
+/// DEN-122: map entries are schemas even when their names are annotation keywords.
+#[test]
+fn producer_strips_inline_fallbacks_under_annotation_named_properties() {
+    let core = codegen::build(Catalog::core()).unwrap();
+    for (ty, known, unknown) in [
+        (
+            "Node",
+            json!({ "kind": "stop" }),
+            json!({ "kind": "future_node" }),
+        ),
+        (
+            "Fragment",
+            json!({ "kind": "text", "text": "hi" }),
+            json!({ "kind": "future_fragment", "text": "hi" }),
+        ),
+    ] {
+        for name in ["ordinary", "default", "title", "x-custom"] {
+            let mut catalog = Catalog::core();
+            let mut def = op(
+                "core.inline",
+                0,
+                json!({
+                    "type": "object",
+                    "properties": { name: core.types[ty].clone() },
+                    "required": [name],
+                }),
+                json!({}),
+            );
+            let example = json!({ name: known });
+            def.examples = vec![OperationExample::json(
+                "inline",
+                example.clone(),
+                ResultShape::Normal,
+                json!({}),
+            )];
+            catalog.register_operation(def).unwrap();
+            let mut doc = codegen::build_unredacted(catalog).unwrap();
+            let pointer = "/operations/core.inline/params";
+            let producer = jsonschema::validator_for(&doc.producer_schema_at(pointer)).unwrap();
+            assert!(producer.is_valid(&example), "{ty} under {name}: known kind");
+            assert_eq!(codegen::validate_examples(&doc), Ok(()));
+
+            let example = json!({ name: unknown });
+            let receiver = jsonschema::validator_for(&doc.schema_at(pointer)).unwrap();
+            assert!(receiver.is_valid(&example), "{ty} under {name}: receiver");
+            assert!(!producer.is_valid(&example), "{ty} under {name}: producer");
+            doc.operations.get_mut("core.inline").unwrap().def.examples =
+                vec![OperationExample::json(
+                    "inline",
+                    example,
+                    ResultShape::Normal,
+                    json!({}),
+                )];
+            assert!(
+                codegen::validate_examples(&doc).is_err(),
+                "{ty} under {name}"
+            );
+        }
+    }
+}
+
+/// Actual annotations can contain schema-looking data and must remain unchanged.
+#[test]
+fn producer_preserves_annotations_while_visiting_schema_maps() {
+    let mut doc = codegen::build(Catalog::core()).unwrap();
+    let fragment = doc.types["Fragment"].clone();
+    let mut wrapper = json!({ "type": "object" });
+    for key in ["default", "x-custom"] {
+        wrapper[key] = fragment.clone();
+    }
+    wrapper["examples"] = json!([fragment.clone()]);
+    wrapper["title"] = json!("Preserved title");
+    for key in [
+        "properties",
+        "patternProperties",
+        "dependentSchemas",
+        "$defs",
+        "definitions",
+    ] {
+        wrapper[key] = json!({ "default": fragment.clone(), "title": fragment.clone(), "x-custom": fragment.clone() });
+    }
+    doc.types.insert("Wrapper".into(), wrapper.clone());
+    let producer = doc.producer_schema_at("/types/Wrapper");
+    let transformed = &producer["types"]["Wrapper"];
+    for key in ["default", "examples", "title", "x-custom"] {
+        assert_eq!(transformed[key], wrapper[key], "annotation {key}");
+    }
+    let known = json!({ "kind": "text", "text": "hi" });
+    let unknown = json!({ "kind": "future_fragment", "text": "hi" });
+    for key in [
+        "properties",
+        "patternProperties",
+        "dependentSchemas",
+        "$defs",
+        "definitions",
+    ] {
+        for name in ["default", "title", "x-custom"] {
+            let pointer = format!("/types/Wrapper/{key}/{name}");
+            let mut schema = producer.clone();
+            schema["$ref"] = json!(format!("#{pointer}"));
+            let validator = jsonschema::validator_for(&schema).unwrap();
+            assert!(validator.is_valid(&known), "{pointer}: known kind");
+            assert!(!validator.is_valid(&unknown), "{pointer}: unknown kind");
+        }
+    }
+    assert_eq!(
+        doc.types["Wrapper"], wrapper,
+        "receiver schema is unchanged"
+    );
+}
+
 /// DEN-53 (§3): a validation failure is described without the instance. The validator's `Display` and
 /// the `Debug` of an `anyOf`/`oneOf` error kind carry the authored instance (every branch's error with
 /// its instance), which for a typed example is a `Secret<T>` value exposed for validation; the shared
