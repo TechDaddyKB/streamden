@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>S-2 overlay</title>
+<style>
+  html, body { background: transparent; margin: 0; overflow: hidden; width: 100%; height: 100%;
+    font-family: system-ui, sans-serif; }
+  #status { position: absolute; top: 16px; left: 16px; font: 600 22px/1.3 monospace; color: #fff;
+    background: rgba(0,0,0,.55); padding: 6px 12px; border-radius: 8px; display: none; }
+  #stage { position: absolute; left: 0; right: 0; bottom: 120px; display: flex; flex-direction: column;
+    align-items: center; gap: 16px; }
+  .alert { font: 800 64px/1.1 system-ui, sans-serif; color: #fff; padding: 20px 44px; border-radius: 20px;
+    background: linear-gradient(135deg, rgba(124,58,237,.92), rgba(236,72,153,.92));
+    box-shadow: 0 10px 40px rgba(0,0,0,.35); animation: pop .6s cubic-bezier(.2,1.4,.4,1) both; }
+  .alert.out { animation: fade .4s ease-in both; }
+  @keyframes pop { from { transform: translateY(80px) scale(.6); opacity: 0 } to { transform: none; opacity: 1 } }
+  @keyframes fade { to { transform: translateY(-40px); opacity: 0 } }
+</style>
+</head>
+<body>
+<div id="status"></div>
+<div id="stage"></div>
+<!-- control probe: same-origin loopback image -->
+<img alt="" src="/probe/control-overlay-same-origin" width="1" height="1" style="position:absolute;opacity:0">
+<script>
+'use strict';
+const params = new URLSearchParams(location.search);
+const debug = params.get('debug') === '1';
+const BASE = 250, CAP = Number(params.get('cap') || 5000), HB_TIMEOUT = 12500;
+const statusEl = document.getElementById('status');
+if (debug) statusEl.style.display = 'block';
+
+function report(kind, data) {
+  return fetch('/report', { method: 'POST', headers: { 'content-type': 'text/plain' }, keepalive: true,
+    body: JSON.stringify({ kind, page: location.pathname, origin: location.origin, t: Date.now(), ...data }) })
+    .catch(() => {});
+}
+const errors = [];
+addEventListener('error', e => errors.push(String(e.message || (e.target && (e.target.src || e.target.href)))), true);
+addEventListener('unhandledrejection', e => errors.push('unhandled: ' + e.reason));
+
+let lastId = 0, attempts = 0, downSince = null, ws = null, watchdog = null, connects = 0;
+function setStatus(s) { statusEl.textContent = `${s} · attempts ${attempts} · last #${lastId} · connects ${connects}`; }
+
+function armWatchdog() {
+  clearTimeout(watchdog);
+  watchdog = setTimeout(() => { try { ws.close(); } catch (_) {} }, HB_TIMEOUT);
+}
+function scheduleReconnect() {
+  const exp = Math.min(CAP, BASE * 2 ** attempts);
+  const delay = exp / 2 + Math.random() * exp / 2; // equal jitter
+  attempts++;
+  setStatus(`reconnecting in ${Math.round(delay)} ms`);
+  setTimeout(connect, delay);
+}
+function connect() {
+  const url = `ws://${location.host}/ws?client=overlay&last=${lastId}`;
+  ws = new WebSocket(url);
+  ws.onopen = () => {
+    connects++;
+    const hello = { type: 'hello', client: 'overlay', attempts, downSince, lastId, t: Date.now(),
+      outage_ms: downSince ? Date.now() - downSince : null };
+    ws.send(JSON.stringify(hello));
+    attempts = 0; downSince = null; armWatchdog(); setStatus('connected');
+  };
+  ws.onmessage = m => {
+    armWatchdog();
+    const ev = JSON.parse(m.data);
+    if (ev.type === 'alert') {
+      if (ev.id <= lastId && !ev.replayed) return; // dedupe
+      lastId = Math.max(lastId, ev.id);
+      ws.send(JSON.stringify({ type: 'ack', id: ev.id, replayed: !!ev.replayed, sent_ms: ev.sent_ms,
+        recv_ms: Date.now(), latency_ms: Date.now() - ev.sent_ms }));
+      show(ev);
+      setStatus('connected');
+    }
+  };
+  ws.onclose = () => {
+    clearTimeout(watchdog);
+    if (downSince === null) downSince = Date.now();
+    scheduleReconnect();
+  };
+  ws.onerror = () => {};
+}
+function show(ev) {
+  const el = document.createElement('div');
+  el.className = 'alert';
+  el.textContent = ev.text || `Alert #${ev.id}`;
+  document.getElementById('stage').appendChild(el);
+  setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 450); }, ev.hold_ms || 5000);
+}
+
+const ctl = window.obsstudio;
+const info = { ua: navigator.userAgent, isSecureContext, obsstudio: !!ctl, obsPluginVersion: ctl && ctl.pluginVersion,
+  bodyBg: getComputedStyle(document.body).backgroundColor, htmlBg: getComputedStyle(document.documentElement).backgroundColor,
+  size: [innerWidth, innerHeight] };
+if (ctl && ctl.getControlLevel) ctl.getControlLevel(level => report('overlay.loaded', { ...info, controlLevel: level, errors }));
+else report('overlay.loaded', { ...info, errors });
+setStatus('connecting');
+connect();
+</script>
+</body>
+</html>

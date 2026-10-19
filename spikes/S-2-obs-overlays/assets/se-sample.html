@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>S-2 StreamElements-style sample widget</title>
+<!-- External loads typical of SE custom widgets: Google Fonts (link + CSS @import), jQuery and GSAP from CDNs.
+     Versions are pinned and SRI-checked so the spike runs only reviewed remote code. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link id="gf" rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bangers&display=swap">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+  html, body { background: transparent; margin: 0; overflow: hidden; }
+  .main-container { position: absolute; left: 40px; top: 40px; color: #fff; text-shadow: 0 4px 12px rgba(0,0,0,.6); }
+  .title { font-family: 'Bangers', cursive; font-size: 96px; letter-spacing: 2px; color: {{titleColor}}; }
+  .sub { font-family: 'Press Start 2P', monospace; font-size: 26px; margin-top: 10px; }
+  .diag { font: 600 22px/1.4 monospace; margin-top: 18px; background: rgba(0,0,0,.55); padding: 8px 12px; border-radius: 8px; }
+</style>
+</head>
+<body>
+<div class="main-container">
+  <div class="title" id="title">Latest follower</div>
+  <div class="sub" id="name">waiting…</div>
+  <div class="diag" id="diag">loading CDN assets…</div>
+</div>
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"
+  integrity="sha384-1H217gwSVyLSIfaLxHbE7dRb3v4mYCKbpQvzx0cegeju1MVsGrX5xXxAvs/HgeFs" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"
+  integrity="sha384-g4NTh/Iv5PPU4xPyhEWqPcwtNXOvdaDI8LLnyYfyNZOjKJeYQyjzQ9X5275eBjpt" crossorigin="anonymous"></script>
+<script>
+'use strict';
+// ---- minimal SE-style runtime shim (spike only): fields substitution + onWidgetLoad/onEventReceived ----
+const fieldData = { titleColor: '#facc15', greeting: 'Thanks for the follow' };
+document.querySelectorAll('style').forEach(s => { s.textContent = s.textContent.replace(/\{\{(\w+)\}\}/g, (_, k) => fieldData[k] ?? ''); });
+const errors = [];
+addEventListener('error', e => errors.push(String(e.message || (e.target && (e.target.src || e.target.href)))), true);
+function report(kind, data) {
+  return fetch('/report', { method: 'POST', headers: { 'content-type': 'text/plain' }, keepalive: true,
+    body: JSON.stringify({ kind, page: location.pathname, origin: location.origin, t: Date.now(), ...data }) }).catch(() => {});
+}
+
+// ---- "widget.js" as an SE author would write it ----
+window.addEventListener('onWidgetLoad', obj => {
+  $('#name').text(obj.detail.channel.username);
+});
+window.addEventListener('onEventReceived', obj => {
+  if (obj.detail.listener !== 'follower-latest') return;
+  $('#name').text(`${fieldData.greeting}, ${obj.detail.event.name}!`);
+  if (window.gsap) gsap.fromTo('#name', { scale: 0.5, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.6, ease: 'back.out(2)' });
+});
+
+// ---- runtime: dispatch lifecycle events, bridge our WebSocket alerts ----
+addEventListener('load', async () => {
+  const t0 = performance.now();
+  const fonts = {};
+  for (const fam of ['Bangers', 'Press Start 2P']) {
+    try { await document.fonts.load(`32px "${fam}"`); fonts[fam] = document.fonts.check(`32px "${fam}"`); }
+    catch (e) { fonts[fam] = String(e); }
+  }
+  const resources = performance.getEntriesByType('resource')
+    .filter(r => /^https:/.test(r.name))
+    .map(r => ({ url: r.name.replace(/\?.*$/, ''), ms: Math.round(r.duration), type: r.initiatorType }));
+  const res = { ua: navigator.userAgent, isSecureContext, jquery: window.jQuery ? jQuery.fn.jquery : null,
+    gsap: window.gsap ? gsap.version : null, fonts, fontWaitMs: Math.round(performance.now() - t0), resources, errors };
+  report('se-sample.result', res);
+  $('#diag').html(`jQuery ${res.jquery || 'MISSING'} · GSAP ${res.gsap || 'MISSING'}<br>` +
+    Object.entries(fonts).map(([k, v]) => `${k}: ${v === true ? 'loaded' : 'NOT loaded'}`).join(' · '));
+  dispatchEvent(new CustomEvent('onWidgetLoad', { detail: { fieldData, channel: { username: 'streamden_test', apiToken: '' },
+    session: { data: {} }, recents: [], currency: { code: 'USD', symbol: '$' } } }));
+  const ws = new WebSocket(`ws://${location.host}/ws?client=se-sample`);
+  ws.onmessage = m => {
+    const ev = JSON.parse(m.data);
+    if (ev.type === 'alert') dispatchEvent(new CustomEvent('onEventReceived',
+      { detail: { listener: 'follower-latest', event: { name: ev.user || ev.text || 'someone' } } }));
+  };
+});
+</script>
+</body>
+</html>

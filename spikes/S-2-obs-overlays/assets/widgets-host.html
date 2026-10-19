@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>S-2 widgets host overlay</title>
+<style>
+  html, body { background: transparent; margin: 0; overflow: hidden; }
+  iframe { display: block; border: 0; width: 1900px; height: 250px; background: transparent; margin: 8px 10px; }
+</style>
+</head>
+<body>
+<!-- Design under test (se-widget-compat A6.3): one real origin per widget instance, iframed by the overlay. -->
+<script>
+'use strict';
+const port = location.port;
+const run = new URLSearchParams(location.search).get('run') || 'r0';
+const frames = [
+  { id: 'a', sandbox: 'allow-scripts allow-same-origin allow-forms' },
+  { id: 'b', sandbox: 'allow-scripts allow-same-origin allow-forms' },
+  // control: opaque origin (sandbox without allow-same-origin), the variant the design rejects
+  { id: 'c', sandbox: 'allow-scripts' },
+];
+for (const f of frames) {
+  const el = document.createElement('iframe');
+  el.setAttribute('sandbox', f.sandbox);
+  el.src = `http://w-${f.id}.localhost:${port}/?run=${encodeURIComponent(run)}`;
+  document.body.appendChild(el);
+}
+fetch('/report', { method: 'POST', headers: { 'content-type': 'text/plain' },
+  body: JSON.stringify({ kind: 'widgets-host.loaded', run, origin: location.origin, ua: navigator.userAgent }) });
+</script>
+</body>
+</html>
