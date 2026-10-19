@@ -1,7 +1,7 @@
 # StreamDen — Master Plan
 
 > **Product:** **StreamDen** by Tech Daddy Digital · GPL-3.0-or-later (SDKs MIT/Apache) · repo `TechDaddyKB/streamden` → `tech-daddy-digital/streamden` at release.
-> **Status:** P0 Foundations, **Linux-first** (D-035). Rounds 1–2 decided. Spikes S-1/S-2/S-3 done on Linux (in review); KDE/Windows validation parked until v0.1 (DEN-20). No production code yet.
+> **Status:** P0 Foundations, **Linux-first** (D-035). Rounds 1–2 decided. Spikes S-1/S-2/S-3 done on Linux and merged to main (DEN-2/3/4, S-1 evidence corrected in DEN-23); KDE/Windows validation parked until v0.1 (DEN-20). No production code yet.
 > **How work runs:** cards on the codex-orchestrator board; agents launched with `scripts/dispatch.sh` (D-036).
 > **Work items:** codex-orchestrator board, project **`streamden`** (`http://localhost:8488`), cards `DEN-<n>`. Agents launch via `clx`/`cdx`/`cgx` ([ADR-0005](docs/adr/0005-work-management-and-agent-tooling.md)).
 > **Owner:** Kris (human; final say on every decision).
