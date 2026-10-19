@@ -1,0 +1,42 @@
+body {
+  margin: 0;
+  background: var(--sd-color-bg);
+  color: var(--sd-color-text);
+  font: var(--sd-text-md) / 1.5 var(--sd-font-ui);
+}
+:focus-visible { outline: var(--sd-focus-ring); outline-offset: var(--sd-focus-offset); }
+.shell { display: grid; grid-template-columns: 13rem 1fr; min-height: 100vh; }
+.shell__nav {
+  display: flex; flex-direction: column; gap: var(--sd-space-1);
+  padding: var(--sd-space-4) var(--sd-space-3);
+  background: var(--sd-color-surface); border-right: 1px solid var(--sd-color-border);
+}
+.shell__brand { padding: 0 var(--sd-space-2) var(--sd-space-3); font-size: var(--sd-text-lg); }
+.shell__nav a {
+  padding: var(--sd-space-2); border-radius: var(--sd-radius-sm);
+  color: var(--sd-color-muted); text-decoration: none;
+  transition: background var(--sd-motion-fast) var(--sd-motion-easing);
+}
+.shell__nav a:hover { background: var(--sd-color-surface-raised); color: var(--sd-color-text); }
+.shell__nav a[aria-current="page"] { background: var(--sd-color-surface-raised); color: var(--sd-color-accent); }
+.shell__main { padding: var(--sd-space-6); max-width: 48rem; }
+h1 { margin: 0 0 var(--sd-space-2); font-size: var(--sd-text-xl); }
+h2 { margin: 0 0 var(--sd-space-3); font-size: var(--sd-text-lg); }
+.muted { color: var(--sd-color-muted); }
+.card {
+  margin-top: var(--sd-space-5); padding: var(--sd-space-4);
+  background: var(--sd-color-surface); border: 1px solid var(--sd-color-border);
+  border-radius: var(--sd-radius-md); box-shadow: var(--sd-shadow-1);
+}
+code { font-family: var(--sd-font-mono); font-size: var(--sd-text-sm); }
+.status { color: var(--sd-color-warning); }
+.row { display: flex; gap: var(--sd-space-2); margin-top: var(--sd-space-4); }
+.btn {
+  padding: var(--sd-space-2) var(--sd-space-4); font: inherit; cursor: pointer;
+  color: var(--sd-color-text); background: var(--sd-color-surface-raised);
+  border: 1px solid var(--sd-color-control); border-radius: var(--sd-radius-sm);
+  transition: background var(--sd-motion-fast) var(--sd-motion-easing);
+}
+.btn:hover { border-color: var(--sd-color-text); }
+.btn--primary { background: var(--sd-color-accent); color: var(--sd-color-on-accent); border-color: transparent; }
+.btn--primary:hover { filter: brightness(1.08); border-color: transparent; }
