@@ -1,6 +1,6 @@
 # Spec 03: Engine core (WS-03)
 
-- **Status:** Revision 1, draft for Codex review. Card: DEN-15.
+- **Status:** Revision 2, resolves the Codex (Astra) review of r1 (§25); in Codex re-review. Card: DEN-15.
 - **Owns:** `crates/den-core`: the event bus, trigger matching, commands, timers and cron, the run executor
   (sub-action tree), queues and scheduling, variables, Action History, and the SQLite storage layer. It also owns
   the engine-side implementation of the authorization rules in [spec 02 §8.8](02-protocol.md).
@@ -81,7 +81,7 @@ pub struct Run {
     pub inline: bool,                    // true for an inline RunAction child (shares the parent's task)
     pub test: bool, pub replay_of: Option<RunId>,
     pub event_snapshot: Option<Event>,   // the firing or replayed event, redacted, stored with the run (§12.1)
-    pub untrusted_args: Vec<String>,     // arg names carrying x-den-untrusted text at the end of the run (§21)
+    pub untrusted_args_queued: Vec<String>, pub untrusted_args_after: Vec<String>, // taint set (§21) of each snapshot; replay re-seeds from the chosen one
     pub error: Option<RunError>,         // set when state is failed, rejected or dropped
     pub stopped_by: Option<NodeId>,      // the Stop node or Code node (ok: false) that ended the run early
     pub warnings: Vec<RunWarning>,       // loop cap hit, break outside loop, dynamic reads of missing args…
@@ -183,7 +183,11 @@ Sources ──publish──► EventBus ──► Dispatcher task ──► Trig
   them. Two events from different sources have no causal relation beyond that order.
 - Subscribers get an `Arc<Event>`; they MUST NOT block the dispatcher. The matcher (§6) is the one in-line
   subscriber: it computes the fire set and hands admission work to the scheduler synchronously (both are
-  sub-millisecond, §20); every other subscriber receives through its own bounded channel.
+  sub-millisecond, §20); every other subscriber receives through its own bounded channel (§5.3).
+- **The engine never depends on a subscriber channel for its own behaviour.** Everything the engine must *do* in
+  response to a `critical` event (run the shutdown sequence on `system.stopping`, flip to read-only on
+  `system.storage_readonly`) is invoked directly by the component that raises it, in the same task, and the event
+  is published for observers afterwards. A stalled observer can therefore slow nothing but itself.
 - Delivery is at-most-once per subscriber. The WS replay ring (spec 02 §8.4) and the persisted event log (§12.5)
   are how consumers recover.
 
@@ -192,9 +196,26 @@ Sources ──publish──► EventBus ──► Dispatcher task ──► Trig
 - The bus queue is bounded (`engine.bus.capacity`, default 8,192 events). Publishers `await` when it is full
   **unless** the event type is flagged `highVolume` in the catalog, in which case the event is dropped immediately
   and counted; every 5 s of drops produces one `system.events_dropped { count, since, types }` event.
-- Critical events (catalog flag `critical`) are never dropped anywhere in the engine.
-- A subscriber's own channel overflow follows the same rule, per subscriber (den-server adds its per-session policy,
-  spec 02 §8.4).
+- Critical events (catalog flag `critical`) are never dropped by the bus or the dispatcher, and never dropped for a
+  subscriber that drains (the boundary is stated below).
+- **Subscriber channels** (`engine.bus.subscriberCapacity`, 4,096 per subscriber) are filled by the dispatcher with
+  `try_send`; it never awaits a subscriber. The guarantee "critical events are never dropped" is a guarantee of
+  the **bus and the dispatcher** (a publisher awaits space, the dispatcher never discards) and of den-server's
+  per-session policy (spec 02 §8.4, with replay); for an in-engine subscriber it holds **as long as the
+  subscriber drains**. On a full subscriber channel: `highVolume` and ordinary events are dropped **for that
+  subscriber only**, counted per subscriber, reported in `system.events_dropped { count, since, types,
+  subscriber }`, and the next event the subscriber receives carries an in-band `Gap { dropped, firstMissedId }`
+  marker, so a consumer sees a gap, never a reordering (order within a channel is always the dispatch order). A
+  `critical` event that finds the channel full is parked in a per-subscriber **critical lane** of at most
+  `engine.bus.criticalLane` (64) entries, delivered after everything already in the channel and before the next
+  ordinary event the dispatcher enqueues (order is kept); if that lane is also full, or
+  the subscriber has not taken anything for `engine.bus.subscriberStallMs` (5,000) while its channel is full, the
+  subscriber is **stalled**: its channel is closed, `system.subscriber_stalled { subscriber, dropped }` is
+  published (`critical`), the audit log gets `subscriber_stalled`, and the owning component re-subscribes with
+  a fresh channel and re-syncs from the event log or history (the storage event-log writer is itself a drop-and-
+  count consumer, §13.1, and is never stalled). A stalled subscriber therefore loses events, including critical
+  ones, **for itself**, visibly; it never stalls matching, admission, other subscribers or the shutdown sequence
+  (§10.8). §22.12 tests a stalled subscriber under a critical-event storm.
 
 ## 6. Trigger matching and precedence
 
@@ -252,16 +273,17 @@ applies. `events.simulate` (§6.5) also uses the normal rule; it is "simulate th
 ### 6.4 Run context seeding
 
 The run's `event` root is the full envelope; `user` is `event.user` plus the user's variables (§11.3) loaded
-lazily; `trigger` is `{ id, type }`; `match` holds the regex captures of the firing trigger (empty otherwise);
-`args` is seeded with the event's **top-level payload fields** (spec 02 §6.3). Reserved names cannot collide
-because codegen refuses payloads that use them. Streamer.bot's run-scope built-ins (row 3.09) map as `%actionId%`
+lazily; `trigger` is `{ id, type }`; `match` holds the regex captures of the firing trigger, or, for a
+`commands.triggered` run whose trigger has no regex filter, the command's own `captures` (§7.1), and is empty
+otherwise; `args` is seeded with the event's **top-level payload fields** (spec 02 §6.3). Reserved names cannot
+collide because codegen refuses payloads that use them (§7.1 lists the engine's own obligation). Streamer.bot's run-scope built-ins (row 3.09) map as `%actionId%`
 → `{action.id}`, `%actionName%` → `{action.name}`, `%triggerId%` → `{trigger.id}`, `%triggerName%` →
 `{trigger.type}` (triggers have no name in spec 02), `%queueName%` → `{run.queueName}` (amendment A1),
 `%actionQueuedAt%` → `{run.queuedAt}`, `%isTest%` → `{run.isTest}`, `%date%`/`%time%` → `{now | date:…}`.
 
 ### 6.5 Test and simulated events (rows 2.32–2.34)
 
-- `triggers.test { triggerId, payload? }` (tier 1) builds an event of the trigger's type from the catalog example
+- `triggers.test { triggerId, payload? }` (tier 1, scope `events:simulate`) builds an event of the trigger's type from the catalog example
   (or the given payload, validated), sets `meta.test = true`, and publishes it through the bus with an in-engine
   **target** marker, so WS subscribers and the event log see it while the matcher fires **that trigger's action
   only**, bypassing filters and precedence. The run's context is derived from the caller's synthetic run (spec 02
@@ -270,8 +292,9 @@ because codegen refuses payloads that use them. Streamer.bot's run-scope built-i
 - `events.simulate { type, payload, user?, platform? }` (tier 1, scope `events:simulate`) publishes a normal event
   with `meta.test = true` through the bus, so every matching trigger fires under the normal precedence rule, and
   other subscribers (overlays, chat) see it too. Runs started by a test event have `run.isTest = true`.
-- `core.test` is a trigger type (Streamer.bot `Core > Test`) whose `config.variables` object is copied into args;
-  firing it is `triggers.test` on that trigger.
+- `core.test` is a trigger type (Streamer.bot `Core > Test`) whose `config.variables` object is copied into args
+  (the save-time validator refuses reserved root names as keys, like *Set argument*); firing it is `triggers.test`
+  on that trigger.
 
 ### 6.6 Lifecycle and engine events as triggers (row 2.38)
 
@@ -291,8 +314,11 @@ this section defines what the engine does with them.
 On every `chat.message` (and the other `sources` a command lists) the engine evaluates enabled commands in one pass:
 
 1. Skip the command when `platforms` is non-empty and excludes the message's platform, when `ignoreBotAccount` and
-   the sender is a configured bot account, or when `ignoreInternal` and the message was sent by the engine itself
-   (`meta.causedBy` set, or the connector marks it internal).
+   the sender is a configured bot account, or when `ignoreInternal` (default `true`, Streamer.bot's default) and
+   the message is **internal**: the connector marks it as the echo of the engine's own outbound message, or
+   `meta.causedBy` is set while `meta.replay` and `meta.test` are both false. A replayed, simulated or test
+   `chat.message` is attributed to the caller's synthetic run (spec 02 rule 1) but is not internal, so commands
+   match it (§22.6).
 2. **Basic mode:** for each alias, compare per `location`: `start` → the message starts with the alias followed by
    end-of-text or whitespace; `exact` → the whole trimmed message equals the alias; `anywhere` → the alias occurs as
    a whole word anywhere. Case-insensitive unless `caseSensitive`. There is no prefix concept: `!so` is just text.
@@ -302,18 +328,28 @@ On every `chat.message` (and the other `sources` a command lists) the engine eva
    nobody (Streamer.bot's "empty Deny denies everyone" is **not** copied; the importer sets an explicit list; Q-E6).
    Users with a role in `cooldown.exemptRoles` (default `broadcaster`) bypass cooldowns, not permissions.
 4. **Cooldowns:** global and per-user windows are shared across all aliases of the command. A hit publishes
-   `commands.cooldown { commandId, user, globalLeftMs, userLeftMs }` instead of `commands.triggered` and does not
-   advance counters. Cooldown state is in memory (lost on restart; row 4.04 does not require persistence).
+   `commands.cooldown { commandId, commandName, globalLeftMs, userLeftMs }` (the envelope's `user` and
+   `platform` are the chat message's) instead of `commands.triggered` and does not advance counters. Cooldown state is in memory (lost on restart; row 4.04 does not require persistence).
 5. On success the engine increments `counter` and `userCounter` (persisted per `counters` policy, §13.2) and
    publishes **`commands.triggered`** as a **derived event** of the chat message (§5.1: same `causedBy` and
    context, no extra hop) with payload `{ commandId, commandName, alias, location, source, input:
-   Vec<String> /* whitespace-split remainder */, rawInput, message: ChatText, counter, userCounter, match }` plus the
-   envelope's `user` and `platform`; `correlationId` = the chat message id. Streamer.bot's `input0..n` and
-   `rawInputEscaped` are importer aliases over `input` (spec 02 §6.3).
+   Vec<String> /* whitespace-split remainder */, rawInput, message: ChatText, counter, userCounter, captures:
+   { groups: Vec<String?>, named: Map<String, String> } /* regex mode only; `{ groups: [], named: {} }` otherwise */ }`;
+   the envelope's `user`, `platform` and `source` are copied from the chat message and `correlationId` = the
+   chat message id. **No engine event puts a reserved run-context name (`event`, `user`, `trigger`, `action`,
+   `run`, `globals`, `plugins`, `match`, `args`, `now`, spec 02 §6.3) or the reserved filter path `platform`
+   (§6.2) at the top level of its payload**: the user and platform an event is *about* live in the envelope, and
+   regex captures are `captures`. The catalog lint (spec 02 §9.7) rejects any such field, and §22.1 has a fixture
+   per engine event type. Streamer.bot's `input0..n` and `rawInputEscaped` are importer aliases over `input`
+   (spec 02 §6.3).
 
 Several commands MAY match one message; each publishes its own event. A command's event is what actions trigger
 on: trigger type `commands.triggered` with a filter `commandId eq …` (the editor's "Command" trigger is sugar for
-that filter), so precedence and chains work like any other event.
+that filter), so precedence and chains work like any other event. **`match` seeding for command runs:** a run
+fired by a `commands.triggered` trigger has its `match` root seeded from the payload's `captures` **unless the
+winning trigger itself has a `regex` filter**, whose captures then replace them (§6.4; the trigger's own regex
+is the more specific intent). A plain `commandId eq …` trigger on a regex command therefore sees the command's
+captures as `{match[1]}` / `{match.named}` (§22.1 has the fixture).
 
 ### 7.2 Operations
 
@@ -363,8 +399,29 @@ rule of §6.3 would otherwise match every `schedule.cron` trigger on every fire)
 
 DST rules: a scheduled local time that does not exist (spring forward) is skipped; one that occurs twice (fall
 back) fires on the first occurrence only. `catchUp: true` fires at most **one** missed occurrence after a suspend or
-restart, stamped with the missed `scheduledAt`; `false` (default) skips missed occurrences. Cron has no shared
-state, so it needs no document; the trigger is the schedule.
+restart, stamped with the missed `scheduledAt`; `false` (default) skips missed occurrences. The trigger is the
+schedule (no document), but catch-up needs memory of what was already accounted for, so the engine keeps a
+**cron cursor** per trigger:
+
+- **Record.** `cron_cursors (action_id, trigger_id, schedule_key, last_scheduled_at, last_local, updated_at)`
+  in `config.db` (§13.2). `schedule_key` is the SHA-256 of `(expression, timeZone)`, so editing the schedule
+  invalidates the cursor; `last_scheduled_at` is the UTC instant of the last **accounted** occurrence (fired,
+  skipped by `catchUp: false`, or skipped as a DST duplicate) and `last_local` its wall-clock time in the
+  trigger's zone (for the fall-back rule).
+- **Advancing.** Immediately before admitting a cron fire, and before skipping an occurrence, the scheduler
+  writes the cursor through the storage thread with `durable: true` (one write per occurrence; cron fires are
+  rare) and only then admits the run. The boundary is therefore **account first, fire second**: a crash between
+  the two loses that one occurrence instead of replaying it, and no occurrence is ever fired twice across any
+  number of restarts. An occurrence is a *duplicate* when its UTC instant is ≤ `last_scheduled_at`, or when its
+  local wall time equals `last_local` on the same local date (the fall-back repeat), and is never fired.
+- **Startup and resume.** For each indexed cron trigger: no cursor, or a cursor with a different
+  `schedule_key` → the cursor is set to *now* (a never-fired or edited schedule gets no catch-up); otherwise the
+  occurrences in `(last_scheduled_at, now]` are computed: with `catchUp: true` the **latest** one is fired
+  (stamped with its `scheduledAt`, `firedAt` = now) and becomes the cursor; with `catchUp: false` the cursor
+  moves to the latest one without firing. Then the next future occurrence is scheduled as usual. Cursor rows
+  of triggers that no longer exist are deleted at index rebuild. §22.7 tests a daily schedule across two
+  restarts (fired before the first restart → not replayed; missed during the second downtime → replayed once),
+  an edit between restarts, and the fall-back hour.
 
 ## 9. Runs and the sub-action tree
 
@@ -394,18 +451,38 @@ and, from this spec, `lastError: { code, node, message } | null` (§9.10) and `q
 For every node, in order, the executor:
 
 1. skips it if `enabled: false` (a disabled node is also not a writer, spec 02 §8.8);
-2. runs the **authorization re-check** of spec 02 §8.8 rule 3 (tier and scopes against the run's context) and, for
-   a tier-3 `Op`, the plan check of rule 4(b). A failure stops the run with `PERMISSION_DENIED` or
-   `APPROVAL_REQUIRED`, regardless of the node's `onError`;
-3. takes **one snapshot** of the variable state and renders every template of the node against it, recording the
-   binding render for writers (spec 02 §8.8 "no time-of-check gap"). A snapshot is a **version pin**, not a copy:
-   globals and user variables live in persistent (structurally shared) maps swapped atomically on write (§11.4),
-   so pinning is an `Arc` clone and costs nothing per node;
-4. coerces and validates rendered params against the invocation schema (spec 02 §10.1);
-5. executes the node (§9.3–9.9) with the node's timeout;
-6. applies the node's writes to `args` (`saveAs`, `writesArgs`, `Code.setArgs`) **atomically after the node
-   returns**: a node never sees its own partial writes, and a later node sees all of them;
-7. publishes `runs.node_completed` (§12.4) and continues, or applies the error policy (§9.10).
+2. charges the run's node-execution budget (§9.13) and runs the **static authorization re-check** of spec 02
+   §8.8 rule 3: the node's catalog tier and scopes against the run's context. This check reads no variable, so
+   it can precede the snapshot. A failure stops the run with `PERMISSION_DENIED`, regardless of the node's
+   `onError`;
+3. pins **one snapshot** of the variable state and renders every template of the node against it **in one
+   pass**, producing both the execution render and the binding render (spec 02 §8.8 "no time-of-check gap");
+   for a writer, the binding render is recorded now. A snapshot is a **version pin**, not a copy: globals and
+   user variables live in persistent (structurally shared) maps swapped atomically on write (§11.4), so pinning
+   is an `Arc` clone and costs nothing per node. The pin is held until step 7;
+4. coerces and validates the execution render against the invocation schema (spec 02 §10.1);
+5. for a **tier-3 `Op`**, performs the plan check of rule 4(b) **on exactly the binding render of step 3**:
+   `bindingHash` = hash of that render with every executed writer's most recent recorded render and unexecuted
+   writers rendered against this same snapshot; it must consume one matching `PlannedCall`. The check happens
+   after the render and before the invocation, so the value that passed approval and the value the operation
+   receives come from one pin; a global changed by another run after step 3 affects neither. A failure stops the
+   run with `APPROVAL_REQUIRED` (`binding_mismatch`), regardless of `onError`;
+6. executes the node (§9.3–9.9) with the node's timeout, passing the step-4 values (never re-rendering);
+7. applies the node's writes to `args` (`saveAs`, `writesArgs`, `Code.setArgs`) **atomically after the node
+   returns**: a node never sees its own partial writes, and a later node sees all of them; the taint set (§21)
+   is extended in the same step; the snapshot pin is released;
+8. publishes `runs.node_completed` (§12.4) and continues, or applies the error policy (§9.10).
+
+These steps are the **leaf** algorithm. A container node (`Group`, `If`, `Switch`, `While`, `ForEach`, `Parallel`,
+inline `RunAction`) renders its own templates (condition, `value`, `items`, `args`) at its own snapshot in
+steps 3–4 and then executes its children through the same steps **as it goes**, so a child's writes are visible
+to the next child and to the container's next iteration; the writes a container makes itself (`ForEach`'s
+`itemVar`/`indexVar` before each iteration, `Parallel`'s merge after the join, an inline child's args copied
+back) are applied at the point §9.5–9.8 define, and step 7's "after the node returns" applies to leaves.
+
+§22.9 has the regression for the gap this order closes: a second run changes `{globals.msg}` between the
+approval and the node (mismatch, as spec 02 requires), after the node's pin and before the operation is invoked
+(no effect: the pinned value is both approved and sent), and after the operation returned (no effect).
 
 A run's args map is owned by its task; there is no lock. Parallel branches get copies (§9.6).
 
@@ -426,7 +503,7 @@ is `≤ 0` or disabled the group is a no-op with a warning). The weighted table 
 node)`. `Action.random` applies the same rule to the top-level `nodes`. `actions.set_node_weight` and
 `actions.set_node_state` (both tier 2, §15) change `weight` and `enabled` by writing the document (row 2.13, 2.39).
 
-### 9.5 `If`, `Switch`, `While`, `BreakLoop`, `ContinueLoop`, `Stop`
+### 9.5 `If`, `Switch`, `While`, `ForEach`, `BreakLoop`, `ContinueLoop`, `Stop`
 
 - **Condition evaluation.** `left` and `right` are rendered to JSON values. With `autoType: true` a string that
   parses exactly as a JSON number or boolean is compared as that type; otherwise strings compare as strings
@@ -442,21 +519,93 @@ node)`. `Action.random` applies the same rule to the top-level `nodes`. `actions
   (10,000); the hard ceiling for a per-node value is 1,000,000. Reaching the cap ends the loop, records a
   `RunWarning { code: "loop_cap" }` and continues after the loop (Q-E7 asks whether it should fail instead).
   Each iteration also yields to the runtime once, so a loop without awaits cannot starve other runs.
-- **`BreakLoop` / `ContinueLoop`** affect the innermost enclosing `While` (or `ForEach`, amendment A2) **within the
-  same action**; outside a loop they are no-ops with a warning (the editor forbids them, §18). They never cross a
-  `Parallel` boundary or a `RunAction`.
+- **`ForEach`** (amendment A2, row 2.07): `{ items: TemplateOr<Value>, itemVar: String, indexVar: Option<String>,
+  maxIterations: Option<u32>, children }`.
+  - *Collection.* `items` is rendered **once**, at the node's snapshot (§9.2 step 3), to a JSON value: an array
+    iterates its elements in array order; an object iterates `{ key, value }` pairs in **sorted key order**
+    (deterministic, independent of serialization); `null` or a missing value is zero iterations with a
+    `missing_value` warning; any other scalar fails the node with `INVALID_PARAMS` (`details.reason =
+    "not_iterable"`, `onError` applies). The rendered collection is pinned for the whole loop: writes to the
+    source variable or arg during the loop do not change what is iterated.
+  - *Variables.* `itemVar` and `indexVar` (0-based `u64`) are **ordinary run args** written by the `ForEach`
+    node before each iteration (reserved root names are refused at save time, like *Set argument*). They are
+    visible to the body, to inline children and to later nodes: after the loop they keep the last iteration's
+    values; with zero iterations the node **deletes** both names, so a value they had before the loop never
+    survives the node either way. The element is the JSON value itself, any type, so `{item.name}` and
+    `{item[0]}` work (spec 02 §6.3).
+  - *Order and nesting.* Iterations run sequentially; `BreakLoop`/`ContinueLoop` apply; a `Parallel` inside the
+    body is joined before the next iteration; the cap is `maxIterations` (default `engine.run.maxLoopIterations`,
+    ceiling 1,000,000) and behaves like `While`'s (`loop_cap` warning, continue after the loop; Q-E7 applies to
+    both). Each iteration yields to the runtime once.
+  - *Writer contract (spec 02 §8.8, amended by A2).* The `ForEach` node is a **writer** of `itemVar` and
+    `indexVar` with static names (like `ArgWrites::Named` with a literal name), so a read of `{item}` inside the
+    body binds to the collection and never makes unrelated fields dynamic. Its recorded binding render for
+    iteration *i* is `{ "$den": "foreach", "node": <NodeId>, "items": <binding render of the items template>,
+    "index": i }` (for `indexVar`, the same record with `"field": "index"`). The render of `items` follows the
+    ordinary rules: a collection read from `{globals.messages}` binds the global's value as consumed, so
+    changing that global after approval moves every planned hash in the body; a collection that is a run
+    result (`saveAs` of an `http.request`) is a `run_value` sentinel and makes the body's reads **dynamic**
+    fields, shown to the approver with the producer chain.
+  - *Planned-call multiplicity.* At plan time (dry run, approval) the engine renders `items` against the
+    plan-time context: when the render is **concrete**, the loop is expanded to `min(len, cap)` iterations and
+    each tier-3 node in the body gets one `PlannedCall` per iteration, with the `foreach` record for that index
+    in its binding render (the plan shows "*N* × `chat.send`", `N` = collection length); when it is
+    **dynamic**, the body is planned **once** (spec 02's finite-plan rule for `While`), so a second iteration
+    reaching a tier-3 node stops with `unplanned_call`, which the dry-run warnings state in advance. Execution
+    consumes the planned entries in iteration order. A read of `itemVar` **after** the loop binds to the
+    node's last recorded render: at plan time the `foreach` record with index `min(len, cap) − 1` for a
+    concrete collection (or a `missing` render for an empty one), dynamic otherwise, which is exactly what
+    execution records. §22.9 tests the changed-collection, changed-length, dynamic-collection, post-loop read
+    and session-grant cases.
+- **`BreakLoop` / `ContinueLoop`** affect the innermost enclosing `While` or `ForEach` **within the same action**;
+  outside a loop they are no-ops with a warning (the editor forbids them, §18). They never cross a `Parallel`
+  boundary or a `RunAction`.
 - **`Stop`** ends the **current action's run** as `Completed` with `stoppedBy`. Inside an inline `RunAction`
   child it ends the child; the parent continues after the `RunAction` node (Q-E5). Inside a `Parallel` branch it
   cancels the sibling branches (`cancelReason: parent`) and then ends the run.
 
 ### 9.6 `Parallel` (D-028)
 
-Every enabled branch runs as its own task, started together, each with a **copy** of the args map as of the
-`Parallel` node's snapshot. The node joins when all branches have ended. A branch's **writes** are the names it set
-or deleted (not its whole copied map); they are merged back into the parent's args **in branch order** (a later
-branch's write to the same name wins), so the result is deterministic and independent of timing. `Delay` inside a branch delays only that branch. A branch that fails under
-`onError: stop` cancels its siblings and fails the run; under `continue` the other branches finish and the run goes
-on. `Action.concurrent` is defined as `Parallel` over the top-level nodes, one node per branch (Streamer.bot's
+Every enabled branch runs as its own task, each with a **copy** of the args map as of the `Parallel` node's
+snapshot. The node joins when all branches have ended. A branch's **writes** are the names it set or deleted
+(not its whole copied map); they are merged back into the parent's args **in branch order** (a later branch's
+write to the same name wins), so the result is deterministic and independent of timing. `Delay` inside a branch
+delays only that branch. A branch that fails under `onError: stop` cancels its siblings and fails the run; under
+`continue` the other branches finish and the run goes on.
+
+**Bounded fan-out.** Branches are not free: a 20-deep chain of actions each calling the next twice through
+inline `Parallel` branches would otherwise start 2^20 tasks under a single queue slot. Every **root run** (a
+run started by admission; its inline children and every `Parallel` branch at any depth belong to it) owns a
+**task budget** of `engine.run.maxTasksPerRun` (64) permits:
+
+- a branch runs only while it holds a permit; a `Parallel` node starts branches **in branch order as permits
+  become available** (bounded scheduling: with 100 branches and 64 permits, branch 65 starts when one of the
+  first 64 ends), and the merge order stays branch order whatever the start order;
+- a task that reaches a join (a `Parallel` node awaiting its branches, a `ForEach`/`While` body awaiting a nested
+  `Parallel`) **releases its permit while it waits** and re-acquires one before continuing, with re-acquisition
+  served before new branch starts. Permits are therefore only ever held by tasks that are executing nodes, so
+  the set of permit holders always makes progress and nested fan-out cannot deadlock, however deep;
+- the root task itself needs no permit (it is the one task a run always has); inline children run in their
+  caller's task and need none either;
+- a branch waiting for a permit observes the run's cancellation token and ends `cancelled` / `parent` without
+  acquiring (§9.11);
+- the args map is a **persistent map** like the variable store (§11.4), so a branch's "copy" shares structure
+  with its parent and costs nothing until the branch writes. The **run memory budget** `engine.run.maxRunBytes`
+  (32 MiB) bounds the serialized size of the root's map plus every live branch's distinct writes; the
+  per-map limit `maxArgsBytes` (4 MiB) still applies to each map. A write that would exceed either fails the
+  node with `PAYLOAD_TOO_LARGE` (`details.reason ∈ { "args", "run_budget" }`), under the node's `onError`;
+- the **node-execution budget** `engine.run.maxNodeExecutions` (1,000,000 per root run, counted across inline
+  children, branches and loop iterations) turns an exponential fan-out into a deterministic failure:
+  exceeding it fails the run with `INVALID_STATE` (`details.reason = "node_budget"`), not a slow death.
+
+The engine-wide bound on **executing** branch tasks is therefore `maxConcurrent × maxTasksPerRun` (16,384 at the
+defaults); tasks parked at a join still exist without a permit, so the bound on *existing* tasks is that times
+the nesting depth (`maxInlineDepth` + `maxDepth`, ≤ 64 × 16,384 ≈ 1 M; a parked Tokio task costs a few hundred
+bytes plus its future, and parked branches' writes count against the run budget). Args are bounded by
+`maxConcurrent × maxRunBytes` (8 GiB theoretical at the defaults; the settings validator warns when that product
+exceeds half of physical memory). §22.4 tests the
+2^20 chain under the budget (bounded live tasks, `node_budget` failure, cancellation mid-fan-out) and a
+100-branch `Parallel` with 64 permits (all branches run, merge order preserved). `Action.concurrent` is defined as `Parallel` over the top-level nodes, one node per branch (Streamer.bot's
 "Concurrent"; unlike Streamer.bot, `Delay` is honoured per branch, and the importer drops top-level `Delay` nodes
 of imported concurrent actions to preserve behaviour). `random` takes precedence over `concurrent` when both are
 set.
@@ -481,7 +630,8 @@ spec 02 rule 2). The target must be `enabled` and not a draft, else the node fai
   reaches `engine.run.maxInlineDepth` (32) the node fails with `INVALID_STATE` `details.reason =
   "inline_depth"`; the editor lints self-recursion without a `Stop`/`If` guard.
 - **`queued`:** a new run is admitted to the **target's** queue (§10.2) with `parent` set, args seeded **only** by
-  the rendered `args` map (spec 02 §8.8), the parent's `event` envelope carried for `{event.*}` templates, and the
+  the rendered `args` map (spec 02 §8.8), the parent's `event` envelope and `user` carried for `{event.*}`,
+  `{user.*}` and `{user.vars.*}` (loaded lazily for that user, §11.3), `match` empty, and the
   parent's `AuthContext` with the parent run appended to `lineage`. The parent continues immediately; the node's
   result is `{ runId, queued: true }` or, if admission was rejected, the node fails with `INVALID_STATE`
   `details.reason = "queue_full"` (so the parent can notice). Lineage length is bounded by
@@ -556,7 +706,10 @@ persisted. A signal name is `^[A-Za-z_][A-Za-z0-9_.-]{0,63}$`.
 | Lineage length (queued chains) | 64 (`engine.run.maxLineage`) | admission refused, audited |
 | `causedBy` hops | 16 (`engine.run.maxChainHops`) | triggers do not fire, audited (§14.3) |
 | Loop iterations | 10,000 default, 1,000,000 ceiling | loop ends with warning |
-| Args map size per run | 4 MiB serialized (`engine.run.maxArgsBytes`) | node fails `PAYLOAD_TOO_LARGE` |
+| Args map size (each map: root or branch) | 4 MiB serialized (`engine.run.maxArgsBytes`) | node fails `PAYLOAD_TOO_LARGE` |
+| Run memory budget (root map + live branch writes) | 32 MiB (`engine.run.maxRunBytes`) | node fails `PAYLOAD_TOO_LARGE` (`run_budget`), §9.6 |
+| Branch tasks per root run | 64 (`engine.run.maxTasksPerRun`) | further branches wait for a permit, §9.6 |
+| Node executions per root run | 1,000,000 (`engine.run.maxNodeExecutions`) | run fails `INVALID_STATE` (`node_budget`), §9.6 |
 | Single variable value | 256 KiB (`engine.variables.maxValueBytes`) | write fails `PAYLOAD_TOO_LARGE` |
 | Concurrent running runs, whole engine | 256 (`engine.run.maxConcurrent`) | further dispatches wait, FIFO across queues |
 
@@ -593,7 +746,12 @@ Admission runs synchronously in the matcher or the calling operation, under the 
    - `reject_new`: the new run is recorded as `Rejected` with `RunError { code: "INVALID_STATE", details: {
      reason: "queue_full" } }`, `queues.run_rejected` is published, and the caller (if any) gets `INVALID_STATE`.
    - `drop_oldest`: the **oldest waiting run** (regardless of `alwaysRun`: overflow is about capacity, not pause) is
-     recorded as `Dropped`, `queues.run_dropped` is published, and the new run is appended.
+     recorded as `Dropped`, `queues.run_dropped` is published, and the new run is appended. **Zero capacity:**
+     when evicting cannot make room (the effective `maxPending` is 0, so `waiting` is empty and full at once),
+     there is nothing to drop and the new run is treated as `reject_new` (`Rejected`, `queue_full`,
+     `details.overflow = "drop_oldest"`), never appended past the bound. `queues.create/update` refuse the
+     explicit combination `maxPending: 0` + `overflow: drop_oldest` with `INVALID_PARAMS` ("use `reject_new`");
+     the runtime rule still covers `maxPending: None` under `engine.queue.defaultMaxPending = 0`.
 4. The run is appended to `waiting` with `queuedAt = now`; `runs.queued` is published.
 
 Rejected and dropped runs appear in history (unless `history.record` is false) so a storm is visible afterwards.
@@ -644,12 +802,31 @@ state.
 
 ### 10.8 Shutdown
 
-On `system.stopping`: admission is closed (new runs are `Rejected` with `details.reason = "shutting_down"`),
-every waiting run is `cancelled` / `shutdown`, running runs get `engine.shutdown.graceMs` (5,000) to finish, then
-are cancelled cooperatively, then the runtime is torn down. Pending runs are **not** persisted and **not** resumed on
-the next start (Q-E1): replaying yesterday's alerts after an update is the surprising behaviour, and durable queues
-are a later feature if the owner wants them. Temp globals are discarded (spec 02 §6.3). History records are flushed
-before exit.
+`system.stopping` is both an ordinary trigger type (§6.6: "run my cleanup action when the app quits") and the
+signal that ends admission, so the sequence is phased to let the first happen before the second:
+
+1. **Close and fire, atomically.** The shutdown driver hands `system.stopping { reason, graceMs }` to the
+   dispatcher as one unit: the matcher computes its fire set under the normal precedence rule; then, under the
+   scheduler lock, **every waiting run is cancelled** (`cancelled` / `shutdown`), the fire set is admitted
+   (§10.2) with `alwaysRun` semantics (it bypasses a paused queue; on a busy blocking queue it waits behind the
+   running run), and **admission is closed**. Direct calls that arrive afterwards (`actions.run`, `runs.replay`,
+   a queued `RunAction`) are `Rejected` with `details.reason = "shutting_down"`; later events are still
+   delivered to subscribers but fire no triggers (one audit row `shutdown_unmatched { count }` at exit). A
+   second `system.stopping` during shutdown fires nothing.
+2. **Grace.** Running runs, including the shutdown fire set, get `engine.shutdown.graceMs` (5,000, from step 1)
+   to finish; a shutdown-fired run that is still waiting on a busy blocking queue when the grace ends is
+   cancelled like any other (`shutdown`; §22.3 covers the idle and the busy blocking queue, and the paused
+   queue). Then every remaining run is cancelled cooperatively and the executor waits for the futures to drop
+   (§10.4).
+3. **Final flush, then the marker.** The storage thread flushes the variable write-behind buffer and the
+   history records, runs `wal_checkpoint(TRUNCATE)` on both files, and **only after every flush succeeded**
+   writes `meta.clean_shutdown = true` as the last statement before closing (startup set it to `false`, §13.5).
+   A flush failure leaves it `false`, so the next start reports `system.crash_recovered` with `reason:
+   "flush_failed"` rather than pretending the exit was clean.
+
+Pending runs are **not** persisted and **not** resumed on the next start (Q-E1): replaying yesterday's alerts
+after an update is the surprising behaviour, and durable queues are a later feature if the owner wants them.
+Temp globals are discarded (spec 02 §6.3).
 
 ### 10.9 SAMMI button semantics (row 2.17, P5)
 
@@ -674,11 +851,20 @@ presets.
 A name is either persisted or temp; setting an existing name with the other `persisted` flag **moves** it (the old
 entry is deleted) rather than creating a second variable with the same name. Streamer.bot keeps two stores and
 lets both hold `deaths`; one namespace is chosen because `{globals.deaths}` must mean one thing in a template. The
-importer renames a colliding temp global to `deaths_temp` and reports it.
+importer renames a colliding temp global to `deaths_temp` and reports it. Spec 02 §6.3 writes the global key as
+"name + `persisted`"; this spec narrows it to **`name` unique across both stores, `persisted` an attribute of
+the entry**, which is a stricter invariant over the same wire shape (every `variables.*` call still carries
+`persisted`). Amendment A11 asks spec 02 to state the invariant so the contract and the engine do not drift.
+
+Every stored entry is `{ value, persisted, untrusted, updatedAt, updatedBy }`. **`untrusted`** is the
+provenance flag of §21: it is set by the write rule there, stored (§13.2), returned by `variables.get` and
+`variables.list`, carried in the `variables.*_updated` events and in exports (§13.4), and consulted by every
+template read (§11.3). It is never an input a client can clear while keeping a tainted value: a write replaces
+both the value and the flag together.
 
 ### 11.2 Operations
 
-`variables.get { scope: global | user, name, platform?, userId? }` (tier 0; `{ value, updatedAt, updatedBy }` or
+`variables.get { scope: global | user, name, platform?, userId? }` (tier 0; `{ value, persisted, untrusted, updatedAt, updatedBy }` or
 `NOT_FOUND`), `variables.list { scope, persisted?, prefix?, platform?, userId? }` (tier 0, paged),
 `variables.set { scope, name, value, persisted, mode: set | increment | decrement | default, durable?: bool,
 platform?, userId? }`
@@ -686,15 +872,22 @@ platform?, userId? }`
 if the variable does not exist; returns `{ value, created }`), `variables.delete` (tier 1), `variables.clear_temp {
 scope }` (tier 1; Streamer.bot "Clear Non-Persisted (User) Globals"), `variables.set_arg { name, value }` (tier 1,
 sub-action only, `writesArgs: Named { nameParam: "name" }`, refuses reserved roots). All writes publish
-`variables.global_updated` / `variables.user_updated` with `{ name, old, new, persisted, updatedBy, platform?,
-user? }`; `old: null` means created, `new: null` means deleted (rows 3.16; `variables.user_updated` is
-`highVolume`).
+`variables.global_updated` / `variables.user_updated` with payload `{ name, old, new, persisted, untrusted,
+updatedBy }`; `old: null` means created, `new: null` means deleted (rows 3.16; `variables.user_updated` is
+`highVolume`). For `variables.user_updated` the **envelope's** `platform` and `user` are the variable's user
+(the event is about that user), never payload keys (§7.1 reserved-name rule). `variables.get` and
+`variables.list` results carry `untrusted` next to `value`, and their `value` is catalogued `x-den-untrusted:
+conditional` (A10): MCP wraps it as `{ untrusted: true, source: "variable:<scope>:<name>", text }` (non-string
+values as canonical JSON text) exactly when the stored flag is set, so an AI client never reads chat-derived
+text as configuration, while an untainted scene name stays a plain value.
 
 ### 11.3 Reads in templates
 
 `{globals.x}` and `{user.vars.x}` read the node's snapshot (§9.2). A missing variable is a missing value (empty
 string in text, `not_exists` true). User variables for the event's user are loaded once per run on first use; the
-`user` root of a run whose event has no `user` has no `vars`.
+`user` root of a run whose event has no `user` has no `vars`. A read of an entry whose `untrusted` flag is set
+is a read of a **tainted source** (§21): the arg a writer produces from it joins the run's taint set, and a
+tier-3 param rendered from it is listed in `untrustedFields`.
 
 ### 11.4 Storage behaviour
 
@@ -707,6 +900,8 @@ persisted writes; `durable: true` waits for the flush and the WAL commit, which 
 an app crash but may lose the last transactions on **power loss** (the §22.5 test covers the former). The value
 limit is 256 KiB; the number of variables is unbounded but the viewer pages. `updatedBy` is server-assigned from
 the writing context as `UpdatedBy` (amendment A7): `user`, `imported`, `mcp`, `plugin { pluginId }` or `system`.
+`untrusted` is written in the same row as the value (§13.2), so a crash cannot persist a tainted value without
+its flag.
 
 ### 11.5 Counters
 
@@ -725,7 +920,9 @@ map when the run ended. Both are stored as JSON with `x-secret` fields redacted 
 `engine.history.maxSnapshotBytes` (256 KiB) with a `truncated: true` marker. The firing **event envelope is
 copied into the run record** (`eventSnapshot`, redacted, counted against the same budget), because the event log
 (§12.5) is pruned sooner than history and never holds `highVolume` events (a run fired by
-`variables.user_updated` must still be inspectable and replayable). `untrustedArgs` (§21) is stored alongside. `history.pending: false` hides the run from `runs.list { state: queued |
+`variables.user_updated` must still be inspectable and replayable). Each snapshot stores its own taint set
+(`untrustedArgsQueued`, `untrustedArgsAfter`, §21): a run that overwrites a tainted arg with a literal ends
+clean, but its queued snapshot still holds the viewer text and must say so. `history.pending: false` hides the run from `runs.list { state: queued |
 running }` (the Pending view, row 2.20) but does not stop recording.
 
 ### 12.2 Retention
@@ -741,8 +938,10 @@ History survives restarts. `runs.clear_history` (tier 1) deletes everything.
 `runs.replay { runId, snapshot: queued | after /* default queued */, args?: Map }` (tier 1 in the catalog;
 effective tier = the action's, so it joins spec 02's dynamic-tier set, amendment A8) admits a new run of the **current** revision of the same action into its queue,
 seeded with the chosen snapshot overlaid by `args`, with the run's `eventSnapshot` carried as `event` and
-`meta.replay = true`, `replayOf` set, `trigger` copied for `{trigger.*}` templates, and the **caller's** `AuthContext` (never
-the original run's). Events the replay emits are caused by the new run. A replay of a run whose action no longer
+`meta.replay = true`, `replayOf` set, `trigger` copied for `{trigger.*}` templates, the taint set re-seeded from
+the **chosen snapshot's** stored set (`untrustedArgsQueued` or `untrustedArgsAfter`, §21; names supplied in
+`args` are tainted when their value came from a tainted source of the caller, clean for literals), and the
+**caller's** `AuthContext` (never the original run's). Events the replay emits are caused by the new run. A replay of a run whose action no longer
 exists fails `NOT_FOUND`. Spec 02's `dryRun` works on `runs.replay` like on `actions.run`.
 
 ### 12.4 Trace events (row 2.23)
@@ -757,10 +956,17 @@ runId, trace: true }`; they are not persisted.
 
 ### 12.5 Event log
 
-Every non-`highVolume` event is appended to the `events` table (§13.2) and pruned, write-triggered like history, to
-`engine.events.maxAgeHours` (24) and `engine.events.maxCount` (50,000). This is the "replay a logged event" source (row 2.22):
-`events.replay { eventId }` (tier 1, scope `events:simulate`) re-publishes the stored event with a new id,
-`meta.replay = true`, under the caller's context (spec 02 rule 1), through normal precedence. Chat messages are in
+Every non-`highVolume` event is appended to the `events` table (§13.2) as its **complete envelope** (`id`,
+`type`, `ts`, `source`, `platform`, the full `UserRef` with roles and badges, `payload`, `meta` including
+`payloadVersion`), redacted of `x-secret` fields only, and pruned, write-triggered like history, to
+`engine.events.maxAgeHours` (24) and `engine.events.maxCount` (50,000). This is the "replay a logged event"
+source (row 2.22): `events.replay { eventId }` (tier 1, scope `events:simulate`) re-publishes the **stored
+envelope** with a new id, `meta.replay = true`, under the caller's context (spec 02 rule 1), through normal
+precedence. Filters on `user.roles`, command permissions and `{user.displayName}` templates therefore see the
+user **as they were**, never a current user record, and a stored `payloadVersion` older than the catalog's is
+converted through a registered **upgrade** function `(type, from, to)` (A13: spec 02 §5.2 registers only
+downgrades today) or, when none exists, the call fails `INVALID_STATE` (`details.reason = "payload_version"`). §22.6 replays a chat event after a restart with a role
+filter and no Action History record. Chat messages are in
 this log; Q-H1's answer on chat retention bounds `maxAgeHours` for `chat.*` types (spec 08 may prune them
 earlier).
 
@@ -773,8 +979,8 @@ earlier).
   and would make the engine's hot path depend on compile-time query checking. All access goes through the storage
   thread (§4.2); the API is a typed command enum, never raw SQL from other modules.
 - Two files in the data directory (§19): **`config.db`** (documents, variables, counters, migrations, meta) and
-  **`history.db`** (runs, snapshots, events, audit). History churns and is pruned; config is small, backed up before
-  migrations and exported as JSON. Pragmas on both: `journal_mode=WAL`, `synchronous=NORMAL`, `foreign_keys=ON`,
+  **`history.db`** (runs, snapshots, events, audit). History churns and is pruned; config is small, backed up
+  (§13.6) before migrations and exported as JSON. Pragmas on both: `journal_mode=WAL`, `synchronous=NORMAL`, `foreign_keys=ON`,
   `busy_timeout=5000`, `journal_size_limit=67108864`, `temp_store=MEMORY`; `wal_checkpoint(TRUNCATE)` after a
   migration and at clean shutdown.
 - The storage command channel is bounded (4,096). Document, variable, counter and audit writes **await** when it is
@@ -807,11 +1013,13 @@ CREATE UNIQUE INDEX documents_command_name ON documents (name_key) WHERE kind = 
 CREATE INDEX documents_kind_updated ON documents (kind, updated_at);
 CREATE TABLE globals (
   name TEXT PRIMARY KEY, value TEXT NOT NULL CHECK (json_valid(value)),
+  untrusted INTEGER NOT NULL DEFAULT 0,                 -- provenance flag, §21; written with the value
   updated_at TEXT NOT NULL, updated_by TEXT NOT NULL
 );                                  -- persisted globals only; temp globals never touch disk
 CREATE TABLE user_vars (
   platform TEXT NOT NULL, user_id TEXT NOT NULL, name TEXT NOT NULL,
-  value TEXT NOT NULL CHECK (json_valid(value)), updated_at TEXT NOT NULL, updated_by TEXT NOT NULL,
+  value TEXT NOT NULL CHECK (json_valid(value)), untrusted INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL, updated_by TEXT NOT NULL,
   PRIMARY KEY (platform, user_id, name)
 );
 CREATE INDEX user_vars_name ON user_vars (name);
@@ -820,6 +1028,11 @@ CREATE TABLE counters (
   owner_id TEXT NOT NULL, key TEXT NOT NULL,          -- key: '' for the global counter, 'u:<platform>:<userId>' per user
   value INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL,
   PRIMARY KEY (owner_kind, owner_id, key)
+);
+CREATE TABLE cron_cursors (                              -- §8.3: last accounted occurrence per cron trigger
+  action_id TEXT NOT NULL, trigger_id TEXT NOT NULL, schedule_key TEXT NOT NULL,
+  last_scheduled_at TEXT NOT NULL, last_local TEXT NOT NULL, updated_at TEXT NOT NULL,
+  PRIMARY KEY (action_id, trigger_id)
 );
 CREATE TABLE migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL, app_version TEXT NOT NULL);
 
@@ -836,16 +1049,17 @@ CREATE TABLE runs (
   args_queued TEXT CHECK (args_queued IS NULL OR json_valid(args_queued)),
   args_after  TEXT CHECK (args_after  IS NULL OR json_valid(args_after)),
   event_snapshot TEXT CHECK (event_snapshot IS NULL OR json_valid(event_snapshot)),
-  untrusted_args TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(untrusted_args))
+  untrusted_args_queued TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(untrusted_args_queued)),
+  untrusted_args_after  TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(untrusted_args_after))
 );
 CREATE INDEX runs_queued_at ON runs (queued_at);
 CREATE INDEX runs_action    ON runs (action_id, queued_at);
 CREATE INDEX runs_state     ON runs (state, queued_at);
 CREATE INDEX runs_parent    ON runs (parent_id);
 CREATE TABLE events (
-  id TEXT PRIMARY KEY, type TEXT NOT NULL, ts TEXT NOT NULL, platform TEXT, user_id TEXT,
-  source TEXT NOT NULL CHECK (json_valid(source)), payload TEXT NOT NULL CHECK (json_valid(payload)),
-  meta TEXT NOT NULL CHECK (json_valid(meta))
+  id TEXT PRIMARY KEY, type TEXT NOT NULL, ts TEXT NOT NULL, platform TEXT, user_id TEXT,   -- denormalized for indexes
+  payload_version INTEGER NOT NULL,
+  envelope TEXT NOT NULL CHECK (json_valid(envelope))   -- the complete redacted Event (§12.5): source, user (full UserRef), payload, meta
 );
 CREATE INDEX events_type_ts ON events (type, ts);
 CREATE INDEX events_ts      ON events (ts);
@@ -865,8 +1079,9 @@ Settings are one document (`kind = 'settings'`, fixed id) validated against the 
 - Two version numbers: the **database schema version** in `meta.schema_version` (DDL steps in Rust, applied in one
   transaction each, recorded in `migrations`) and the **per-kind document `schemaVersion`** of spec 02 §7.3,
   migrated lazily on load and rewritten on the next write of that document.
-- Before a DDL step runs, the storage thread copies `config.db` to `backups/config-<schema>-<ts>.db` (spec 02
-  §7.3); the last 5 backups are kept. `history.db` is not backed up (it is a cache of the past; a failed migration
+- Before a DDL step runs, the storage thread takes a backup of `config.db` as `backups/config-<schema>-<ts>.db`
+  with the §13.6 procedure (never a file copy; spec 02 §7.3); the last 5 pre-migration backups are kept. The
+  migration starts only after the backup has been verified. `history.db` is not backed up (it is a cache of the past; a failed migration
   deletes and recreates it with a warning).
 - A database with a **newer** schema version than the app opens read-only with `system.storage_readonly { reason:
   "newer_schema" }` and the UI shows the downgrade message; nothing is rewritten.
@@ -874,30 +1089,53 @@ Settings are one document (`kind = 'settings'`, fixed id) validated against the 
 ### 13.4 Export and import
 
 `system.export { kinds?, ids? }` (tier 0) writes a JSON bundle `{ kind: "export", schemaVersion, exportedAt, app:
-{ version }, documents: [...wrapped documents], globals?: [...] }` with secrets redacted, human-readable
+{ version }, documents: [...wrapped documents], globals?: [{ name, value, persisted, untrusted, updatedAt }] }`
+with secrets redacted (the `untrusted` flag travels with every value, §21), human-readable
 (pretty-printed, sorted keys; row 20.13), to a temporary file and returns `{ exportId, bytes, documents }`; the
 bundle is downloaded over REST (`/api/v1/exports/<id>`, spec 06) because 1,000 actions exceed spec 02's 1 MiB
 message default. The UI saves it where the user chooses (spec 07). `system.import { bundle, mode:
 merge | replace_by_id }` (tier 2, draft-first under MCP) validates every document strictly, runs document
-migrations, keeps ids (so re-importing updates in place), bumps revisions, and returns an import report. Spec 15
+migrations, keeps ids (so re-importing updates in place), bumps revisions, imports a `globals[]` entry without an
+`untrusted` flag as `untrusted: true` (§21), and returns an import report. Spec 15
 converts Streamer.bot and SAMMI formats into this bundle; the engine never parses those formats.
 
 ### 13.5 Startup
 
-1. Open `config.db`, run DDL migrations (with backup), load all documents, migrate document versions, validate;
-   an invalid document is loaded as **disabled** with a `system.document_invalid` event rather than refusing to
-   start (one broken action must not take the app down).
-2. Load persisted globals into memory; load the queue index, the trigger index, timers and cron schedules.
-3. Open `history.db` (recreate if corrupt); write `meta.clean_shutdown = false`.
-4. Publish `system.started` (and `system.crash_recovered` first if the previous `clean_shutdown` was `false`).
-   Budget: §20.
+1. Open `config.db`, read `meta.clean_shutdown`, then write it to `false` **before anything else** (it is set
+   back to `true` only by the last statement of a successful final flush, §10.8 step 3, so a crash during
+   migration is reported too). Run DDL migrations (with backup, §13.3), load all documents, migrate document
+   versions, validate; an invalid document is loaded as **disabled** with a `system.document_invalid` event
+   rather than refusing to start (one broken action must not take the app down).
+2. Load persisted globals into memory; load the queue index, the trigger index, timers and cron schedules;
+   restore the cron cursors (§8.3).
+3. Open `history.db` (recreate if corrupt).
+4. Publish `system.started` (and `system.crash_recovered { previousShutdownClean: false, reason }` first if the
+   value read in step 1 was `false`). Budget: §20.
 
 ### 13.6 Backups and corruption
 
-Besides pre-migration backups, `engine.storage.dailyBackup` (default on) copies `config.db` to `backups/` on the
-first write after 24 h have passed since the last backup (checked on writes, not by a timer), keeping 7. The engine never writes to a cloud location (Q-C5 is the owner's). `PRAGMA quick_check` runs
-at startup; a failing `config.db` is moved aside and the newest backup is offered through the UI
-(`system.storage_corrupt`).
+**A backup is never a file copy.** With `journal_mode=WAL` committed rows can live only in `config.db-wal` until
+the next checkpoint, so copying `config.db` silently loses them (the r1 review reproduced it: source 1 row,
+copy 0 rows). The storage thread produces every backup, pre-migration (§13.3) and daily, by the same procedure:
+
+1. `VACUUM INTO '<backups>/.<name>.tmp'` on its own connection: SQLite writes a transactionally consistent
+   snapshot of the committed state, WAL included, into a fresh, compacted file, without blocking readers.
+   `sqlite3_backup` (rusqlite `Backup`) from the same connection to the temp file is the permitted
+   equivalent; both are serialized on the storage thread, so no write interleaves.
+2. **Verify** the temp file: open it read-only, `PRAGMA integrity_check` must return `ok`, `meta.schema_version`
+   must equal the source's, and the row counts of `documents` and `globals` must equal the source's as of the
+   snapshot.
+3. `fsync` the temp file, rename it atomically to its final name, `fsync` the directory. A failed step deletes
+   the temp file and publishes `system.storage_backup_failed { reason }`; a pre-migration backup failure
+   aborts the migration (§13.3).
+
+`engine.storage.dailyBackup` (default on) runs the procedure on the first write after 24 h have passed since
+the last backup (checked on writes, not by a timer), keeping 7. Restoring (spec 07 UI, engine stopped) copies the
+backup over `config.db` **after deleting any stale `config.db-wal` and `config.db-shm`**, so the restored file is
+not paired with a WAL from the broken database. The engine never writes to a cloud location (Q-C5 is the
+owner's). `PRAGMA quick_check` runs at startup; a failing `config.db` is moved aside and the newest backup is
+offered through the UI (`system.storage_corrupt`). §22.8 repeats the review's reproduction as a positive test:
+commit with auto-checkpoint disabled, back up, open the backup, the row is there.
 
 ## 14. Authorization, attribution and loop protection
 
@@ -925,7 +1163,9 @@ the run's context per rule 5 (`maxTier`, `scopes`, `approvals = []`, `lineage`, 
   the event is delivered to subscribers, no trigger fires, `chain_hop_limit` is audited once per origin run, and
   the UI shows a notice naming the origin action. Every principal is subject to it, user tokens included: a
   self-triggering loop (A sets a global, a trigger on `variables.global_updated` runs A) stops after 16 hops.
-- **Inline recursion** is refused at depth 32 or on a cycle (§9.8); **queued lineage** is refused at 64 (§9.8).
+- **Inline recursion** is refused by depth only, at `maxInlineDepth` (32), never by cycle detection (§9.8: a cycle
+  is legal content and a guarded loop is a supported pattern); **queued lineage** is refused at 64 (§9.8); the
+  **node-execution budget** (§9.6) bounds the total work of any recursion or fan-out.
 - **Storm guard:** when one trigger fires more than `engine.run.stormThreshold` (200) runs within 10 s from
   caused events (`hops ≥ 1`), the engine publishes `system.trigger_storm { triggerId, actionId, count }` once per
   minute; it does not disable anything by itself (the user decides; spec 07 offers "disable this trigger").
@@ -966,25 +1206,34 @@ All are catalog operations (spec 02 §8.1) with the usual generated `dryRun`; ti
 | `system.export`, `system.import`, `system.audit`, `system.reset_state` | 0 / 2 / 0 / 1 | ✓ / — / export, audit | `reset_state` clears temp globals, cooldowns, signals and publishes `system.reset` |
 
 Events: `system.started`, `system.stopping`, `system.crash_recovered`, `system.reset`, `system.events_dropped`,
-`system.trigger_storm`, `system.document_invalid`, `system.storage_readonly`, `system.storage_corrupt`,
+`system.subscriber_stalled`, `system.trigger_storm`, `system.document_invalid`, `system.storage_readonly`,
+`system.storage_corrupt`, `system.storage_backlog`, `system.storage_backup_failed`,
 `runs.queued/started/node_started/node_completed/completed`, `queues.changed/run_rejected/run_dropped`,
 `variables.global_updated/user_updated`, `commands.triggered/cooldown`, `schedule.timer_fired`, `schedule.cron`,
-`core.test`, `core.custom`.
+`core.test`, `core.custom`. None of them carries a reserved run-context name or `platform` at the top level of
+its payload (§7.1).
 
 **User-defined events (row 2.36).** `events.emit` publishes **`core.custom { name /* ^[A-Za-z_][A-Za-z0-9_.-]{0,63}$
 */, data }`** through the bus like any event: `causedBy` is the emitting run (or synthetic run), so chains and the
-hop limit apply, and `data`'s top-level fields seed args. Actions listen with trigger type `core.custom` and filter
+hop limit apply, and the payload's top-level fields `name` and `data` seed args as for every event (spec 02
+§6.3), so templates read `{data.points}`; `data` keys are free-form and never collide with reserved roots. The
+importer maps Streamer.bot custom-event arguments to `{data.*}`. Actions listen with trigger type `core.custom` and filter
 `name eq …` (the editor's "Custom event" trigger; `name` has catalog specificity 4 so a named trigger beats a
 catch-all). Scripts call it through spec 04's facade; Streamer.bot `TriggerCodeEvent`/`Trigger Custom Event`
-import to it. There is no registration step: a trigger on an unknown name simply never fires. `runs.node_*` and `variables.user_updated` are `highVolume`; `system.stopping` and
-`system.storage_*` are `critical`.
+import to it. There is no registration step: a trigger on an unknown name simply never fires. `runs.node_*` and
+`variables.user_updated` are `highVolume`; `system.stopping`, `system.subscriber_stalled` and `system.storage_*`
+are `critical`.
 
 ## 16. Settings (document `kind: settings`, schema-generated form)
 
 | Key | Default | Range | Used in |
 |---|---|---|---|
 | `engine.bus.capacity` / `internalCapacity` | 8192 / 16384 | 256–65536 | §5.1, §5.3 |
+| `engine.bus.subscriberCapacity` / `criticalLane` / `subscriberStallMs` | 4096 / 64 / 5000 | 64–65536 / 8–1024 / 1000–60000 | §5.3 |
 | `engine.run.maxConcurrent` | 256 | 1–4096 | §9.13 |
+| `engine.run.maxTasksPerRun` | 64 | 1–1024 | §9.6 |
+| `engine.run.maxRunBytes` | 33554432 | 1048576–1073741824 | §9.6 |
+| `engine.run.maxNodeExecutions` | 1000000 | 1000–100000000 | §9.6 |
 | `engine.run.opTimeoutMs` | 30000 | 1000–600000 | §9.3 |
 | `engine.run.codeTimeoutMs` | 5000 | 100–600000 | §9.9 (spec 04 may cap lower) |
 | `engine.run.maxLoopIterations` | 10000 | 1–1000000 | §9.5 |
@@ -1005,7 +1254,8 @@ import to it. There is no registration step: a trigger on an unknown name simply
 | `engine.action.maxNodes` / `maxDepth` | 2000 / 32 | | §9.13 |
 
 Changing a setting is a tier-2 configuration write (`settings.update`, draft-first under MCP). Every setting is
-hot-applied except `engine.bus.capacity` and `internalCapacity` (restart).
+hot-applied except `engine.bus.capacity`, `internalCapacity` and `subscriberCapacity` (restart). The settings
+validator warns when `engine.run.maxConcurrent × maxRunBytes` exceeds half of physical memory (§9.6).
 
 ## 17. UI flows (engine-visible parts; spec 07 owns the screens)
 
@@ -1081,13 +1331,45 @@ and requires:
   re-checked; approvals bound to the plan; synthetic runs for direct calls; `chain_context_lost` fail-closed.
 - Variables and args are **data**: a template cannot execute anything, and `Code` nodes receive values, not
   templates.
-- **Untrusted-text taint.** Each run keeps a set of tainted arg names, seeded with the payload fields the catalog
-  marks `x-den-untrusted` and extended whenever a writer's template or `saveAs` source references a tainted name
-  (the same syntactic reference check as spec 02's dynamic fields; `Code.setArgs` taints every name it writes).
-  The set is stored with both history snapshots (`untrustedArgs`) and returned by `runs.get`, so MCP and the AI
-  layer wrap those values and an approval request never shows tainted text as if it were configuration (spec 02
-  §16). Globals written from tainted args are **not** tracked beyond the run (fail-open, documented: wrap chat
-  text before storing it, or keep it in args).
+- **Untrusted-text provenance.** Spec 02 §16 requires `x-den-untrusted` text to stay wrapped for AI consumers and
+  never to satisfy an approval; the engine carries that provenance through everything it stores, so the boundary
+  does not depend on authors remembering to wrap chat text:
+  - **Tainted sources of a run:** the `event` and `user` root paths the catalog marks `x-den-untrusted` (chat
+    text, display names, titles…), the args seeded from them, the `match` root whenever its captures come from
+    a regex over an untrusted field (a chat-text trigger filter, a regex command's `captures`, a `Condition`
+    regex whose `left` is tainted), every stored variable whose `untrusted` flag is set (§11.1), and every arg
+    the rules below taint. Each run keeps its set of tainted arg names; history stores it per snapshot (§12.1).
+  - **Propagation inside a run:** an arg is tainted when its writer's source references a tainted source (the
+    same syntactic reference check as spec 02's dynamic fields, through `writesArgs`, `saveAs`, `RunAction.args`
+    seeds, `ForEach` collections and `Code.setArgs`, which taints every name it writes). A signal carries the
+    taint of each of its `args` from the sending run (or taints all of them when the sender is a `Plugin`
+    principal), and `signals.wait { overwrite }` applies it to the names it writes. Untainting is impossible by
+    assignment: only a literal or a trusted source produces a clean arg.
+  - **Propagation into variables:** `variables.set` (sub-action, `Code` facade, or any direct call) writes
+    `untrusted = true` when its value references a tainted source, when the writing `Code` node's run has any
+    tainted arg, when the caller's principal is `Plugin` (plugin outputs are untrusted text, spec 02 §3), or
+    when the context's origin principal is `Mcp`: `variables.set` is tier 1, not draft-first, and an MCP client
+    that has just read a wrapped chat value could otherwise write it back as a trusted literal, which the engine
+    cannot tell from genuine AI-authored configuration. The flag is `false` only for a literal value written
+    under a `Token` or `System` origin (the user's own content; the variable viewer shows the flag, and a
+    user-token rewrite is how an AI-written value becomes trusted). `increment`/`decrement` keep the existing
+    flag; `default` on a missing entry follows the write rule. The flag is stored in the same row (§13.2), survives restart, travels
+    in `variables.*_updated`, `variables.get/list` and the export bundle, and a foreign import (spec 15) that
+    carries no flag imports every variable as `untrusted: true` (unknown provenance is untrusted; the user
+    re-writes a value to clear it).
+  - **Reads:** a template read of a tainted variable is a tainted source (§11.3); `variables.get/list` return
+    the flag and MCP wraps the value (§11.2); `runs.get` returns both snapshots' taint sets and replay re-seeds
+    from the chosen one (§12.3).
+  - **Plans and approvals:** every dry-run `PlanStep` and `PlannedCall` lists `untrustedFields` (A10), the param
+    paths whose render references a tainted source, computed by the same syntactic rule as `dynamicFields`, so
+    an approval request renders those values inside the untrusted wrapper and the AI layer (D-030) never sees
+    viewer text as configuration. The binding hash still covers the value: untrusted text does not bypass
+    binding, it is only never presented as trusted.
+  - §22.9 covers chat → `variables.set` → restart → `variables.get` over MCP (wrapped), a later run's
+    `chat.send { message: {globals.last} }` dry run (`untrustedFields: ["message"]`) and approval request, an
+    `increment` on a tainted counter (flag kept), an MCP-origin literal write (flag set), a literal user-token
+    write clearing the flag, a replay of the queued snapshot of a run that overwrote the chat text with a literal
+    (`untrustedFields` still lists the field), and a `{match[1]}` from a regex command in a tier-3 param.
 - `x-secret` values are redacted from snapshots, trace events, exports and the event log before they leave the
   operation that produced them.
 - The storage files are created `0600` on Unix; the data directory is created `0700` (Windows: per-user ACL, §19).
@@ -1105,7 +1387,11 @@ and requires:
    draft actions never fire; `<slug>.unknown` with `upstreamType` filter; regex captures land in `match` for the
    winning trigger only; `events.simulate` honours precedence while `triggers.test` bypasses it; dominance: a
    `user.roles` trigger and an `amount` trigger both fire on one cheer, while a filterless trigger is suppressed;
-   two cron triggers with different expressions never fire each other; `core.custom` named vs catch-all.
+   two cron triggers with different expressions never fire each other; `core.custom` named vs catch-all;
+   **reserved payload keys:** a fixture per engine event type asserts no reserved run-context name or `platform`
+   at the payload top level, and the catalog lint rejects a synthetic event that has one; **command captures:** a
+   regex command fired by a `commandId eq` trigger seeds `match` from `captures`, a trigger with its own `regex`
+   filter replaces them, a basic-mode command seeds an empty `match`.
 2. **Filter operator table tests:** every `FilterOp` against every JSON type, missing fields, `between` bounds,
    number normalization, case rules.
 3. **Scheduler proptests** (`proptest`, paused Tokio clock): random workloads of ≤ 64 runs with random durations,
@@ -1115,31 +1401,72 @@ and requires:
    every run reaches exactly one terminal state. Plus the B-1 regressions: shutdown with 20,000 waiting runs
    (no stack growth), cancellation of a running run in a blocking queue on a 4-thread runtime (no overlap; slot
    released only after the future is dropped), a panicking run frees its slot, always-run on a paused and full
-   queue starts.
+   queue starts; **zero capacity:** `maxPending: 0` with `drop_oldest` (via `defaultMaxPending = 0`) rejects the
+   incoming run and never exceeds the bound, and the explicit combination is refused at save; **shutdown
+   phase:** a `system.stopping` trigger's action runs to completion on an idle queue, on a paused queue, and on a
+   busy blocking queue when the running run finishes within the grace, is cancelled `shutdown` when it does not,
+   waiting runs are cancelled before the fire set is admitted, a direct `actions.run` after step 1 is
+   `shutting_down`, and `clean_shutdown` is `true` only after a successful flush (a flush fault leaves `false`
+   and the next start reports `flush_failed`).
 4. **Executor semantics:** each node kind; `autoType` and `ignoreCase` matrices; `Switch` default; loop cap with
    warning; `BreakLoop` outside a loop; `Stop` in child, in branch, at top level; `Parallel` deterministic merge
    and sibling cancellation; inline arg flow in and back; queued child seeding and `queue_full` failure; recursion
    and lineage limits; `Code` `ok: false` vs exception; `onError` stop vs continue and `run.lastError`; missing
-   value warnings; args size limit.
+   value warnings; args size limit; **`ForEach`:** array, object (sorted keys), `null`, scalar failure, cap
+   warning, `Break`/`Continue`, variables after the loop, pinned collection under concurrent writes; **bounded
+   fan-out:** a 20-deep chain of actions each with two inline `Parallel` branches calling the next never has
+   more than `maxTasksPerRun` live branch tasks, fails with `node_budget` at the budget, and cancels cleanly
+   mid-fan-out with every branch `cancelled` / `parent` and the slot released once; a 100-branch `Parallel`
+   with 64 permits runs every branch and merges in branch order; nested joins release and re-acquire permits
+   (no deadlock with `maxTasksPerRun = 1`); `run_budget` failure when branch writes exceed `maxRunBytes` while
+   each map stays under `maxArgsBytes`.
 5. **Variables:** atomic increment under 1,000 concurrent runs; persisted/temp move; change events with
    `old`/`new`; durability: `kill -9` after a write and before `flushMs` loses at most that write, after
    `durable: true` loses nothing (test harness with a child process).
 6. **History and replay:** snapshots at admission and after; redaction; truncation marker; retention pruning keeps
-   recent failures; replay uses the current revision and the caller's context; `events.replay` attribution.
+   recent failures; replay uses the current revision and the caller's context and re-seeds the taint set;
+   `events.replay` attribution; **event-log fidelity:** a `chat.message` from a moderator is logged, the engine
+   restarts with no Action History record of it, `events.replay` fires a trigger filtered on `user.roles contains
+   moderator`, a command with a role permission, and a `{user.displayName}` template, all with the stored user,
+   while the current user record has lost the role; a stored older `payloadVersion` converts or fails
+   `payload_version`.
 7. **Timers and cron:** paused-clock tests for drift-free intervals, direct dispatch to the owning trigger, random ranges, `minChatLines` gate, `repeat:
    false` disabling, missed-tick coalescing after a simulated suspend; cron DST skip and fall-back, `catchUp`,
-   time zone changes, leap day.
+   time zone changes, leap day; **cron cursor:** a daily trigger fires, the engine restarts twice within the day
+   (no replay either time), is down across the next occurrence (`catchUp: true` fires it exactly once with the
+   missed `scheduledAt`; `false` skips it and moves the cursor), is down across three occurrences (one fire),
+   the expression is edited while down (no catch-up), and the fall-back hour yields one fire across a restart
+   placed between the two local occurrences; a crash injected between cursor write and admission loses that
+   occurrence and never duplicates.
 8. **Storage:** fresh schema; every DDL migration with before/after fixtures and a backup created; newer-schema
    read-only; corrupt `history.db` recreated; corrupt `config.db` moved aside; export → import round-trip equals
-   the original documents; invalid document loads disabled.
+   the original documents and their `untrusted` flags; invalid document loads disabled; **WAL-safe backup:**
+   with `wal_autocheckpoint = 0`, commit one document and one global, take a daily backup and a pre-migration
+   backup, open each copy: both rows present, `integrity_check` ok; a backup whose verification is made to fail
+   leaves no final file and aborts the migration; restore deletes stale `-wal`/`-shm` first.
 9. **Authorization (engine side of spec 02 §17.9):** every chain, approval and refusal case there, run against the
    real executor; attribution table expiry → `chain_context_lost`; hop limit at 16 under a user token; storm event;
    **laundering**: an MCP-origin `chat.send` echoed by the platform, attributed, matched by a command with
-   `ignoreInternal: false` → the `commands.triggered` run inherits the MCP context and its `Code` node is refused.
+   `ignoreInternal: false` → the `commands.triggered` run inherits the MCP context and its `Code` node is refused;
+   **approval ordering (§9.2):** with an approved `chat.send { message: {globals.msg} }`, a concurrent run
+   changes `msg` (i) before the node's pin → `binding_mismatch` / `args`, (ii) after the pin and before the
+   operation call → the approved value is sent, (iii) after the call → no effect, and the sent text equals the
+   hashed text in every case; **`ForEach` binding:** approve `ForEach {globals.messages}` → `chat.send
+   {item}` with three elements (three `PlannedCall`s), then change an element → `args` mismatch at that
+   iteration, append a fourth → `unplanned_call`, remove one → the run completes with one planned call
+   unconsumed, a collection from `saveAs` → `dynamicFields` on the body and a one-iteration plan, and a session
+   grant pinning multiplicity but not values; **untrusted provenance:** the §21 chain (chat → global →
+   restart → MCP read wrapped → dry-run `untrustedFields` → approval request shows the wrapper), `Code` writes
+   tainted, `Plugin` writes tainted, foreign import tainted, literal user write clean.
 10. **Performance:** criterion benches for match, admission, node overhead, `variables.set`; a soak test at 5,000
     events/s for 10 minutes checking the §20 budgets and zero idle wake-ups afterwards (`strace`/ETW count).
 11. **Cross-platform:** the storage, timer and shutdown tests run on Linux and Windows CI (Windows compiles and
     runs unit tests, D-035).
+12. **Subscriber stall:** a subscriber that stops draining while 10,000 ordinary and 100 `critical` events are
+    published: matching, admission and the other subscribers keep their throughput and order; the stalled
+    subscriber receives `Gap` markers, then is detached with `system.subscriber_stalled`, and its owner
+    re-subscribes and re-syncs; a `system.stopping` published during the stall still runs the §10.8 sequence to
+    completion within the grace.
 
 ## 23. Contract amendments requested from spec 02 (`den-protocol`)
 
@@ -1149,9 +1476,15 @@ landed, the stated default applies.
 
 - **A1 — `SubAction.onError: OnError { stop | continue }`** (default `stop`) and the read-only run-context fields
   `run.lastError` (§9.10) and `run.queueName` (§6.4). Needed for Streamer.bot import parity and rows 2.08, 3.09.
-- **A2 — `Node::ForEach { items: Template, itemVar: String, indexVar: Option<String>, maxIterations:
-  Option<u32>, children }`** (row 2.07, P1). Until it lands the importer and the editor use `While` with a
-  counter. `Node` is documented as extensible with a placeholder fallback, so this is non-breaking.
+- **A2 — `Node::ForEach { items: TemplateOr<Value>, itemVar: String, indexVar: Option<String>, maxIterations:
+  Option<u32>, children }`** (row 2.07, P1) **with its approval data-flow contract** (§9.5): the node is a
+  writer of `itemVar`/`indexVar` with static names; its recorded binding render is the `{ "$den": "foreach",
+  node, items, index }` record over the binding render of `items`; plan-time expansion to `min(len, cap)`
+  `PlannedCall`s per tier-3 body node when the collection render is concrete, one when it is dynamic; `items`
+  is the collection as consumed. Spec 02 §8.8 (writer set, sentinel list, rule 4 multiplicity) and §17.9
+  (changed-element, changed-length, dynamic-collection, session-grant cases) need the matching text. Until it
+  lands the importer and the editor use `While` with a counter. `Node` is documented as extensible with a
+  placeholder fallback, so the variant is non-breaking; the §8.8 text is a clarification of an existing rule.
 - **A3 — Documents `Command` and `Timer`** (§3), the `Run`, `RunState`, `CancelReason`, `RunError`, `RunWarning`
   records, the missing `Case { values: Vec<Template>, children: Vec<SubAction> }` struct of `Node::Switch`, and
   the catalog registrations of §15 (operations, events including `core.custom`, `highVolume`/`critical` flags,
@@ -1167,6 +1500,18 @@ landed, the stated default applies.
 - **A8 — Error code `INTERNAL`** (engine fault, `details.reason`), and `runs.replay` added to the dynamic-effective-tier
   set (reserved `approvalId`, tier-3 MCP annotation, dry-run plan) alongside `actions.run` and `plugins.call`.
 - **A9 — `Queue.maxRunMs: Option<u64>`** (§9.11), default none.
+- **A10 — Untrusted provenance on stored variables and plans** (§21): stored variables carry `untrusted: bool`
+  (`variables.get/list` results, `variables.*_updated` payloads, the export bundle's `globals[]` entries);
+  `x-den-untrusted: conditional` as a catalog marking for a field wrapped by MCP when a sibling flag is set
+  (§11.2); `PlanStep.untrustedFields` / `PlannedCall.untrusted_fields` next to `dynamicFields`, shown by the
+  approval request inside the untrusted wrapper. `variables.user_updated` puts the user in the envelope.
+- **A11 — Global and user variable key** (§11.1): spec 02 §6.3 should state that `name` is unique across the
+  persisted and temp stores and `persisted` is an attribute of the entry (the engine's invariant), not part of
+  the key.
+- **A12 — Event payload hygiene** (§7.1): spec 02 §6.3's reserved-name rule extended to the filter path
+  `platform`; `commands.triggered.captures` replaces the r1 `match` key; the catalog lint covers both.
+- **A13 — Payload upgrade functions** (§12.5): a core payload version bump also registers the upgrade
+  `(type, from, to)` so logged events of the older version can be replayed through the current matcher.
 - **Scopes:** `events:simulate`, `events:emit`.
 
 ## 24. Open questions (added to [QUESTIONS.md](../QUESTIONS.md), section E)
@@ -1185,8 +1530,8 @@ landed, the stated default applies.
   Keep it for every principal (spec default, with `While`, timers and queued `RunAction` as the supported loop
   forms), or exempt user-token and system origins?
 
-Assumptions made while writing (reviewers, please check): spec 02 r4 is the contract base and its rules are not
-restated here; the alert queue is a spec 09 concern layered on events, not an action queue; `Action.concurrent`
+Assumptions made while writing (reviewers, please check): spec 02 r5 (origin/main) is the contract base and
+its rules are not restated here; the alert queue is a spec 09 concern layered on events, not an action queue; `Action.concurrent`
 honours `Delay` per branch and the importer compensates; cooldown state is not persisted; `rusqlite` over `sqlx`
 is an engineering choice open to challenge; the `croner` crate is a placeholder for "a cron parser with the §8.3
 grammar"; signals are implemented as operations rather than new `Node` kinds so spec 02's tree stays unchanged.
@@ -1200,3 +1545,38 @@ grammar"; signals are implemented as operations rather than new `Node` kinds so 
   `runs.replay` dynamic tier (A8); per-queue `maxRunMs` (A9); persistent-map snapshots and the per-node budget;
   untrusted-arg taint set; SQL `IS NOT`, `name_key`, extra indexes; write-triggered pruning and backups; export via
   download handle; `RunState` as a string plus `cancelReason`; `Case` struct; Q-E8.
+- **r2**: resolves the Codex (Astra) review of r1 (5 P1, 6 P2; none rejected). Finding → sections:
+  1. P1 approval before snapshot → §9.2 reordered (static check, one-pass pin and render, validate, plan check on
+     that render, invoke), §22.9 ordering regression.
+  2. P1 `ForEach` data flow → §9.5 `ForEach` semantics (collection, variables, order, cap, writer contract,
+     `foreach` record, plan-time multiplicity), §23 A2 expanded, §22.4 and §22.9 cases.
+  3. P1 untrusted provenance through variables → §11.1 entry shape, §11.2 events and MCP wrapping, §11.3 reads,
+     §11.4 same-row flag, §12.3 replay re-seeding, §13.2 `untrusted` columns, §13.4 export, §21 rewritten
+     (sources, propagation, variables, reads, plans), §23 A10, §22.5, §22.8, §22.9.
+  4. P1 unbounded `Parallel` → §9.6 task budget with permit release at joins, persistent-map args, run memory
+     budget, node-execution budget; §9.13 and §16 new limits; §14.3 cross-reference; §22.4 fan-out tests.
+  5. P1 WAL-unsafe backups → §13.6 `VACUUM INTO` / backup API, verification, atomic publish, restore rule;
+     §13.3 pre-migration backup via the same procedure; §13.1 cross-reference; §22.8 positive reproduction.
+  6. P2 subscriber backpressure → §5.2 engine never depends on a subscriber channel; §5.3 per-subscriber
+     drop-with-`Gap`, critical lane, stall detection and detachment; `system.subscriber_stalled` in §15; §16
+     settings; §22.12.
+  7. P2 reserved payload keys → §7.1 `captures`, envelope `user`/`platform`, the engine's reserved-name rule and
+     `match` seeding precedence; §6.4, §6.5 (`core.test` keys), §11.2 (`variables.user_updated`), §15 note,
+     §23 A12, §22.1 fixtures.
+  8. P2 event-log replay fidelity → §12.5 complete envelope and version conversion; §13.2 `events.envelope`;
+     §22.6.
+  9. P2 shutdown triggers → §10.8 phased sequence (close-and-fire atomically, grace, flush then marker); §13.5
+     reads then clears the marker; §22.3 cases.
+  10. P2 zero-capacity `drop_oldest` → §10.2 runtime rule and save-time refusal; §22.3.
+  11. P2 cron catch-up cursor → §8.3 cursor record, account-first boundary, startup rule, DST duplicate rule;
+      §13.2 `cron_cursors`; §13.5; §22.7.
+  Review-scope notes: §11.1 reconciled with spec 02 §6.3 (A11); §14.3 "or on a cycle" removed (depth only);
+  §24 names spec 02 r5 as the base; DEN-33 synchronized with A1–A13 and the scopes. A fresh-context Claude
+  reviewer pass on r2 (10 resolved, 1 partial, 5 P2, 11 P3; all folded in) added: a taint set per history
+  snapshot and replay re-seeding from the chosen one; `match` and signal args as tainted sources; MCP-origin
+  variable writes stay untrusted; the leaf-versus-container rule in §9.2; `ForEach` deleting its variables on
+  zero iterations and the post-loop binding render; `ignoreInternal` excluding replayed, simulated and test
+  messages (default `true`); `core.custom` args seeded as `name`/`data` per spec 02 §6.3; the critical-event
+  guarantee boundary and lane ordering wording; the existing-task bound; A13 payload upgrades; `clean_shutdown`
+  cleared before migrations; `user` carried into queued children; `untrusted` in `variables.get`; the
+  `events:simulate` scope on `triggers.test`.
