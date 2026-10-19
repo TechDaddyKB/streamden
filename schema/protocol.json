@@ -1281,7 +1281,7 @@
       "type": "object"
     },
     "EventDef": {
-      "description": "A known event type (§5.2): its payload schema, trigger filters and flags.",
+      "description": "A known event type (§5.2): its payload schema, trigger filters and flags. `Debug` shows the authored\npayloads only by count (AGENTS.md: secrets never reach logs).",
       "properties": {
         "category": {
           "default": [],
@@ -1302,7 +1302,7 @@
         },
         "examples": {
           "default": [],
-          "description": "At least one example payload; the first is also the \"Test trigger\" fixture. Published with every\n`x-secret` position redacted to `\"***\"` (§3).",
+          "description": "At least one example payload; the first is also the \"Test trigger\" fixture. Published with every\n`x-secret` position redacted to `\"***\"` (§3); an example built from the typed payload is published\nwith its secrets withheld from the start.",
           "items": true,
           "type": "array"
         },
@@ -2484,13 +2484,13 @@
       "type": "object"
     },
     "OperationExample": {
-      "description": "An operation example (§8.1). Examples are tests: CI validates `params` against the params schema and\n`result` against the schema `shape` selects.",
+      "description": "An operation example (§8.1). Examples are tests: CI validates `params` against the params schema and\n`result` against the schema `shape` selects. Built from the operation's Rust types (`typed`) whenever\na position holds a secret: the published `params` and `result` are then serialized with every\n`Secret` withheld, and the authored values the validator checks are kept aside, never serialized (§3).",
       "properties": {
         "params": {
-          "description": "The params sent. For a dry-run example they include `dryRun: true`."
+          "description": "The params sent, as published. For a dry-run example they include `dryRun: true`."
         },
         "result": {
-          "description": "The result returned."
+          "description": "The result returned, as published."
         },
         "shape": {
           "$ref": "#/types/ResultShape",
@@ -3348,7 +3348,7 @@
       "type": "string"
     },
     "SessionIdentifyParams": {
-      "description": "Params of `session.identify` (§8.3). `Debug` redacts the token (AGENTS.md: secrets never reach logs).",
+      "description": "Params of `session.identify` (§8.3). The token is a `Secret`: `Debug` redacts it (AGENTS.md: secrets\nnever reach logs) and it serializes as `\"***\"` unless the sender exposes secrets explicitly.",
       "properties": {
         "client": {
           "$ref": "#/types/ClientInfo",

@@ -249,7 +249,11 @@ pub fn lint(catalog: &Catalog) -> Vec<LintError> {
             err("only tier-2 configuration operations have a draft result".into());
         }
         for example in &def.examples {
-            let has_dry_run = example.params.get("dryRun").and_then(Value::as_bool) == Some(true);
+            let has_dry_run = example
+                .authored_params()
+                .get("dryRun")
+                .and_then(Value::as_bool)
+                == Some(true);
             if (example.shape == ResultShape::DryRun) != has_dry_run {
                 err(format!(
                     "example {:?}: `dryRun: true` in params must match the dry-run shape",
@@ -260,7 +264,7 @@ pub fn lint(catalog: &Catalog) -> Vec<LintError> {
             // may name a target outside this catalog (a plugin operation, §8.1), but then its params
             // cannot be checked, so they must hold no value: publication redacts them whole otherwise.
             if example.shape != ResultShape::Normal
-                && let Some(Value::Array(plan)) = example.result.get("plan")
+                && let Some(Value::Array(plan)) = example.authored_result().get("plan")
             {
                 for (i, step) in plan.iter().enumerate() {
                     let operation = step.get("operation").and_then(Value::as_str);
@@ -346,6 +350,13 @@ pub fn lint(catalog: &Catalog) -> Vec<LintError> {
         }
         if def.examples.is_empty() {
             err("needs at least one example payload".into());
+        }
+        if !def.authored_examples.is_empty() && def.authored_examples.len() != def.examples.len() {
+            err(format!(
+                "authoredExamples ({}) must align with examples ({}); build typed examples with `push_typed_example`",
+                def.authored_examples.len(),
+                def.examples.len()
+            ));
         }
         lint_secret_marks(def.payload.as_value(), "payload", &types, &mut err);
     }
@@ -660,8 +671,15 @@ fn resolve_mode(leaf: &Value, types: &BTreeMap<String, Value>, depth: usize) -> 
         if depth >= MAX_REF_DEPTH {
             return TemplateMode::Literal;
         }
-        let merged = Value::Object(merge_ref_target(obj, target));
-        return resolve_mode(&merged, types, depth + 1);
+        // A read-only view for deciding the mode: the target with the property's own keys laid over
+        // it. Never published, so keyword scope is no concern here (see `merge_ref_target`).
+        let mut view = target.as_object().cloned().unwrap_or_default();
+        for (key, value) in obj {
+            if key != "$ref" && key != "x-secret" {
+                view.insert(key.clone(), value.clone());
+            }
+        }
+        return resolve_mode(&Value::Object(view), types, depth + 1);
     }
     if obj.contains_key("const") {
         return TemplateMode::Literal;
@@ -717,36 +735,65 @@ pub(crate) fn is_annotation_key(key: &str) -> bool {
     ) || key.starts_with("x-")
 }
 
-/// Merges a `$ref` property's siblings (`description`, `x-secret`, `x-ui`, `maxProperties`, …) onto a copy
-/// of the referenced schema. JSON Schema 2020-12 applies `$ref` siblings in conjunction with the target,
-/// so inlining or resolving a reference must keep every one of them: an annotation on the property
-/// replaces the target's, and a constraint that collides with one of the target's goes into an `allOf`
-/// so both still apply. `x-secret` is the exception among the annotations: secrecy is monotonic (§3),
-/// so the merged mark is [`merged_secret_mark`] of both sides and a `false` sibling never clears the
-/// target's `true`.
+/// Inlines a `$ref` property: the referenced schema with the property's siblings applied, every keyword
+/// keeping the scope it had. JSON Schema 2020-12 applies `$ref` siblings in conjunction with the target,
+/// and keywords interact only within their own schema object (`additionalProperties` exempts the
+/// `properties` beside it, `items` the `prefixItems` beside it, …), so a validation sibling must never
+/// be moved beside the target's keywords: with any validation sibling present the target is kept whole
+/// as `allOf: [target]` and the siblings stay in the outer object, exactly the shape `{ "$ref", … }` had
+/// (Codex round 5). A sibling `allOf` of the property's own takes the target as one more member, so the
+/// sibling's branches stay in force; a sibling `allOf` that is not an array cannot take it, so the
+/// `$ref` is kept beside it and nothing is dropped (publication fails closed on the malformed keyword).
+/// Annotations ([`is_annotation_key`]) interact with nothing and are laid over the target's: a
+/// property's `description` replaces the target's. `x-secret` is the exception among the annotations:
+/// secrecy is monotonic (§3), so the merged mark is [`merged_secret_mark`] of both sides and a `false`
+/// sibling never clears the target's `true`.
 pub fn merge_ref_target(property: &Map<String, Value>, target: &Value) -> Map<String, Value> {
-    let mut merged = target.as_object().cloned().unwrap_or_default();
-    let mut conjunction = Map::new();
-    if let Some(mark) = merged_secret_mark(property.get("x-secret"), target.get("x-secret")) {
-        merged.insert("x-secret".into(), mark);
-    }
-    for (key, value) in property {
-        if key == "$ref" || key == "x-secret" {
-            continue;
+    let mark = merged_secret_mark(property.get("x-secret"), target.get("x-secret"));
+    let (annotations, constraints): (Vec<_>, Vec<_>) = property
+        .iter()
+        .filter(|(key, _)| *key != "$ref" && *key != "x-secret")
+        .partition(|(key, _)| is_annotation_key(key));
+    let mut merged = if constraints.is_empty() {
+        target.as_object().cloned().unwrap_or_default()
+    } else {
+        // The target's own annotations are lifted too (they interact with nothing); its validation
+        // keywords stay in their own schema object.
+        let mut outer: Map<String, Value> = target
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter(|(key, _)| is_annotation_key(key) && *key != "x-secret")
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+        outer.extend(
+            constraints
+                .into_iter()
+                .map(|(key, value)| (key.clone(), value.clone())),
+        );
+        match outer.get_mut("allOf") {
+            Some(Value::Array(all_of)) => all_of.insert(0, target.clone()),
+            Some(_) => {
+                if let Some(reference) = property.get("$ref") {
+                    outer.insert("$ref".into(), reference.clone());
+                }
+            }
+            None => {
+                outer.insert("allOf".into(), json!([target.clone()]));
+            }
         }
-        if is_annotation_key(key) || !merged.contains_key(key) {
-            merged.insert(key.clone(), value.clone());
-        } else if merged.get(key) != Some(value) {
-            conjunction.insert(key.clone(), value.clone());
-        }
+        outer
+    };
+    for (key, value) in annotations {
+        merged.insert(key.clone(), value.clone());
     }
-    if !conjunction.is_empty()
-        && let Some(all_of) = merged
-            .entry("allOf")
-            .or_insert_with(|| json!([]))
-            .as_array_mut()
-    {
-        all_of.push(Value::Object(conjunction));
+    match mark {
+        Some(mark) => {
+            merged.insert("x-secret".into(), mark);
+        }
+        None => {
+            merged.remove("x-secret");
+        }
     }
     merged
 }
@@ -943,8 +990,7 @@ fn widen_to_template(schema: &mut Value) {
     *obj = widened;
 }
 
-/// The redacted form of a secret (§3).
-pub const REDACTED: &str = "***";
+pub use crate::secret::REDACTED;
 
 /// Bound on value nesting followed while redacting one value; a value nested deeper is redacted whole.
 const MAX_REDACT_DEPTH: usize = 64;
@@ -1364,7 +1410,7 @@ pub fn build_unredacted(mut catalog: Catalog) -> Result<ProtocolDocument, BuildE
         }
     }
 
-    Ok(ProtocolDocument {
+    let doc = ProtocolDocument {
         comment: GENERATED_MARKER.into(),
         protocol_version: PROTOCOL_VERSION.into(),
         rpc_version: RPC_VERSION,
@@ -1407,67 +1453,165 @@ pub fn build_unredacted(mut catalog: Catalog) -> Result<ProtocolDocument, BuildE
             .map(|s| (*s).to_owned())
             .collect(),
         deprecations,
-    })
+    };
+    let errors = doc.lint_typed_examples();
+    if !errors.is_empty() {
+        return Err(BuildError::Lint(errors));
+    }
+    Ok(doc)
+}
+
+/// The schemas one operation's examples are redacted against.
+struct ExampleSchemas<'a> {
+    params: &'a Value,
+    result: &'a Value,
+    dry_run: Option<&'a Value>,
+    draft: Option<&'a Value>,
+}
+
+/// Redacts one operation example for publication: the authored values are dropped, then the schema
+/// walk runs over the published `params` and the result (against the shape it declares). Plan steps of
+/// dry-run and draft results name the operation they would call, so their `params` are redacted
+/// against that operation's invocation schema; a step naming a target outside this document keeps its
+/// `params` only when they hold no value, and is published with them redacted whole otherwise.
+fn redact_operation_example(
+    example: &mut crate::catalog::OperationExample,
+    schemas: &ExampleSchemas<'_>,
+    op_params: &BTreeMap<String, Value>,
+    types: &BTreeMap<String, Value>,
+) {
+    example.authored = None;
+    redact_secrets(&mut example.params, schemas.params, types);
+    let shape_schema = match example.shape {
+        ResultShape::Normal => Some(schemas.result),
+        ResultShape::DryRun => schemas.dry_run,
+        ResultShape::Draft => schemas.draft,
+    };
+    if let Some(schema) = shape_schema {
+        redact_secrets(&mut example.result, schema, types);
+    }
+    if example.shape != ResultShape::Normal
+        && let Some(Value::Array(plan)) = example.result.get_mut("plan")
+    {
+        for step in plan {
+            let schema = step
+                .get("operation")
+                .and_then(Value::as_str)
+                .and_then(|op| op_params.get(op));
+            let Some(params) = step.get_mut("params") else {
+                continue;
+            };
+            match schema {
+                Some(schema) => redact_secrets(params, schema, types),
+                // A target outside this document (a plugin operation) cannot be checked: its params
+                // are published only when they hold no value at all (the lint demands that);
+                // anything else is redacted whole. Fail closed.
+                None if holds_no_value(params) => {}
+                None => *params = Value::String(REDACTED.into()),
+            }
+        }
+    }
 }
 
 impl ProtocolDocument {
-    /// The publication boundary of §3: replaces every `x-secret` position of every operation and event
-    /// example with `"***"`, guided by the published schemas ([`redact_secrets`]). Plan steps of dry-run
-    /// and draft examples name the operation they would call, so their `params` are redacted against
-    /// that operation's invocation schema; a step naming a target outside this document keeps its
-    /// `params` only when they hold no value, and is published with them redacted whole otherwise.
-    /// Idempotent.
-    pub fn redact_examples(&mut self) {
-        let types = &self.types;
-        let op_params: BTreeMap<String, Value> = self
-            .operations
+    fn operation_params(&self) -> BTreeMap<String, Value> {
+        self.operations
             .iter()
             .map(|(name, entry)| (name.clone(), entry.def.params.as_value().clone()))
-            .collect();
+            .collect()
+    }
+
+    /// The publication boundary of §3. An example built from typed values already holds its published
+    /// form (every [`crate::Secret`] serialized as `"***"`); its authored values, kept aside for
+    /// validation, are dropped here so the document holds no exposed value at all. On top of that, and
+    /// alone for JSON-authored examples, the schema walk replaces every `x-secret` position of every
+    /// operation and event example with `"***"`, guided by the published schemas ([`redact_secrets`];
+    /// plan steps per [`redact_operation_example`]). Idempotent.
+    pub fn redact_examples(&mut self) {
+        let types = &self.types;
+        let op_params = self.operation_params();
         for entry in self.operations.values_mut() {
-            let params_schema = entry.def.params.as_value().clone();
-            let result_schema = entry.def.result.as_value().clone();
+            let params = entry.def.params.as_value().clone();
+            let result = entry.def.result.as_value().clone();
             let dry_run = entry.dry_run_result.clone();
             let draft = entry.draft_result.clone();
+            let schemas = ExampleSchemas {
+                params: &params,
+                result: &result,
+                dry_run: dry_run.as_ref().map(Schema::as_value),
+                draft: draft.as_ref().map(Schema::as_value),
+            };
             for example in &mut entry.def.examples {
-                redact_secrets(&mut example.params, &params_schema, types);
-                let shape_schema = match example.shape {
-                    ResultShape::Normal => Some(&result_schema),
-                    ResultShape::DryRun => dry_run.as_ref().map(Schema::as_value),
-                    ResultShape::Draft => draft.as_ref().map(Schema::as_value),
-                };
-                if let Some(schema) = shape_schema {
-                    redact_secrets(&mut example.result, schema, types);
-                }
-                if example.shape != ResultShape::Normal
-                    && let Some(Value::Array(plan)) = example.result.get_mut("plan")
-                {
-                    for step in plan {
-                        let schema = step
-                            .get("operation")
-                            .and_then(Value::as_str)
-                            .and_then(|op| op_params.get(op));
-                        let Some(params) = step.get_mut("params") else {
-                            continue;
-                        };
-                        match schema {
-                            Some(schema) => redact_secrets(params, schema, types),
-                            // A target outside this document (a plugin operation) cannot be checked:
-                            // its params are published only when they hold no value at all (the
-                            // lint demands that); anything else is redacted whole. Fail closed.
-                            None if holds_no_value(params) => {}
-                            None => *params = Value::String(REDACTED.into()),
-                        }
-                    }
-                }
+                redact_operation_example(example, &schemas, &op_params, types);
             }
         }
         for entry in self.events.values_mut() {
+            entry.def.authored_examples.clear();
             let payload_schema = entry.def.payload.as_value().clone();
             for example in &mut entry.def.examples {
                 redact_secrets(example, &payload_schema, types);
             }
         }
+    }
+
+    /// The typed-example rule (§3): an example built from typed values publishes nothing the schema
+    /// walk would redact, which holds exactly when every secret-bearing position of its Rust types is
+    /// a [`crate::Secret`]. A typed example the walk would change holds a secret in its published
+    /// form (a plain field with a hand-set `x-secret`, a pre-serialized value passed as "typed", plan
+    /// params rendered with secrets exposed), and the value level, not the walk, must be what
+    /// withholds it. Checked by [`build_unredacted`] on the final schemas.
+    fn lint_typed_examples(&self) -> Vec<LintError> {
+        let types = &self.types;
+        let op_params = self.operation_params();
+        let mut errors = Vec::new();
+        for (name, entry) in &self.operations {
+            let schemas = ExampleSchemas {
+                params: entry.def.params.as_value(),
+                result: entry.def.result.as_value(),
+                dry_run: entry.dry_run_result.as_ref().map(Schema::as_value),
+                draft: entry.draft_result.as_ref().map(Schema::as_value),
+            };
+            for example in &entry.def.examples {
+                if example.authored.is_none() {
+                    continue;
+                }
+                let mut published = example.clone();
+                redact_operation_example(&mut published, &schemas, &op_params, types);
+                for (what, before, after) in [
+                    ("params", &example.params, &published.params),
+                    ("result", &example.result, &published.result),
+                ] {
+                    if before != after {
+                        errors.push(LintError {
+                            subject: format!("operation:{name}"),
+                            message: format!(
+                                "typed example {:?}: the published {what} still hold a value at a marked position; that position must be a `Secret<T>` in the Rust type (§3)",
+                                example.title
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+        for (r#type, entry) in &self.events {
+            let payload = entry.def.payload.as_value();
+            for (i, example) in entry.def.examples.iter().enumerate() {
+                if !entry.def.is_typed_example(i) {
+                    continue;
+                }
+                let mut published = example.clone();
+                redact_secrets(&mut published, payload, types);
+                if published != *example {
+                    errors.push(LintError {
+                        subject: format!("event:{type}"),
+                        message: format!(
+                            "typed example {i}: the published payload still holds a value at a marked position; that position must be a `Secret<T>` in the Rust type (§3)"
+                        ),
+                    });
+                }
+            }
+        }
+        errors
     }
 
     /// The canonical on-disk form: pretty-printed, sorted maps, `\n` endings, trailing newline (§14).

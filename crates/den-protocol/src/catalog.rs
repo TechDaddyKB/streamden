@@ -8,6 +8,7 @@ use std::fmt;
 
 use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use ts_rs::TS;
 
 use crate::domain::FilterOp;
@@ -155,20 +156,116 @@ pub struct Deprecation {
 }
 
 /// An operation example (§8.1). Examples are tests: CI validates `params` against the params schema and
-/// `result` against the schema `shape` selects.
+/// `result` against the schema `shape` selects. Built from the operation's Rust types (`typed`) whenever
+/// a position holds a secret: the published `params` and `result` are then serialized with every
+/// `Secret` withheld, and the authored values the validator checks are kept aside, never serialized (§3).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct OperationExample {
     /// Short title.
     pub title: String,
-    /// The params sent. For a dry-run example they include `dryRun: true`.
+    /// The params sent, as published. For a dry-run example they include `dryRun: true`.
     #[ts(as = "serde_json::Value")]
-    pub params: serde_json::Value,
+    pub params: Value,
     /// Which of the three result shapes `result` is.
     pub shape: ResultShape,
-    /// The result returned.
+    /// The result returned, as published.
     #[ts(as = "serde_json::Value")]
-    pub result: serde_json::Value,
+    pub result: Value,
+    /// The authored values with their secrets exposed, when the example was built from typed values:
+    /// what the validator checks. Never serialized, never published; dropped at the publication
+    /// boundary ([`crate::codegen::ProtocolDocument::redact_examples`]).
+    #[serde(skip)]
+    #[ts(skip)]
+    pub authored: Option<Box<AuthoredExample>>,
+}
+
+/// The authored `params` and `result` of a typed [`OperationExample`], secrets exposed. `Debug` shows
+/// neither (AGENTS.md: secrets never reach logs).
+#[derive(Clone, PartialEq)]
+pub struct AuthoredExample {
+    /// The params as authored.
+    pub params: Value,
+    /// The result as authored.
+    pub result: Value,
+}
+
+impl fmt::Debug for AuthoredExample {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AuthoredExample")
+            .field("params", &"<exposed>")
+            .field("result", &"<exposed>")
+            .finish()
+    }
+}
+
+impl OperationExample {
+    /// A JSON-authored example, `params` and `result` as written. Any secret in them is found by the
+    /// schema walk alone at publication; prefer [`OperationExample::typed`] for an operation whose
+    /// schemas mark a position.
+    pub fn json(
+        title: impl Into<String>,
+        params: Value,
+        shape: ResultShape,
+        result: Value,
+    ) -> Self {
+        Self {
+            title: title.into(),
+            params,
+            shape,
+            result,
+            authored: None,
+        }
+    }
+
+    /// An example from the operation's typed values. `params` and `result` are serialized twice: with
+    /// secrets withheld for the published form, with them exposed for the authored form the validator
+    /// checks. A dry-run example whose params lack `dryRun` gets `dryRun: true` added to both forms.
+    ///
+    /// # Panics
+    /// When a value does not serialize to JSON (a map with non-string keys): examples are constants.
+    pub fn typed<P: Serialize + ?Sized, R: Serialize + ?Sized>(
+        title: impl Into<String>,
+        params: &P,
+        shape: ResultShape,
+        result: &R,
+    ) -> Self {
+        let pair = || {
+            (
+                serde_json::to_value(params).expect("example params serialize"),
+                serde_json::to_value(result).expect("example result serialize"),
+            )
+        };
+        let (mut params, result) = crate::secret::withhold_secrets(pair);
+        let (mut authored_params, authored_result) = crate::secret::expose_secrets(pair);
+        if shape == ResultShape::DryRun {
+            for p in [&mut params, &mut authored_params] {
+                if let Some(obj) = p.as_object_mut() {
+                    obj.entry("dryRun").or_insert(Value::Bool(true));
+                }
+            }
+        }
+        Self {
+            title: title.into(),
+            params,
+            shape,
+            result,
+            authored: Some(Box::new(AuthoredExample {
+                params: authored_params,
+                result: authored_result,
+            })),
+        }
+    }
+
+    /// The params the validator checks: the authored ones for a typed example, else `params`.
+    pub fn authored_params(&self) -> &Value {
+        self.authored.as_ref().map_or(&self.params, |a| &a.params)
+    }
+
+    /// The result the validator checks: the authored one for a typed example, else `result`.
+    pub fn authored_result(&self) -> &Value {
+        self.authored.as_ref().map_or(&self.result, |a| &a.result)
+    }
 }
 
 /// The three result shapes of §8.1.
@@ -183,8 +280,9 @@ pub enum ResultShape {
     Draft,
 }
 
-/// A known event type (§5.2): its payload schema, trigger filters and flags.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+/// A known event type (§5.2): its payload schema, trigger filters and flags. `Debug` shows the authored
+/// payloads only by count (AGENTS.md: secrets never reach logs).
+#[derive(Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct EventDef {
     /// The event type, `<slug>.<name>`.
@@ -213,10 +311,72 @@ pub struct EventDef {
     #[serde(default)]
     pub critical: bool,
     /// At least one example payload; the first is also the "Test trigger" fixture. Published with every
-    /// `x-secret` position redacted to `"***"` (§3).
+    /// `x-secret` position redacted to `"***"` (§3); an example built from the typed payload is published
+    /// with its secrets withheld from the start.
     #[serde(default)]
     #[ts(as = "Vec<serde_json::Value>")]
-    pub examples: Vec<serde_json::Value>,
+    pub examples: Vec<Value>,
+    /// Aligned with `examples` index by index once any example was built from a typed value (empty
+    /// otherwise): `Some` holds the authored payload with its secrets exposed, what the validator
+    /// checks; `None` marks a JSON-authored example. Never serialized, never published; cleared at the
+    /// publication boundary.
+    #[serde(skip)]
+    #[ts(skip)]
+    pub authored_examples: Vec<Option<Value>>,
+}
+
+impl fmt::Debug for EventDef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EventDef")
+            .field("type", &self.r#type)
+            .field("title", &self.title)
+            .field("description", &self.description)
+            .field("category", &self.category)
+            .field("payload_version", &self.payload_version)
+            .field("payload", &self.payload)
+            .field("filters", &self.filters)
+            .field("high_volume", &self.high_volume)
+            .field("critical", &self.critical)
+            .field("examples", &self.examples)
+            .field(
+                "authored_examples",
+                &format_args!(
+                    "<{} exposed>",
+                    self.authored_examples.iter().flatten().count()
+                ),
+            )
+            .finish()
+    }
+}
+
+impl EventDef {
+    /// Pushes an example from the typed payload: serialized with secrets withheld into `examples` and
+    /// with them exposed into `authored_examples` (JSON-authored examples already present are marked
+    /// `None` there).
+    ///
+    /// # Panics
+    /// When the payload does not serialize to JSON: examples are constants.
+    pub fn push_typed_example<P: Serialize + ?Sized>(&mut self, payload: &P) {
+        let to_value = || serde_json::to_value(payload).expect("example payload serializes");
+        self.authored_examples.resize(self.examples.len(), None);
+        self.examples
+            .push(crate::secret::withhold_secrets(to_value));
+        self.authored_examples
+            .push(Some(crate::secret::expose_secrets(to_value)));
+    }
+
+    /// Whether example `i` was built from a typed value.
+    pub fn is_typed_example(&self, i: usize) -> bool {
+        self.authored_examples.get(i).is_some_and(Option::is_some)
+    }
+
+    /// The payload the validator checks for example `i`: the authored one when typed, else the example.
+    pub fn authored_example(&self, i: usize) -> &Value {
+        self.authored_examples
+            .get(i)
+            .and_then(Option::as_ref)
+            .unwrap_or(&self.examples[i])
+    }
 }
 
 /// A payload field a trigger can filter on (§6.2).

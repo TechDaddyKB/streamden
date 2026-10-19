@@ -7,8 +7,10 @@ use serde_json::json;
 use crate::catalog::{
     ArgWrites, Catalog, CatalogError, Exposure, OperationDef, OperationExample, ResultShape,
 };
-use crate::ids::{OperationName, Scope};
-use crate::results::{DraftResult, DryRunResult, PluginCallParams, PluginCallResult};
+use crate::ids::{LocalId, OperationName, PluginId, Scope};
+use crate::results::{
+    DraftResult, DryRunResult, PlanStep, PluginCallParams, PluginCallResult, True,
+};
 use crate::shared::RiskTier;
 use crate::version::PROTOCOL_VERSION;
 
@@ -98,10 +100,17 @@ fn register_shared_types(catalog: &mut Catalog) {
 }
 
 /// `plugins.call` (§8.1): the generic alias for clients that only know plugin IDs. A catalog operation
-/// with a dynamic effective tier, its own static result contract and no draft result.
+/// with a dynamic effective tier, its own static result contract and no draft result. Its examples are
+/// built from the typed values (§3): every core example is, so a secret-bearing position is published
+/// withheld by construction and never by the schema walk alone.
 fn plugins_call(catalog: &mut Catalog) -> OperationDef {
     let params = catalog.schema_for::<PluginCallParams>();
     let result = catalog.schema_for::<PluginCallResult>();
+    let call = PluginCallParams {
+        plugin: PluginId::new("io.github.alice.acmelive").expect("valid"),
+        method: LocalId::new("get_gift_catalog").expect("valid"),
+        params: serde_json::Map::new(),
+    };
     OperationDef {
         name: OperationName::new("plugins.call").expect("valid"),
         title: "Call a plugin operation".into(),
@@ -124,44 +133,40 @@ fn plugins_call(catalog: &mut Catalog) -> OperationDef {
         since: PROTOCOL_VERSION.into(),
         deprecated: None,
         examples: vec![
-            OperationExample {
-                title: "Read a plugin's gift catalog (tier-0 target)".into(),
-                params: json!({
-                    "plugin": "io.github.alice.acmelive",
-                    "method": "get_gift_catalog",
-                    "params": {}
-                }),
-                shape: ResultShape::Normal,
-                result: json!({
-                    "value": [
+            OperationExample::typed(
+                "Read a plugin's gift catalog (tier-0 target)",
+                &call,
+                ResultShape::Normal,
+                &PluginCallResult {
+                    value: json!([
                         { "id": "rocket", "name": "Rocket", "amountMinor": 500, "currency": "USD" }
-                    ]
-                }),
-            },
-            OperationExample {
-                title: "Dry run of a tier-0 target: one planned step, nothing invoked".into(),
-                params: json!({
-                    "plugin": "io.github.alice.acmelive",
-                    "method": "get_gift_catalog",
-                    "params": {},
-                    "dryRun": true
-                }),
-                shape: ResultShape::DryRun,
-                result: json!({
-                    "dryRun": true,
-                    "plan": [
-                        {
-                            "operation": "acme.get_gift_catalog",
-                            "params": {},
-                            "tier": 0,
-                            "description": "Read the gift catalog of Acme Live."
-                        }
-                    ],
-                    "warnings": [],
-                    "wouldRequireApproval": false,
-                    "effectiveTier": 1
-                }),
-            },
+                    ]),
+                },
+            ),
+            OperationExample::typed(
+                "Dry run of a tier-0 target: one planned step, nothing invoked",
+                &call,
+                ResultShape::DryRun,
+                &DryRunResult {
+                    dry_run: True,
+                    plan: vec![PlanStep {
+                        operation: OperationName::new("acme.get_gift_catalog").expect("valid"),
+                        params: json!({}),
+                        tier: RiskTier::READ,
+                        action: None,
+                        node: None,
+                        args_hash: None,
+                        dynamic_fields: None,
+                        target: None,
+                        description: "Read the gift catalog of Acme Live.".into(),
+                    }],
+                    actions: None,
+                    diff: None,
+                    warnings: vec![],
+                    would_require_approval: false,
+                    effective_tier: RiskTier::REVERSIBLE_WRITE,
+                },
+            ),
         ],
     }
 }

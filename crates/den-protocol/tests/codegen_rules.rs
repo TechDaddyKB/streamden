@@ -38,6 +38,7 @@ fn op(name: &str, tier: u8, params: Value, result: Value) -> OperationDef {
             params: json!({}),
             shape: ResultShape::Normal,
             result: json!({}),
+            authored: None,
         }],
     }
 }
@@ -48,6 +49,7 @@ fn with_dry_run(mut def: OperationDef) -> OperationDef {
         params: json!({ "dryRun": true }),
         shape: ResultShape::DryRun,
         result: json!({ "dryRun": true, "plan": [], "warnings": [], "wouldRequireApproval": false, "effectiveTier": 1 }),
+        authored: None,
     });
     def
 }
@@ -274,6 +276,7 @@ fn reserved_params_and_result_keys_are_generated_per_tier() {
         params: json!({}),
         shape: ResultShape::Draft,
         result: json!({ "draft": { "id": "018f7a8c-0000-7000-8000-000000000001", "kind": "pending_change", "operation": "t.config" }, "plan": [], "warnings": [] }),
+        authored: None,
     });
     catalog.register_operation(cfg).unwrap();
     catalog
@@ -400,6 +403,7 @@ fn lint_catches_the_spec_rules() {
             high_volume: false,
             critical: false,
             examples: vec![],
+            authored_examples: vec![],
         })
         .unwrap();
 
@@ -470,8 +474,34 @@ fn core_catalog_passes_lint() {
     assert!(codegen::lint(&Catalog::core()).is_empty());
 }
 
+/// Round 6 (§3): every core example is built from the operation's typed values, so a secret-bearing
+/// position is published withheld by construction (`Secret<T>`) and never by the schema walk alone.
+#[test]
+fn core_examples_are_typed() {
+    let catalog = Catalog::core();
+    for (name, def) in catalog.operations() {
+        for example in &def.examples {
+            assert!(
+                example.authored.is_some(),
+                "operation {name}, example {:?}: build it with OperationExample::typed",
+                example.title
+            );
+        }
+    }
+    for (r#type, def) in catalog.events() {
+        assert_eq!(
+            def.authored_examples.len(),
+            def.examples.len(),
+            "event {type}: push examples with EventDef::push_typed_example"
+        );
+    }
+}
+
 /// Codex review round 1, P1: a `$ref` property's siblings (security annotations and constraints) must
-/// survive inlining in both generated schemas.
+/// survive inlining in both generated schemas. Round 5, P1: they must also keep their scope. Keywords
+/// interact only within their own schema object, so a validation sibling is never laid beside the
+/// target's keywords: the target is kept whole under `allOf` and the siblings stay outside, the shape
+/// `{ "$ref", … }` had. Annotations interact with nothing and are lifted, the property's winning.
 #[test]
 fn reference_expansion_keeps_siblings() {
     let mut types = std::collections::BTreeMap::new();
@@ -499,15 +529,34 @@ fn reference_expansion_keeps_siblings() {
         );
         assert_eq!(
             prop["maxProperties"],
+            json!(1),
+            "{label}: the property's own constraint stays in the property's schema object"
+        );
+        let branches = prop["allOf"]
+            .as_array()
+            .expect("the target is kept whole in allOf");
+        assert_eq!(branches.len(), 1, "{label}: {branches:?}");
+        let target = &branches[0];
+        assert_eq!(
+            target["maxProperties"],
             json!(5),
-            "{label}: the target's constraint stays"
+            "{label}: the target's constraint stays in the target's schema object"
+        );
+        assert_eq!(target["required"], json!(["n"]), "{label}");
+        assert_eq!(
+            target["description"],
+            json!("Shared"),
+            "{label}: the branch keeps the target's annotation; the lifted copy is the property's"
+        );
+        assert!(
+            prop.get("properties").is_none() && prop.get("required").is_none(),
+            "{label}: nothing of the target is laid beside the property's keywords: {prop}"
         );
         assert_eq!(
-            prop["allOf"],
-            json!([{ "maxProperties": 1 }]),
-            "{label}: the colliding local constraint is applied in conjunction"
+            target["properties"]["n"]["x-den-template"],
+            json!("value"),
+            "{label}: leaves inside the branch are still derived"
         );
-        assert_eq!(prop["properties"]["n"]["x-den-template"], json!("value"));
         let validator = jsonschema::validator_for(&v).unwrap();
         assert!(
             validator.is_valid(&json!({ "secret": { "n": 1 } })),
@@ -588,6 +637,7 @@ fn published_examples_redact_marked_secrets() {
         }),
         shape: ResultShape::Normal,
         result: json!({ "token": "example-secret-8", "ok": true }),
+        authored: None,
     }];
     catalog.register_operation(def).unwrap();
     let mut write = with_dry_run(op(
@@ -614,6 +664,7 @@ fn published_examples_redact_marked_secrets() {
             high_volume: false,
             critical: false,
             examples: vec![json!({ "secret": "example-secret-12", "n": 1 })],
+            authored_examples: vec![],
         })
         .unwrap();
 
