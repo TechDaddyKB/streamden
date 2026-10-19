@@ -1,5 +1,5 @@
 # CI v0 checks relative links deterministically; external URLs are research sources
 # and are not fetched. Broken relative targets still fail (no path exclusions).
-# Heading-fragment checking is deferred: three existing research TOC anchors
-# fail it. File targets remain checked, including links with a fragment.
+# Validate heading fragments as well as file targets.
 offline = true
+include_fragments = "anchor-only"

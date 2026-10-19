@@ -10,7 +10,7 @@
 ## Contents
 
 0. [TL;DR](#0-tldr)
-1. [Part A: Prior art](#part-a--prior-art)
+1. [Part A: Prior art](#part-a-prior-art)
    - A1 Elgato Stream Deck SDK
    - A2 Touch Portal plugin API
    - A3 SAMMI extensions and local API
@@ -21,7 +21,7 @@
    - A8 Tauri plugins, Extism, the WASM Component Model / WASI 0.2–0.3, deno_core, JSON-RPC sidecars
    - A9 MCP (Model Context Protocol)
    - A10 Cross-cutting lessons
-2. [Part B: Recommended design](#part-b--recommended-design)
+2. [Part B: Recommended design](#part-b-recommended-design)
    - B1 Plugin tiers (v1 vs later)
    - B2 Manifest schema (concrete example)
    - B3 Public API surface (WS, HTTP, auth, versioning, codegen and SDKs)
@@ -31,7 +31,7 @@
    - B7 Architecture diagrams
    - B8 Phasing
    - B9 Open questions for the owner
-3. [Appendix: version snapshot (2026-10-18)](#appendix--version-snapshot-2026-10-18)
+3. [Appendix: version snapshot (2026-10-18)](#appendix-version-snapshot-2026-10-18)
 
 ---
 
