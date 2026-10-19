@@ -61,6 +61,26 @@ update source (the in-app updater is compiled out of store and package builds). 
 Windows first, no Steamworks SDK (like OBS).
 **Answer:**
 
+### Q-B6 — License of the `den-protocol` crate 🟥 (Round 3)
+D-016 makes SDKs and protocol schemas MIT OR Apache-2.0, and the app GPL-3.0-or-later. `crates/den-protocol` is
+the Rust source that the schemas and SDK types are generated from ([spec 02 §9.5](spec/02-protocol.md)).
+Options: (a) MIT OR Apache-2.0, so the public Rust SDK crate can re-export the types and permissive plugins can
+depend on it; (b) GPL-3.0-or-later like the rest of the app, with the SDK crate getting separately generated
+types.
+**Recommendation:** (a). It contains only types, schemas and catalog metadata, no engine logic.
+**Answer:**
+
+### Q-B7 — Host for published schema URLs 🟥 (Round 3)
+Plugin manifests and `protocol.json` carry `$schema`/`$id` URLs that ship inside plugins and binaries, so they
+must not point at the personal GitHub account (ADR-0004). The app always validates offline against its bundled
+copy, so this only affects editors and docs ([spec 02 §11](spec/02-protocol.md)).
+Options: (a) a project domain (e.g. `schemas.<domain>/streamden/plugin/v0.json`), needs the domain from
+ADR-0004's open item; (b) GitHub Pages on the org, `tech-daddy-digital.github.io/streamden/schemas/…`;
+(c) raw files from the org repo.
+**Recommendation:** (b) now, since it needs no domain and survives the repo transfer. Add a redirect from (a)
+later.
+**Answer:**
+
 ---
 
 ## P — Platforms and OS support
@@ -229,6 +249,15 @@ Keep Streamer.bot's `%var%` / `~global~` / `$fn()$` as-is? Use a new typed expre
 `{user.name}`, `{amount | currency}`)? Or new syntax plus a compatibility mode?
 **Recommendation:** new `{…}` syntax as canonical, with `%var%` accepted on import and in a compat mode.
 **Answer:** New `{…}` syntax canonical; `%var%` accepted and converted on import (D-027).
+
+### Q-X4 — How much template expression language in v1? 🟥 (Round 3)
+D-027 fixed the `{…}` syntax. [Spec 02 §10](spec/02-protocol.md) proposes three layers: paths (`{user.name}`),
+filters (`{amount | currency}`), and inline expressions (`{= count * 2}`, which replaces `$math()$` and
+`$parse()$`). Options: (a) all three in P1; (b) paths and filters in P1, expressions later (imported `$math()$`
+then stays unconverted text until they land); (c) paths only, with logic in sub-actions and code.
+**Recommendation:** (a). Imported Streamer.bot actions use `$math()$` a lot, and a pure expression evaluator with
+a step budget is small.
+**Answer:**
 
 ---
 
