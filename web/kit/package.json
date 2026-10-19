@@ -8,11 +8,14 @@
     ".": {
       "types": "./src/index.ts",
       "default": "./src/index.ts"
-    }
+    },
+    "./tokens.css": "./src/tokens.css"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "build": "node scripts/build-css.mjs --check && node scripts/check-contrast.mjs > /dev/null && tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "tokens:css": "node scripts/build-css.mjs",
+    "contrast": "node scripts/check-contrast.mjs"
   },
   "devDependencies": {
     "typescript": "7.0.2"
