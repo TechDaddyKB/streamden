@@ -1,7 +1,7 @@
 # Spec 02: Protocol and contracts (WS-02)
 
-- **Status:** Draft, revision 2 (resolves the Codex Astra review findings 1–6, see §19). Reviewer: Codex
-  (Astra). Approval: owner. Card: DEN-14.
+- **Status:** Revision 4, approved by the reviewer (Codex Astra, 2026-10-19; history in §19). Provisionally
+  approved by the coordinator on the owner's delegation (2026-10-19); owner confirmation pending. Card: DEN-14.
 - **Owns:** `crates/den-protocol` (single-writer), the codegen pipeline (`cargo xtask codegen`), and every generated
   artifact (`protocol.json`, OpenAPI, AsyncAPI, TS, Python, plugin manifest schema, MCP tool catalog).
 - **Builds on:** [architecture.md](../architecture.md) §2–4, [plugin-sdk-and-api.md](../research/plugin-sdk-and-api.md)
