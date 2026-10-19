@@ -10,9 +10,9 @@ use time::macros::format_description;
 use time::{OffsetDateTime, UtcOffset};
 use ts_rs::TS;
 
-/// An instant in UTC. Serialized as RFC 3339 with exactly three fractional digits and a `Z` suffix;
-/// any RFC 3339 offset is accepted on input and normalised to UTC. Sub-millisecond precision is
-/// truncated on the wire.
+/// An instant in UTC with millisecond precision. Serialized as RFC 3339 with exactly three fractional
+/// digits and a `Z` suffix; any RFC 3339 offset is accepted on input and normalised to UTC.
+/// Sub-millisecond precision is truncated on construction, so a value always equals its wire form.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, TS)]
 #[ts(type = "string")]
 pub struct Timestamp(OffsetDateTime);
@@ -24,8 +24,12 @@ const WIRE_FORMAT: &[time::format_description::BorrowedFormatItem<'static>] =
     format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z");
 
 impl Timestamp {
-    /// Wraps an instant, converting it to UTC.
+    /// Wraps an instant, converting it to UTC and truncating it to whole milliseconds (toward negative
+    /// infinity, so the wire form and [`Timestamp::unix_millis`] agree before 1970 too).
     pub fn new(instant: OffsetDateTime) -> Self {
+        let nanos = instant.unix_timestamp_nanos();
+        let truncated = nanos.div_euclid(1_000_000) * 1_000_000;
+        let instant = OffsetDateTime::from_unix_timestamp_nanos(truncated).unwrap_or(instant);
         Self(instant.to_offset(UtcOffset::UTC))
     }
 
@@ -41,9 +45,9 @@ impl Timestamp {
             .map(Self::new)
     }
 
-    /// Milliseconds since the Unix epoch (truncated).
+    /// Milliseconds since the Unix epoch.
     pub fn unix_millis(&self) -> i64 {
-        (self.0.unix_timestamp_nanos() / 1_000_000) as i64
+        self.0.unix_timestamp_nanos().div_euclid(1_000_000) as i64
     }
 
     /// The underlying instant (UTC).
@@ -122,6 +126,18 @@ mod tests {
     fn whole_seconds_still_carry_three_digits() {
         let ts = Timestamp::from_unix_millis(0).unwrap();
         assert_eq!(ts.to_string(), "1970-01-01T00:00:00.000Z");
+    }
+
+    #[test]
+    fn truncation_is_consistent_before_the_epoch() {
+        let ts = Timestamp::parse("1969-12-31T23:59:59.9995Z").unwrap();
+        assert_eq!(ts.to_string(), "1969-12-31T23:59:59.999Z");
+        assert_eq!(ts.unix_millis(), -1);
+        assert_eq!(
+            Timestamp::parse(&ts.to_string()).unwrap(),
+            ts,
+            "a value equals its wire form"
+        );
     }
 
     #[test]

@@ -53,6 +53,10 @@ closeCodes: { [key in string]: CloseCodeEntry },
  */
 protocolMethods: Array<string>, 
 /**
+ * Scope patterns (§8.7); `<…>` marks an optional qualifier.
+ */
+scopes: Array<string>, 
+/**
  * Slugs reserved for core (§4).
  */
 reservedSlugs: Array<string>, 

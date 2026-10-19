@@ -354,6 +354,7 @@ fn golden_protocol_json_is_deterministic_and_complete() {
         );
     }
     assert_eq!(doc.errors.len(), 17);
+    assert!(doc.scopes.iter().any(|s| s == "admin"));
     assert_eq!(doc.close_codes.len(), 9);
     assert!(
         doc.events.is_empty(),

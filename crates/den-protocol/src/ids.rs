@@ -242,6 +242,9 @@ macro_rules! validated_string {
                 if let Some(pattern) = pattern_for_schema($pattern) {
                     schema.insert("pattern".into(), pattern.into());
                 }
+                if let Some(max) = max_length_for(stringify!($name)) {
+                    schema.insert("maxLength".into(), max.into());
+                }
                 schema
             }
         }
@@ -254,6 +257,14 @@ fn pattern_for_schema(pattern: &'static str) -> Option<&'static str> {
     pattern
         .strip_prefix("rule:")
         .map_or(Some(pattern), |_| None)
+}
+
+/// Length limits the patterns cannot express (§4).
+fn max_length_for(kind: &str) -> Option<u32> {
+    match kind {
+        "PluginId" => Some(128),
+        _ => None,
+    }
 }
 
 fn is_lower_alnum_underscore(c: char) -> bool {
@@ -342,12 +353,13 @@ fn is_sha256_hex(s: &str) -> bool {
             .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
 }
 
-/// `<area>:<verb>[:<qualifier>]` (§8.7). Area and verb are `lower_snake_case`; the qualifier is free text
-/// without whitespace (an action ID, a tag, a glob, a plugin ID or a variable name).
+/// `<area>[:<verb>[:<qualifier>]]` (§8.7). Area and verb are `lower_snake_case`; the qualifier is free
+/// text without whitespace (an action ID, a tag, a glob, a plugin ID or a variable name). The bare
+/// `admin` scope has no verb.
 fn is_scope(s: &str) -> bool {
     let mut parts = s.splitn(3, ':');
     let area = parts.next().is_some_and(is_lower_snake_segment);
-    let verb = parts.next().is_some_and(is_lower_snake_segment);
+    let verb = parts.next().is_none_or(is_lower_snake_segment);
     let qualifier = parts
         .next()
         .is_none_or(|q| !q.is_empty() && !q.chars().any(char::is_whitespace));
@@ -361,10 +373,9 @@ fn is_topic_glob(s: &str) -> bool {
         return false;
     }
     let last = segments.len() - 1;
-    segments
-        .iter()
-        .enumerate()
-        .all(|(i, seg)| *seg == "*" || (i == last && *seg == "**") || is_lower_snake_segment(seg))
+    segments.iter().enumerate().all(|(i, seg)| {
+        *seg == "*" || (i == last && i > 0 && *seg == "**") || is_lower_snake_segment(seg)
+    })
 }
 
 fn is_platform_id(s: &str) -> bool {
@@ -419,7 +430,7 @@ validated_string! {
 
 validated_string! {
     /// A scope `<area>:<verb>[:<qualifier>]` (`actions:run:<actionId|tag>`, §8.7).
-    Scope, kind = "scope", pattern = "^[a-z][a-z0-9_]*:[a-z][a-z0-9_]*(:[^\\s]+)?$", check = is_scope
+    Scope, kind = "scope", pattern = "^[a-z][a-z0-9_]*(:[a-z][a-z0-9_]*(:[^\\s]+)?)?$", check = is_scope
 }
 
 validated_string! {
@@ -498,16 +509,21 @@ mod tests {
             "actions:read",
             "actions:run:tag",
             "events:read:twitch.**",
-            "admin:all",
+            "admin",
             "plugins:call:io.github.a.b",
         ] {
             assert!(Scope::is_valid(s), "{s}");
         }
-        assert!(!Scope::is_valid("admin"));
+        assert!(!Scope::is_valid("Admin"));
         assert!(!Scope::is_valid("a:b:"));
+        assert!(!Scope::is_valid("a:b c"));
         for g in ["twitch.**", "*.follow", "chat.message", "*"] {
             assert!(TopicGlob::is_valid(g), "{g}");
         }
+        assert!(
+            !TopicGlob::is_valid("**"),
+            "a bare ** is not in the schema pattern"
+        );
         assert!(!TopicGlob::is_valid("twitch.**.x"));
         assert!(!TopicGlob::is_valid("Twitch.*"));
     }

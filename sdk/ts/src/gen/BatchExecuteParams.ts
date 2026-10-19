@@ -16,6 +16,6 @@ mode: BatchMode,
  */
 haltOnFailure: boolean, 
 /**
- * The requests, executed in order under the caller's context.
+ * The requests, executed in order under the caller's context. At most 64 entries (§8.2).
  */
 requests: Array<RpcRequest>, };
