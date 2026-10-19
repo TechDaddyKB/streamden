@@ -1,6 +1,6 @@
 # Rumble: Live Stream API URL (no registration)
 
-Last verified against official docs: 2026-10-18. Part of the [owner runbooks](../README.md). Phase P5 (later), subject to Q-S1.
+Last verified against official docs: 2026-10-19 (chat-send section added for DEN-54). Part of the [owner runbooks](../README.md). Phase P5 (later), subject to Q-S1; an earlier phase and unofficial chat sending are open owner questions (Q-S8, Q-C8).
 
 ## Purpose
 
@@ -45,15 +45,39 @@ You should get JSON. While you are offline, `livestreams` is empty. Do not paste
 
 - **Empty `livestreams`**: you are not live yet, so chat and rants are missing.
 - **Only 50 chat items**: a busy chat can outrun slow polling.
-- **Unofficial chat** (SSE stream and cookie-based sending) exists in community libraries but is unsupported and needs a session cookie. Not part of core.
+- **Unofficial chat** (SSE stream and cookie-based sending) exists in community libraries but is unsupported. Sending needs a session cookie. Not part of core unless you accept it (Q-C8). See the optional section below.
 - **Reset the URL** if you ever show it on stream or in a screenshot.
+
+## Optional: sending chat to Rumble (unofficial, only if Q-C8 is accepted)
+
+Rumble has **no official way to send chat**. The Live Stream API URL above is read-only. StreamDen can only send, delete, pin or mute through Rumble's private website API while logged in as you. That is against the letter of Rumble's terms ("Restrictions on Automated Software") and may break without notice. The risk falls on **your** Rumble account. Details: [platform-apis.md section 8.1](../../research/platform-apis.md).
+
+There is **nothing to register**. If the feature is built and you choose to turn it on:
+
+1. Decide which account speaks. Using your main account is simplest. A second Rumble account made a moderator of your channel limits the damage if Rumble ever acts against automated use. It posts under its own name, and as a moderator it should be able to delete, pin and mute (unverified). Check on screen how to add a channel moderator.
+2. In **StreamDen > Settings > Connections > Rumble > Chat sending (unofficial)**, read the warning and switch it on.
+3. Click **Sign in to Rumble**. A StreamDen window opens rumble.com. Log in normally, including your 2FA code. StreamDen keeps only the session cookie, stores it in your OS keychain, and closes the window. **StreamDen never sees or stores your password.**
+4. Fallback only if that window fails: StreamDen's advanced option lets you paste the `u_s` cookie value from your browser's developer tools. Treat it like a password. **Never paste it into chat, a board card, an AI agent, or the repo.**
+5. Test on a private or unlisted stream (see [go-live-requirements.md](../go-live-requirements.md)): send a short message from the combined chat and check that it appears on rumble.com.
+
+**What to copy and where it goes (send only)**
+
+| Value | Secret? | Where it goes |
+|---|---|---|
+| Rumble session cookie (`u_s`) | **Yes.** Anyone holding it is logged in as you until it expires or you log out. | Captured by StreamDen's sign-in window into the OS keychain. Never into `.env.local`, screenshots, logs or chat. |
+
+**To revoke:** click **Sign out** in StreamDen, which logs the session out at Rumble and deletes the keychain entry. Changing your Rumble password also ends the session.
+
+**If it stops working:** StreamDen marks Rumble "read-only" with a reason ("sign in again", "blocked by Rumble" or "Rumble changed its site"). Reading chat keeps working through the API URL. Don't work around a block. Wait for a StreamDen update.
 
 ## Policy notes
 
 - No developer terms to accept for this URL, but Rumble's general terms apply. The URL is for you or "trusted third parties".
+- Rumble's [terms](https://rumble.com/s/terms) (last modified 2026-09-01) prohibit "any form of automated software to interact with or access the Rumble Site" without prior written permission. That is why chat sending is unofficial and opt-in.
 
 ## Sources
 
 - Rumble Live Stream API help: <https://rumble.support/en/help/how-to-use-rumble-s-live-stream-api>
 - Manage URLs: <https://rumble.com/account/livestream-api>
-- Platform research: [platform-apis.md section 8](../../research/platform-apis.md)
+- Rumble terms of service: <https://rumble.com/s/terms>
+- Platform research: [platform-apis.md sections 8 and 8.1](../../research/platform-apis.md)

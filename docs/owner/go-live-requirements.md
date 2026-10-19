@@ -104,6 +104,7 @@ Source quality: where an official page could not be fetched (X, TikTok, Kick, Ru
 **Safe testing**
 
 - Rumble's stream setup has visibility options (verify on screen whether unlisted/private exist for live). Otherwise use a test title and a second account. The Live Stream API returns real data only while live.
+- Testing **chat sending** (unofficial, only if Q-C8 is accepted) also needs a live stream. Send from a second Rumble account into your own test stream so a mistake never posts on your main channel. See the optional section in [rumble.md](registrations/rumble.md).
 
 ## X Live
 

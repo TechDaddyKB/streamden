@@ -152,6 +152,25 @@ bring-your-own only, no voice TTS until the Discord voice libraries stabilize.
 **Recommendation:** P6. It needs a hosted backend (EBS), which conflicts with local-first.
 **Answer:** Go with the recommendation
 
+### Q-S8 — Pull Rumble earlier than P5? 🟥 (Round 3)
+Owner request (2026-10-19): the combined chat must send to every platform that has chat. D-024 puts Rumble in P5,
+but the official read side is cheap: one pasted URL polled every 5–10 s, plus an optional login-free real-time SSE
+chat stream ([platform-apis.md 8.1](research/platform-apis.md)). Options: (a) keep everything Rumble in P5;
+(b) Rumble **read** (official URL plus optional SSE) in P2 with the other multichat sources, send in P5;
+(c) read **and** opt-in send in P2 (only if Q-C8 is (b) or (c)).
+**Recommendation:** (b). Read is low-risk and fills the multichat in P2. Ship send in P2 too only if you accept the
+Q-C8 risk, after a spike against a private test stream.
+**Answer:**
+
+### Q-S9 — Add Streamplace (atproto live video) as a chat platform? 🟥 (Round 3)
+Bluesky itself has no live chat; its "Live Now" badge links out to Twitch, YouTube or stream.place. Streamplace
+chat is plain atproto records (`place.stream.chat.message`), readable and sendable with the same login as our
+planned Bluesky integration, and it has official moderation calls (block, hide, pin)
+([platform-apis.md 14.1](research/platform-apis.md)). Options: (a) not in scope; (b) a small P2/P4 connector next
+to Bluesky; (c) leave it to a community plugin.
+**Recommendation:** (c) for now. Revisit if you or your audience start streaming there.
+**Answer:**
+
 ---
 
 ## C — Cloud, relay and third-party accounts
@@ -222,6 +241,32 @@ App password or OAuth as the default Bluesky login?
 **Recommendation:** local backups plus "export to a folder" (users can point it at Dropbox, Syncthing or Nextcloud).
 No hosted backups.
 **Answer:** Go with the recommendation
+
+### Q-C8 — Send chat to Rumble through its unofficial website API? 🟥 (Round 3)
+Rumble has no official write API. Its Live Stream API URL is read-only. Sending, deleting, pinning and muting work
+only through Rumble's private web endpoints while logged in as the streamer (session cookie `u_s`), as the
+Apache-2.0 library cocorum shows. Rumble's terms prohibit "any form of automated software to interact with or access
+the Rumble Site" without written permission, and cocorum's session check broke "again" in October 2026 (a 403
+after a Cloudflare change, fixed two days later).
+The risk falls on the streamer's own account. Details and our clean-room position (behaviour learned, no code
+copied): [platform-apis.md 8.1](research/platform-apis.md).
+Options: (a) no Rumble sending; Rumble stays a read-only target with a "Rumble has no official send API" reason in
+the composer; (b) opt-in "unofficial" toggle, **off by default**, with a risk notice, sign-in through a StreamDen
+login window (cookie to the OS keychain, password never seen), automatic fallback to read-only on any sign of
+breakage, no paid rants; (c) like (b) but on by default once signed in.
+**Recommendation:** (b). It meets the "send everywhere" goal, keeps the risk a visible, informed choice per user,
+and fails safe. Pick the phase in Q-S8.
+**Answer:**
+
+### Q-C9 — TikTok LIVE chat sending stance 🟥 (Round 3)
+TikTok has no official LIVE API. Sending needs the account's `sessionid` cookie **sent to a third-party signing
+service** (Euler Stream) through AGPL libraries, and TikTok's terms forbid bots (section 3.4). D-024 already makes
+TikTok a community plugin. Options: (a) no TikTok sending anywhere; first-party TikTok, if any, is read-only;
+(b) no first-party sending, but the plugin SDK doesn't stop a community TikTok plugin from offering it (with a
+mandatory warning that the session goes to a third party); (c) first-party opt-in sending like Q-C8 (b).
+**Recommendation:** (b). The composer shows TikTok as "read-only (no official API)" unless a community plugin
+declares a send capability.
+**Answer:**
 
 ---
 
@@ -319,6 +364,18 @@ OBS disables custom browser docks on native Wayland (Hyprland included), so we s
 chat window *and* an OBS dock URL. **Confirmed by spike S-2:** no dock menu at all on native Wayland; docks work
 under XWayland. On **NVIDIA Linux**, OBS's browser source hardware acceleration must be turned off (blank sources
 on Wayland, crash under XWayland), and the setup wizard should detect this and guide the user.
+
+### Q-U6 — Combined-chat composer: "send to all" defaults 🟥 (Round 3)
+The composer sends to one or more targets (platform × channel × identity). Open defaults: (1) What does **Enter**
+send to: the platform of the tab you're viewing or of the message you're replying to, or every enabled target?
+(2) Which identity is the default, broadcaster or bot? (3) On a partial failure, show per-target results only, or
+also offer "retry failed"? (No automatic retries; a resend could double-post.) (4) Should unofficial or
+risk-flagged targets (Rumble via Q-C8) be included in "send to all"?
+**Recommendation:** Streamer.bot-like keys: Enter = current target (the tab's platform, or the replied-to
+message's platform), Shift+Enter = all enabled targets, Ctrl+Enter = as bot. Default identity = broadcaster.
+Per-target result chips with a manual "retry failed". Unofficial targets join "send to all" only when the user
+ticks them in the target picker.
+**Answer:**
 
 ---
 

@@ -38,7 +38,7 @@ Conventions: v1.0 = all P0 and P1 rows complete (phases run through P6). Where a
 | 1.03 | Twitch: OAuth via Public client + Device Code Flow (no secret) for broadcaster and bot | ✓ | ✓ | ✓ | Twurple | P0 | P1-Core | Refresh tokens single-use, 30 d idle expiry: persist atomically; call `/validate` at start + hourly; PKCE unsupported by Twitch; one permanent client ID (custom rewards bound to it). SAM must re-link every 60 d. |
 | 1.04 | Twitch: EventSub WebSocket transport (no IRC, no PubSub), reconnect/keepalive handling | ✓ | ✓ | ◐ | Twurple | P0 | P1-Core | 3 WS/user, 300 subs/WS, 10 s to subscribe after Welcome, honor `session_reconnect`. SAM still uses IRC for chat. |
 | 1.05 | Twitch: chat read (fragments, emotes, cheermotes, replies, first-message flag, GIF fragments) | ✓ | ✓ | ✓ | CT, SSN | P0 | P1-Core | `user:read:chat`; EventSub lacks first-message flag in SB (tracked locally). |
-| 1.06 | Twitch: chat send (broadcaster/bot with fallback, reply, announcement, send-and-pin) | ✓ | ◐ | ✓ | NB, FOS | P0 | P1-Core | Helix `POST /chat/messages`; 20 msg/30 s regular, 100 mod/VIP; separate rate bucket. SpB only replies to `!tts` commands. |
+| 1.06 | Twitch: chat send (broadcaster/bot with fallback, reply, announcement, send-and-pin) | ✓ | ◐ | ✓ | NB, FOS | P0 | P1-Core | Helix `POST /chat/messages`; 500 chars; 20 msg/30 s regular, 100 mod/VIP; separate rate bucket; HTTP 200 can still carry `is_sent: false` + `drop_reason`. SpB only replies to `!tts` commands. Send matrix: platform-apis §14. |
 | 1.07 | Twitch: whispers read/send | ✓ | ◐ | ✓ | — | P2 | P2-Chat+TTS | SpB lets mods whisper `!tts` commands. |
 | 1.08 | Twitch: follows | ✓ | ✓ | ✓ | all | P0 | P1-Core | `channel.follow` v2 needs `moderator:read:followers`. |
 | 1.09 | Twitch: subs by tier (T1/T2/T3, Prime), resub, sub message, months/streak | ✓ | ✓ | ✓ | SL, SE, LS | P0 ★ | P1-Core | Tier `1000/2000/3000`; Prime via `is_prime` on chat notice. Drives tier alert variants (§9). |
@@ -74,7 +74,7 @@ Conventions: v1.0 = all P0 and P1 rows complete (phases run through P6). Where a
 | 1.39 | YouTube: OAuth (Desktop client, loopback + PKCE, device-flow fallback), broadcaster + optional bot | ✓ | — | ✓ | SSN | P1 | P2-Chat+TTS | System browser only; device flow limited to `youtube`/`readonly` scopes; unverified apps capped at 100 users; "Testing" tokens expire in 7 d. |
 | 1.40 | YouTube: quota strategy (shared project + audit vs BYO API project/key) | ✓ | — | ✓ | SSN | P1 | P2-Chat+TTS | Default 10k units/day/project; SB pool runs dry; SAM has 8M/day shared. Apply for OAuth verification + quota audit early; BYO is advanced setting. Owner decision. |
 | 1.41 | YouTube: chat read via `liveChatMessages.streamList` (gRPC, resume token) | ✓ | — | ✓ | SSN | P1 | P2-Chat+TTS | 5 units/call; per-connection billing unverified; `tonic`/`@grpc/grpc-js`; polling `list` burns 14,400 units/4 h. |
-| 1.42 | YouTube: chat send | ✓ | — | ✓ | — | P1 | P2-Chat+TTS | 20 units each. |
+| 1.42 | YouTube: chat send | ✓ | — | ✓ | — | P1 | P2-Chat+TTS | 20 units each; 200 chars and ~11 msgs/30 s (Help Center, not API docs); no reply/thread field. |
 | 1.43 | YouTube: moderation (ban/timeout, delete, mods) | ✓ | — | ✓ | — | P2 | P2-Chat+TTS | Bans cost 200 units: rate-limit or confirm. |
 | 1.44 | YouTube: Super Chat (amount, currency, tier, comment) | ✓ | — | ✓ | SL, SE | P1 ★ | P2-Chat+TTS | `superChatEvent`; `superChatEvents.list` (30 d) for reconciliation. |
 | 1.45 | YouTube: Super Sticker | ✓ | — | ✓ | SSN | P1 ★ | P2-Chat+TTS | `superStickerEvent` (`stickerId`, `altText`). |
@@ -90,7 +90,7 @@ Conventions: v1.0 = all P0 and P1 rows complete (phases run through P6). Where a
 | 1.55 | YouTube: `members.list`, `membershipsLevels.list` | — | — | — | — | ✗ | — | Requires Google/YouTube representative approval. |
 | 1.56 | Kick: OAuth 2.1 + PKCE (needs `client_secret` for exchange and refresh) | ✓ | — | ◐ | — | P1 | P2-Chat+TTS | Default: self-hostable relay token broker (P2, see §23); BYO Kick app + user tunnel as alternative. Public-client support is an open Kick request (#413). Dev apps need 2FA. |
 | 1.57 | Kick: events via webhooks (chat, follow, sub new/renew/gifts, KICKs, rewards, live status, metadata, ban) | ✓ | — | ◐ | SSN (DOM) | P1 | P2-Chat+TTS | Public HTTPS endpoint required: self-hostable relay mailbox (P2, §23) or user tunnel; desktop verifies RSA-SHA256 sig (rotating key); ULID idempotency; `chat.message.sent` capped 1,000 subs unverified; auto-unsubscribed after ~1 day of failures. SAM = "Kick Streaming" ext. |
-| 1.58 | Kick: chat send (user/bot, reply) | ✓ | — | ◐ | Botrix | P1 | P2-Chat+TTS | 500 graphemes; bot posts to token's own channel. |
+| 1.58 | Kick: chat send (user/bot, reply) | ✓ | — | ◐ | Botrix | P1 | P2-Chat+TTS | 500 graphemes and 2048 bytes; `reply_to_message_id`; bot posts to token's own channel; rate limit unpublished (handle 429). |
 | 1.59 | Kick: moderation (ban/timeout/unban/untimeout, delete message) | ✓ | — | ◐ | — | P2 | P2-Chat+TTS | Delete API since 2025-12-02; no message-deleted event. |
 | 1.60 | Kick: channel rewards CRUD + redemptions (max 15 in SB) | ✓ | — | — | — | P2 | P2-Chat+TTS | APIs 2025-12/2026-01; no realtime reward updates in SB. |
 | 1.61 | Kick: title/category set | ✓ | — | — | — | P2 | P2-Chat+TTS |  |
@@ -98,18 +98,25 @@ Conventions: v1.0 = all P0 and P1 rows complete (phases run through P6). Where a
 | 1.63 | Kick: raids/hosts, polls, predictions | — | — | — | — | ✗ | — | No Kick API (issue #102). |
 | 1.64 | TikTok LIVE: read-only unofficial connector (WebCast; chat, gifts, follows, likes) | — | — | — | LS, SSN | P3 | P4-Integrations+SDK | ToS 3.4 forbids; TikTok-Live-Connector/TikTokLive are AGPL (isolate as separate process); Euler signer free tier 2,500 req/day. Plugin-only. |
 | 1.65 | TikTok: TikFinity bridge (their output pushed into our WS API) | ◐ | — | — | SSN | P2 | P6-Ecosystem | SB's documented route; works best with SB-compatible WS (§21). |
-| 1.66 | TikTok: chat send | — | — | — | — | ✗ | — | Needs session cookies sent to a third-party signer; ban risk. |
-| 1.67 | X/Twitter: post (BYO developer app, OAuth 2.0 PKCE loopback 127.0.0.1) | ◐ | — | — | SL Desktop | P1 ★ | P4-Integrations+SDK | SB has no native X (IFTTT only). Pay-per-use: $0.015/post, **$0.20 with URL**, user pays; `offline.access` for refresh. Plain HTTP so cheap to pull earlier. |
-| 1.68 | X/Twitter: read own mentions/posts (owned reads) as polling trigger | — | — | — | — | P2 | P4-Integrations+SDK | $0.001/resource; ~(inferred) polling only. |
-| 1.69 | X Live chat / Livestream API | — | — | — | — | ✗ | — | Whitelisted apps only + hosted webhook. |
+| 1.66 | TikTok: chat send | — | — | — | — | ✗ | — | Needs session cookies sent to a third-party signer; ban risk. Community-plugin stance: Q-C9. Composer shows TikTok as read-only with a reason (8.40). |
+| 1.67 | X/Twitter: post (BYO developer app, OAuth 2.0 PKCE loopback 127.0.0.1) | ◐ | — | — | SL Desktop | P1 ★ | P2-Chat+TTS | SB has no native X (IFTTT only). Pay-per-use: $0.015/post, **$0.20 with URL**, user pays; `offline.access` for refresh. Plain HTTP so cheap to pull earlier. Phase aligned with D-024 and PLAN.md P2 (was P4). |
+| 1.68 | X/Twitter: read own mentions/posts (owned reads) as polling trigger | — | — | — | — | P2 | P2-Chat+TTS | $0.001/resource; ~(inferred) polling only. Phase aligned with D-024 and PLAN.md P2 (was P4). |
+| 1.69 | X Live chat / Livestream API | — | — | — | — | ✗ | — | Whitelisted apps only + hosted webhook. Send `POST /2/broadcasts/{id}/chat` (140 chars, `broadcast.write`) exists but is whitelisted too; revisit only if the owner's X app is whitelisted. |
 | 1.70 | Trovo | — | — | — | MIU lists | ✗ | — | Live streaming shut down 2026-06-30; SB removed in 1.0.5. |
-| 1.71 | Facebook Live (Graph SSE comments, comment as Page) | — | — | — | LS | P3 | P4-Integrations+SDK | App Review + Business Verification; device login 60-day tokens; low priority. |
-| 1.72 | Rumble Live Stream API (pasted API URL, polling: followers/subs/gifted/rants/chat) | — | — | — | — | P3 | P4-Integrations+SDK | 50 recent items, ~5 s min refresh; unofficial SSE chat opt-in. |
-| 1.73 | Discord: outbound webhook post (paste URL; text/file) | ✓ | — | ✓ | FB, MIU | P1 | P4-Integrations+SDK | Go-live posts; no auth; SAM file send is Pro. |
+| 1.71 | Facebook Live (Graph SSE comments, comment as Page) | — | — | — | LS | P3 | P5-Decks+Voice | App Review + Business Verification; device login 60-day tokens; low priority. Phase aligned with D-024 (was P4). Send split out as 1.81. |
+| 1.72 | Rumble Live Stream API (pasted API URL, polling: followers/subs/gifted/rants/chat) | — | — | — | — | P3 | P5-Decks+Voice | 50 recent items, ~5 s min refresh; read-only (no write API). Phase aligned with D-024 (was P4); Q-S8 asks about P2. SSE in 1.78, send in 1.79. |
+| 1.73 | Discord: outbound webhook post (paste URL; text/file) | ✓ | — | ✓ | FB, MIU | P1 | P2-Chat+TTS | Go-live posts; no auth; SAM file send is Pro. Phase aligned with D-024 and PLAN.md P2 (was P4). |
 | 1.74 | Discord: bot gateway (BYO bot token) for receiving events/messages | — | — | ◐ | MIU | P2 | P4-Integrations+SDK | SAM via "Discord Triggers" ext; `MESSAGE_CONTENT` privileged; SB has no receive path. |
 | 1.75 | Discord: local RPC voice-activity overlay | ◐ | — | ◐ | — | P3 | P4-Integrations+SDK | `rpc.voice.*` scopes approval-gated. |
 | 1.76 | Long-tail platform ingestion via DOM capture (120+ sites) | — | — | — | SSN | P3 | P4-Integrations+SDK | Fragile, ToS exposure; optional plugin; SSN is GPL-3.0 (reimplement). |
 | 1.77 | Per-platform rate-limit/quota awareness (Twitch buckets, YouTube units, Kick caps) | ◐ | — | ◐ | — | P1 | P1-Core | YouTube quota meter in UI; Helix 800 pts/min. |
+| 1.78 | Rumble: real-time chat read via unofficial SSE (`web7.rumble.com`, no login; init/messages/delete/pin events, rants, raids, gift notices; HTTP 204 = chat ended) | — | — | — | — | P3 | P5-Decks+Voice | Unofficial but login-free; no event IDs, so no resume. Stream ID comes from the official API. platform-apis §8.1. Q-S8 (phase). |
+| 1.79 | Rumble: chat send via session cookie (unofficial; pending Q-C8; recommended form: opt-in, StreamDen sign-in window, cookie in keychain, read-only fallback on breakage) | — | — | — | — | P2 | P5-Decks+Voice | Owner request 2026-10-19. No official write API; ToS bans automated access; a community client's session check broke "again" in Oct 2026 (cocorum #35). Max length from SSE `init`. No paid rants. Clean-room: behaviour learned from Apache-2.0 cocorum, no code copied. Q-C8 (accept risk), Q-S8 (phase). |
+| 1.80 | Rumble: moderation (delete message, pin/unpin, mute/unmute per stream or channel-wide; unofficial, pending Q-C8) | — | — | — | — | P2 | P5-Decks+Voice | Same session cookie and risk as 1.79; unmute needs an HTML-scraped record ID (most fragile). Q-C8. |
+| 1.81 | Facebook Live: comment as Page (send), delete/hide comments | — | — | — | — | P3 | P5-Decks+Voice | `POST /{live-video-id}/comments` with a Page token (MODERATE task and `pages_manage_engagement`); App Review; no separate live-comment length or send cap found, the shared Page-token Graph budget applies (4800 × engaged users per rolling 24 h, usage header). |
+| 1.82 | Discord: send from the multichat composer to a Discord channel (bot reply with `message_reference`, or webhook) | — | — | — | — | P2 | P2-Chat+TTS | Webhook target in P2 (D-024); bot replies with the companion bot in P4 (Q-S7). 2000 chars; `allowed_mentions: {parse: []}` on bridged text; ignore own/webhook messages (loop guard). |
+| 1.83 | Streamplace (atproto live video): chat read/send as `place.stream.chat.message` records, moderation (block/hide/pin) | — | — | — | — | P3 | P4-Integrations+SDK | Not in current scope; priority/phase are placeholders pending Q-S9. Same login as Bluesky; 300 graphemes; native replies. |
+| 1.84 | Bluesky: live chat | — | — | — | — | ✗ | — | Bluesky has no live chat; "Live Now" links out to an external stream (Twitch/YouTube/stream.place). |
 
 ## 2. Core automation engine
 
@@ -307,7 +314,7 @@ Conventions: v1.0 = all P0 and P1 rows complete (phases run through P6). Where a
 | 8.27 | Twitch shared chat: source-channel badge, "only my channel", dedupe | ✓ | ◐ | ✓ | — | P1 | P2-Chat+TTS |  |
 | 8.28 | Name colours with readability correction | — | — | — | CT | P2 | P2-Chat+TTS | 7TV paints are P3. |
 | 8.29 | Featured/pinned message to overlay (queue, auto-feature rules, timeout) | — | — | — | SSN, FB | P2 | P3-Designer | Twitch pinned-message sync when API allows. |
-| 8.30 | Dock composer: combined/tabbed view, reply targeting (Enter / Shift+Enter all / Ctrl+Enter as bot), quick mod actions, search, pause-scroll | ✓ | — | — | CT, RS | P1 | P2-Chat+TTS |  |
+| 8.30 | Dock composer: combined/tabbed view, reply targeting (Enter / Shift+Enter all / Ctrl+Enter as bot), quick mod actions, search, pause-scroll | ✓ | — | — | CT, RS | P1 | P2-Chat+TTS | Send targets, fan-out and per-target state: 8.39-8.41; key defaults Q-U6. |
 | 8.31 | Composer autocomplete (`/action`, `/title`, `/clear`, `:` emotes, `!` commands) | ✓ | — | — | — | P2 | P2-Chat+TTS |  |
 | 8.32 | Quick Actions (Global/User/Message/Event scopes run actions with args) | ✓ | — | — | — | P1 | P2-Chat+TTS |  |
 | 8.33 | Events feed window/dock | ✓ | — | — | SE | P1 | P2-Chat+TTS |  |
@@ -316,6 +323,9 @@ Conventions: v1.0 = all P0 and P1 rows complete (phases run through P6). Where a
 | 8.36 | Chat relay between platforms | — | — | — | SSN | P3 | P2-Chat+TTS |  |
 | 8.37 | Settings sync from app to docks; per-split filters | ✓ | — | — | CT | P2 | P2-Chat+TTS | SB sync is one-way. |
 | 8.38 | Local chat history with retention limits | ◐ | — | — | — | P2 | P2-Chat+TTS | Twitch 24 h caching rule, YouTube 30 d (see 20.14). |
+| 8.39 | Composer send targets: chips per platform × channel × identity; "send to all" fan-out with a per-target result (sent / dropped with reason / failed / skipped); manual "retry failed" (recommended: no auto-retry, pending Q-U6) | ◐ | — | — | RS | P1 ★ | P2-Chat+TTS | Owner request 2026-10-19: send to every platform with chat. SB ◐ = send-to-all exists (Shift+Enter, 8.30); per-target result reporting in SB/RS (inferred), unverified. Whether unofficial targets (Rumble 1.79) join "send to all" is Q-U6 (recommended: only when ticked). platform-apis §14.2. |
+| 8.40 | Read-only and unavailable targets stay visible, disabled with a reason (no official send API, unofficial sending off, signed out, session expired, rate-limited, quota low, not live), driven by connector-advertised send capabilities | — | — | — | — | P1 ★ | P2-Chat+TTS | Capability shape goes into den-protocol via ADR + contract card, not ad hoc. Plugins (e.g. a community TikTok plugin) use the same states. |
+| 8.41 | Per-target send pre-flight: length in the platform's unit (chars/graphemes/bytes; 140 X, 200 YouTube/Rumble, 500 Twitch/Kick, 2000 Discord), shared outbound rate limiter, YouTube quota warning, native reply vs `@name` fallback, dedupe of our own sends echoed back on the read path | — | — | — | — | P1 | P2-Chat+TTS | Never truncate silently. Echo dedupe uses the platform message ID returned by the send. |
 
 ## 9. Overlays, alerts & designer
 
@@ -770,15 +780,15 @@ Row counts by priority per section (`★` = owner must-have rows, already includ
 
 | Section | P0 | P1 | P2 | P3 | ✗ | Total | ★ |
 |---|---|---|---|---|---|---|---|
-| 1. Platforms | 12 | 30 | 19 | 8 | 8 | 77 | 9 |
-| 2. Core automation engine | 13 | 23 | 14 | 3 | 0 | 53 | 0 |
+| 1. Platforms | 12 | 30 | 22 | 11 | 9 | 84 | 9 |
+| 2. Core automation engine | 13 | 24 | 14 | 2 | 0 | 53 | 0 |
 | 3. Variables & expressions | 8 | 11 | 4 | 0 | 0 | 23 | 0 |
 | 4. Commands | 5 | 4 | 4 | 2 | 0 | 15 | 0 |
 | 5. Timers & scheduling | 1 | 5 | 1 | 0 | 0 | 7 | 0 |
 | 6. Code execution | 3 | 6 | 3 | 1 | 0 | 13 | 3 |
 | 7. Servers & public API | 6 | 13 | 3 | 0 | 0 | 22 | 6 |
-| 8. Multichat | 1 | 23 | 12 | 2 | 0 | 38 | 13 |
-| 9. Overlays, alerts & designer | 1 | 29 | 16 | 5 | 0 | 51 | 15 |
+| 8. Multichat | 1 | 26 | 12 | 2 | 0 | 41 | 15 |
+| 9. Overlays, alerts & designer | 1 | 30 | 15 | 5 | 0 | 51 | 15 |
 | 10. TTS | 0 | 26 | 10 | 4 | 0 | 40 | 0 |
 | 11. STT & voice commands | 0 | 2 | 3 | 3 | 0 | 8 | 0 |
 | 12. Decks & remote control | 0 | 8 | 3 | 8 | 0 | 19 | 0 |
@@ -794,4 +804,4 @@ Row counts by priority per section (`★` = owner must-have rows, already includ
 | 22. Plugin SDK & ecosystem | 2 | 18 | 5 | 3 | 0 | 28 | 10 |
 | 23. App UX & ops | 8 | 14 | 9 | 3 | 0 | 34 | 4 |
 | 24. AI & MCP | 0 | 4 | 2 | 2 | 0 | 8 | 0 |
-| **Total** | **65** | **267** | **165** | **82** | **10** | **589** | **67** |
+| **Total** | **65** | **272** | **167** | **84** | **11** | **599** | **69** |
