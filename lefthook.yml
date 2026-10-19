@@ -1,0 +1,11 @@
+no_auto_install: true
+
+pre-commit:
+  commands:
+    branch-name:
+      run: node scripts/check-branch-name.cjs
+
+commit-msg:
+  commands:
+    commit-policy:
+      run: pnpm exec commitlint --edit "{1}"
