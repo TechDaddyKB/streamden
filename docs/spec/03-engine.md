@@ -1,7 +1,8 @@
 # Spec 03: Engine core (WS-03)
 
-- **Status:** Revision 3, approved by the reviewer (Codex Astra, 2026-10-19; history in §25). Provisionally
-  approved by the coordinator on the owner's delegation (2026-10-19); owner confirmation of Q-E1–Q-E8 pending. Card: DEN-15.
+- **Status:** Revision 4 (DEN-42 follow-ups, pending review). r3 was approved by the reviewer (Codex Astra,
+  2026-10-19; history in §25) and provisionally approved by the coordinator on the owner's delegation
+  (2026-10-19); owner confirmation of Q-E1–Q-E8 pending. Cards: DEN-15, DEN-42.
 - **Owns:** `crates/den-core`: the event bus, trigger matching, commands, timers and cron, the run executor
   (sub-action tree), queues and scheduling, variables, Action History, and the SQLite storage layer. It also owns
   the engine-side implementation of the authorization rules in [spec 02 §8.8](02-protocol.md).
@@ -57,9 +58,9 @@ and 19 rows).
 
 The types are spec 02 §5–6: `Event` with `EventMeta { payloadVersion, test, replay, causedBy, correlationId }`;
 `Action { id, revision, name, group, enabled, queue, concurrent, random, alwaysRun, history, triggers, nodes,
-description, tags, origin }`; `Queue { id, name, blocking, paused, maxPending, overflow }`; `Trigger { id, type,
-plugin?, enabled, unresolved, alwaysRun, filters, config }`; `SubAction { id, enabled, weight, note, node }` with
-`Node` = `Op | Group | If | Switch | While | BreakLoop | ContinueLoop | Stop | Parallel | Delay | RunAction | Code |
+description, tags, origin }`; `Queue { id, name, blocking, paused, maxPending, overflow, maxRunMs }`; `Trigger { id, type,
+plugin?, enabled, unresolved, alwaysRun, filters, config }`; `SubAction { id, enabled, weight, note, onError, node }` with
+`Node` = `Op | Group | If | Switch | While | ForEach | BreakLoop | ContinueLoop | Stop | Parallel | Delay | RunAction | Code |
 Placeholder`; the run context roots `event, user, trigger, action, run, globals, plugins, match, args, now`
 (spec 02 §6.3); `AuthContext` and the rules of spec 02 §8.8.
 
@@ -67,14 +68,15 @@ This spec adds the engine's own records and documents, all persisted per spec 02
 `den-protocol` through a contract task (§23; **landed in spec 02 r6**, which is normative for the shapes, including
 `Queue.maxRunMs`, `SubAction.onError`, `Node::ForEach`, `Command.sources: Vec<EventType>`,
 `Command.permissions.users: Vec<UserKey { platform, userId }>`, `RunError.code: ErrorCode` and `run.lastError:
-RunError | null`; spec 02 §6.1, §6.4, §6.5):
+RunError | null`; spec 02 §6.1, §6.4, §6.5). The block below is a reading aid kept in step with spec 02 §6.5; where
+they differ, spec 02 wins:
 
 ```rust
 /// One execution of an action. Persisted in Action History (§12) unless `history.record` is false.
 pub struct Run {
     pub id: RunId,                       // UUIDv7, minted at admission
     pub action: ActionId, pub action_name: String, pub action_revision: u64,
-    pub trigger: Option<TriggerId>,      // None for actions.run, replay, RunAction children
+    pub trigger: Option<TriggerId>,      // None for actions.run and RunAction children; a replay copies the replayed run's (§12.3)
     pub event: Option<EventId>,          // the event that fired the trigger, or the replayed event
     pub queue: QueueId,
     pub state: RunState, pub cancel_reason: Option<CancelReason>, // state is a plain string on the wire; cancelReason is set only for `cancelled`
@@ -92,7 +94,7 @@ pub struct Run {
 }
 pub enum RunState { Queued, Running, Completed, Failed, Cancelled, Rejected, Dropped }   // snake_case strings
 pub enum CancelReason { User, Cleared, Shutdown, Timeout, Parent /* a Parallel sibling or parent run stopped it */ }
-pub struct RunError { pub code: String /* spec 02 §8.5 data.code */, pub node: Option<NodeId>, pub message: String, pub details: Option<Value> }
+pub struct RunError { pub code: ErrorCode /* spec 02 §8.5 data.code */, pub node: Option<NodeId>, pub message: String, pub details: Option<Value> }
 pub struct RunWarning { pub node: Option<NodeId>, pub code: String, pub message: String }
 
 /// Chat command (rows 4.01–4.10). Persisted document, kind "command".
@@ -102,11 +104,11 @@ pub struct Command {
     pub aliases: Vec<String>,            // at least one; matched case-insensitively unless case_sensitive
     pub mode: CommandMode,               // basic { location: start | exact | anywhere } | regex { pattern }
     pub case_sensitive: bool,
-    pub sources: Vec<CommandSource>,     // open enum: "chat.message", "chat.whisper", "chat.sub_message"; empty = chat.message
+    pub sources: Vec<EventType>,         // open: "chat.message", "chat.whisper", "chat.sub_message"…; empty = chat.message
     pub platforms: Vec<PlatformId>,      // empty = all
     pub ignore_bot_account: bool, pub ignore_internal: bool,
     pub cooldown: Cooldown,              // { globalMs: u32, userMs: u32, exemptRoles: Vec<String> /* default ["broadcaster"] */ }
-    pub permissions: Permissions,        // { mode: allow | deny, users: Vec<UserRef-lite>, roles: Vec<String>, groups: Vec<GroupId> }
+    pub permissions: Permissions,        // { mode: allow | deny, users: Vec<UserKey>, roles: Vec<String>, groups: Vec<GroupId> }
     pub counters: CounterPolicy,         // { persistGlobal: bool, persistUser: bool }
     pub origin: Origin,
 }
@@ -401,23 +403,30 @@ in-engine target marker as `triggers.test` (§6.5): the event is published for s
 matcher fires only that trigger, so two actions with different expressions never fire each other (the index
 rule of §6.3 would otherwise match every `schedule.cron` trigger on every fire).
 
-DST rules: a scheduled local time that does not exist (spring forward) is skipped; one that occurs twice (fall
-back) fires on the first occurrence only. `catchUp: true` fires at most **one** missed occurrence after a suspend or
+DST rules are part of **occurrence generation**, not of deduplication: the expression is matched against local
+wall-clock times in increasing order, and each matching local time maps to **at most one** UTC instant. A local
+time that does not exist (spring forward) yields no occurrence; one that exists twice (fall back) yields only its
+**first** instant (the earlier UTC instant, under the pre-transition offset), so the second fold of the repeated
+interval contains no occurrence at all, however many times the expression matches inside it. For an every-minute
+schedule in America/Chicago, 2026-11-01 01:00–01:59 CDT are 60 occurrences, 01:00–01:59 CST none, and the next
+occurrence after 01:59 CDT is 02:00 CST. The resulting sequence of UTC instants is strictly increasing and
+depends only on `(expression, timeZone)`, so normal ticks and restart catch-up see the same occurrences and no
+per-wall-time state is needed. If the cron crate yields second-fold instants, the engine drops every instant
+whose local wall time also occurs earlier under the pre-transition offset. `catchUp: true` fires at most **one** missed occurrence after a suspend or
 restart, stamped with the missed `scheduledAt`; `false` (default) skips missed occurrences. The trigger is the
 schedule (no document), but catch-up needs memory of what was already accounted for, so the engine keeps a
 **cron cursor** per trigger:
 
-- **Record.** `cron_cursors (action_id, trigger_id, schedule_key, last_scheduled_at, last_local, updated_at)`
-  in `config.db` (§13.2). `schedule_key` is the SHA-256 of `(expression, timeZone)`, so editing the schedule
-  invalidates the cursor; `last_scheduled_at` is the UTC instant of the last **accounted** occurrence (fired,
-  skipped by `catchUp: false`, or skipped as a DST duplicate) and `last_local` its wall-clock time in the
-  trigger's zone (for the fall-back rule).
+- **Record.** `cron_cursors (action_id, trigger_id, schedule_key, last_scheduled_at, updated_at)` in
+  `config.db` (§13.2). `schedule_key` is the SHA-256 of `(expression, timeZone)`, so editing the schedule
+  invalidates the cursor; `last_scheduled_at` is the UTC instant of the last **accounted** occurrence (fired or
+  skipped by `catchUp: false`). Second-fold wall times are never occurrences, so they are never accounted.
 - **Advancing.** Immediately before admitting a cron fire, and before skipping an occurrence, the scheduler
   writes the cursor through the storage thread with `durable: true` (one write per occurrence; cron fires are
   rare) and only then admits the run. The boundary is therefore **account first, fire second**: a crash between
   the two loses that one occurrence instead of replaying it, and no occurrence is ever fired twice across any
-  number of restarts. An occurrence is a *duplicate* when its UTC instant is ≤ `last_scheduled_at`, or when its
-  local wall time equals `last_local` on the same local date (the fall-back repeat), and is never fired.
+  number of restarts. An occurrence is a *duplicate* when its UTC instant is ≤ `last_scheduled_at`, and is
+  never fired; with the strictly increasing sequence above this also covers every repeated wall time.
 - **Startup and resume.** For each indexed cron trigger: no cursor, or a cursor with a different
   `schedule_key` → the cursor is set to *now* (a never-fired or edited schedule gets no catch-up); otherwise the
   occurrences in `(last_scheduled_at, now]` are computed: with `catchUp: true` the **latest** one is fired
@@ -425,7 +434,7 @@ schedule (no document), but catch-up needs memory of what was already accounted 
   moves to the latest one without firing. Then the next future occurrence is scheduled as usual. Cursor rows
   of triggers that no longer exist are deleted at index rebuild. §22.7 tests a daily schedule across two
   restarts (fired before the first restart → not replayed; missed during the second downtime → replayed once),
-  an edit between restarts, and the fall-back hour.
+  an edit between restarts, and the full repeated hour of a fall-back with a restart between the folds.
 
 ## 9. Runs and the sub-action tree
 
@@ -559,7 +568,21 @@ node)`. `Action.random` applies the same rule to the top-level `nodes`. `actions
     consumes the planned entries in iteration order. A read of `itemVar` **after** the loop binds to the
     node's last recorded render: at plan time the `foreach` record with index `min(len, cap) − 1` for a
     concrete collection (or a `missing` render for an empty one), dynamic otherwise, which is exactly what
-    execution records. §22.9 tests the changed-collection, changed-length, dynamic-collection, post-loop read
+    execution records.
+  - *Changed collections.* Every iteration's record carries the **whole** `items` render, so any change to
+    the collection after approval (an element, the order, the length, including to or from empty) changes the
+    `items` binding render and with it every body hash and, for a length change, the call multiset; it is
+    never a mismatch only at the changed index. It is caught at two points. *At the call* (spec 02 §8.8 rule
+    4(a)) the recomputed plan differs. *At loop start*, when the approved plan expanded this `ForEach`
+    occurrence from a concrete render, the node compares its rendered `items` with the plan before the first
+    iteration: under a one-shot approval the binding render must equal the planned one, under a session grant
+    the iteration count `min(len, cap)` must equal the planned count. Under a one-shot approval any change is
+    `binding_mismatch` / `args`, at the call or, when the collection changed after the call started, at loop
+    start; no body node runs, an emptied collection is caught although it has no iteration, and a shorter
+    collection never completes with spare planned calls. A session grant exempts the hashes but pins the
+    count: a changed element runs, a changed length is `unplanned_call` at the call or at loop start. Fewer
+    calls on an **unchanged** collection because of control flow (`BreakLoop`, an `If` in the body, a failure
+    under `onError: continue`) is never a mismatch: the plan is a superset of what runs. §22.9 tests the changed-collection, changed-length, dynamic-collection, post-loop read
     and session-grant cases.
 - **`BreakLoop` / `ContinueLoop`** affect the innermost enclosing `While` or `ForEach` **within the same action**;
   outside a loop they are no-ops with a warning (the editor forbids them, §18). They never cross a `Parallel`
@@ -845,7 +868,8 @@ signal that ends admission, so the sequence is phased to let the first happen be
    (§10.4).
 3. **Final flush, then the marker.** The storage thread flushes the variable write-behind buffer and the
    history records, runs `wal_checkpoint(TRUNCATE)` on both files, and **only after every flush succeeded**
-   writes `meta.clean_shutdown = true` as the last statement before closing (startup set it to `false`, §13.5).
+   writes `meta.clean_shutdown = true` as the last statement before closing (startup set it to `false`, §13.5;
+   a database kept read-only by §13.5 is neither flushed, checkpointed nor marked).
    A flush failure leaves it `false`, so the next start reports `system.crash_recovered` with `reason:
    "flush_failed"` rather than pretending the exit was clean.
 
@@ -1071,7 +1095,7 @@ CREATE TABLE counters (
 );
 CREATE TABLE cron_cursors (                              -- §8.3: last accounted occurrence per cron trigger
   action_id TEXT NOT NULL, trigger_id TEXT NOT NULL, schedule_key TEXT NOT NULL,
-  last_scheduled_at TEXT NOT NULL, last_local TEXT NOT NULL, updated_at TEXT NOT NULL,
+  last_scheduled_at TEXT NOT NULL, updated_at TEXT NOT NULL,
   PRIMARY KEY (action_id, trigger_id)
 );
 CREATE TABLE migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL, app_version TEXT NOT NULL);
@@ -1141,16 +1165,30 @@ converts Streamer.bot and SAMMI formats into this bundle; the engine never parse
 
 ### 13.5 Startup
 
-1. Open `config.db`, read `meta.clean_shutdown`, then write it to `false` **before anything else** (it is set
-   back to `true` only by the last statement of a successful final flush, §10.8 step 3, so a crash during
-   migration is reported too). Run DDL migrations (with backup, §13.3), load all documents, migrate document
-   versions, validate; an invalid document is loaded as **disabled** with a `system.document_invalid` event
-   rather than refusing to start (one broken action must not take the app down).
-2. Load persisted globals into memory; load the queue index, the trigger index, timers and cron schedules;
+1. **Inspect before writing.** A missing or empty `config.db` is **bootstrapped**: the app's current schema
+   (the current DDL, no migration steps) is created in one transaction with `meta` rows `schema_version`,
+   `instance_id`, `created_at` and `clean_shutdown = false`. Any other file is first opened over a
+   **read-only** connection: `PRAGMA quick_check` must return `ok` and `meta.schema_version` must be readable,
+   else the file is **corrupt** and handled by §13.6 (the inspection connection is closed without a
+   checkpoint, `config.db` is moved aside together with its `-wal` and `-shm` files, untouched;
+   `system.storage_corrupt`; the newest backup is offered) and startup continues with a freshly bootstrapped
+   `config.db`. A `schema_version` **newer** than the app's keeps the database **read-only** (§13.3):
+   `clean_shutdown` is neither read nor written, no migration runs, no connection to `config.db` ever writes
+   or checkpoints, §10.8 step 3 does not touch `config.db`, and the bytes of `config.db` and its `-wal` are
+   never modified.
+2. **Marker, then migrate.** Only for a supported (same or older) schema, reopened read-write: read
+   `meta.clean_shutdown` (a file bootstrapped in this start counts as clean: a first start reports no crash),
+   then write it to `false` and commit **before any migration** (it is set back to `true` only by the last statement
+   of a successful final flush, §10.8 step 3, so a crash during migration is reported too). Run DDL migrations
+   (with backup, §13.3), load all documents, migrate document versions, validate; an invalid document is loaded
+   as **disabled** with a `system.document_invalid` event rather than refusing to start (one broken action must
+   not take the app down).
+3. Load persisted globals into memory; load the queue index, the trigger index, timers and cron schedules;
    restore the cron cursors (§8.3).
-3. Open `history.db` (recreate if corrupt).
-4. Publish `system.started` (and `system.crash_recovered { previousShutdownClean: false, reason }` first if the
-   value read in step 1 was `false`). Budget: §20.
+4. Open `history.db` (recreate if corrupt).
+5. Publish `system.storage_corrupt` or `system.storage_readonly` if step 1 raised it, then `system.started`
+   (and `system.crash_recovered { previousShutdownClean: false, reason }` first if the value read in step 2
+   was `false`). Budget: §20.
 
 ### 13.6 Backups and corruption
 
@@ -1395,8 +1433,9 @@ and requires:
     when the context's origin principal is `Mcp`: `variables.set` is tier 1, not draft-first, and an MCP client
     that has just read a wrapped chat value could otherwise write it back as a trusted literal, which the engine
     cannot tell from genuine AI-authored configuration. The flag is `false` only for a literal value written
-    under a `Token` or `System` origin (the user's own content; the variable viewer shows the flag, and a
-    user-token rewrite is how an AI-written value becomes trusted). `increment`/`decrement` keep the existing
+    under a `Token` or `System` origin, or by an unchained `Trigger` run (an event-started run with no `causedBy`
+    chain, which spec 02 §6.1 attributes to `user`; with a chain the chain's origin principal decides). That is
+    the user's own content; the variable viewer shows the flag, and a user-token rewrite is how an AI-written value becomes trusted. `increment`/`decrement` keep the existing
     flag; `default` on a missing entry follows the write rule, and on an existing entry writes nothing and
     returns the existing value **with its flag** (§11.2). The flag is stored in the same row (§13.2), survives restart, travels
     in `variables.*_updated` (independent `oldUntrusted`/`untrusted`), `variables.get/list/set` results and the export bundle, and a foreign import (spec 15) that
@@ -1481,8 +1520,12 @@ and requires:
    with the same merged args and the same node charge as a sequential run, and the same chain cancelled while
    expanding ends every branch `cancelled` / `parent` with zero branch tasks left; a 100-branch `Parallel`
    with 64 permits runs every branch (64 spawned, the rest inline or spawned as permits return) and merges in
-   branch order; `Parallel` nested three deep with `maxTasksPerRun = 1` runs entirely inline, never deadlocks
-   and produces the same result as with 64; `run_budget` failure when branch writes exceed `maxRunBytes` while
+   branch order; `Parallel` nested three deep with `maxTasksPerRun = 1`, started from an idle root: the outer
+   node spawns its first branch with the sole permit (the root needs none), at most one spawned branch task
+   exists besides the root at every instant, a node that finds the permit taken runs its branch inline and a
+   later branch may be spawned once the permit has come back, and the run completes without deadlock with the
+   same merged args as with 64; the same nest placed inside a spawned branch that holds the sole permit runs
+   every nested branch inline in that branch's task; `run_budget` failure when branch writes exceed `maxRunBytes` while
    each map stays under `maxArgsBytes`, including writes held by parked branches.
 5. **Variables:** atomic increment under 1,000 concurrent runs; persisted/temp move; change events with
    `old`/`new` and independent `oldUntrusted`/`untrusted` (created: `null`/flag; tainted → clean literal:
@@ -1501,11 +1544,22 @@ and requires:
    time zone changes, leap day; **cron cursor:** a daily trigger fires, the engine restarts twice within the day
    (no replay either time), is down across the next occurrence (`catchUp: true` fires it exactly once with the
    missed `scheduledAt`; `false` skips it and moves the cursor), is down across three occurrences (one fire),
-   the expression is edited while down (no catch-up), and the fall-back hour yields one fire across a restart
-   placed between the two local occurrences; a crash injected between cursor write and admission loses that
+   the expression is edited while down (no catch-up); **fall-back hour** (America/Chicago, 2026-11-01, local
+   00:30 CDT to 02:30 CST, paused clock): an every-minute schedule fires exactly 60 times at 01:00–01:59 CDT,
+   never at 01:00–01:59 CST, and next at 02:00 CST; `*/15` fires 01:00, 01:15, 01:30 and 01:45 CDT once each;
+   `30 1 * * *` fires once at 01:30 CDT; each of these with a restart at 01:20 CST (between the folds), under
+   `catchUp: true` and `false`, fires nothing until its next first-fold or post-transition occurrence; and a
+   daily 01:30 schedule with `catchUp: true` that is down from 01:00 CDT to 01:45 CST fires once, stamped
+   01:30 CDT; a crash injected between cursor write and admission loses that
    occurrence and never duplicates.
 8. **Storage:** fresh schema; every DDL migration with before/after fixtures and a backup created; newer-schema
-   read-only; corrupt `history.db` recreated; corrupt `config.db` moved aside; export → import round-trip equals
+   read-only; **startup order (§13.5):** a fresh file is bootstrapped with `clean_shutdown = false` and
+   reports no crash, also when it replaces a corrupt file; a supported older schema writes the marker before the pre-migration backup and the
+   first DDL step (a crash injected in the migration is reported on the next start); a newer-schema file
+   publishes `system.storage_readonly`, runs no migration, and the SHA-256 of `config.db` and of a
+   non-empty `config.db-wal` left by the newer app are identical before startup and after a clean shutdown;
+   a `config.db` failing `quick_check` is moved aside with its `-wal`/`-shm` and unchanged bytes, the engine
+   starts on a fresh file and publishes `system.storage_corrupt`; corrupt `history.db` recreated; export → import round-trip equals
    the original documents and their `untrusted` flags; invalid document loads disabled; **WAL-safe backup:**
    with `wal_autocheckpoint = 0`, commit one document and one global, take a daily backup and a pre-migration
    backup, open each copy: both rows present, `integrity_check` ok; a backup whose verification is made to fail
@@ -1518,10 +1572,15 @@ and requires:
    changes `msg` (i) before the node's pin → `binding_mismatch` / `args`, (ii) after the pin and before the
    operation call → the approved value is sent, (iii) after the call → no effect, and the sent text equals the
    hashed text in every case; **`ForEach` binding:** approve `ForEach {globals.messages}` → `chat.send
-   {item}` with three elements (three `PlannedCall`s), then change an element → `args` mismatch at that
-   iteration, append a fourth → `unplanned_call`, remove one → the run completes with one planned call
-   unconsumed, a collection from `saveAs` → `dynamicFields` on the body and a one-iteration plan, and a session
-   grant pinning multiplicity but not values; **untrusted provenance:** the §21 chain (chat → global →
+   {item}` with three elements `[a, b, c]` (three `PlannedCall`s); under that one-shot approval, before the
+   call: change the third element, append a fourth, remove one (`[a, b]`), or empty the collection → each
+   `binding_mismatch` / `args` at the call; the same four changes made after the call started and before the
+   loop → `args` at loop start, with no `chat.send` sent (the emptied collection included); an approval of
+   `[]` (no body calls) and a collection that became `[a]` → `args` at the call; unchanged `[a, b, c]` with a
+   `BreakLoop` after the second iteration → runs, one planned call unconsumed; under a **session grant** for
+   the same plan: a changed element runs, an append or a removal → `unplanned_call`, at the call before it
+   started and at loop start after, with no `chat.send` sent;
+   a collection from `saveAs` → `dynamicFields` on the body and a one-iteration plan; **untrusted provenance:** the §21 chain (chat → global →
    restart → MCP read wrapped → dry-run `untrustedFields` → approval request shows the wrapper), `Code` writes
    tainted, `Plugin` writes tainted, foreign import tainted, literal user write clean; **readback paths
    (§11.2 rule):** an MCP `variables.set { mode: default }` on an existing chat-derived variable writes
@@ -1687,3 +1746,22 @@ grammar"; signals are implemented as operations rather than new `Node` kinds so 
   conditional flag through the producer's `name`; the node stops taking branches after a sibling stopped or
   failed the run; "identical" narrowed to merge order and merged args; §11.1 names `set` and the two event
   flags.
+- **r4** (DEN-42, with DEN-43, DEN-44, DEN-45 and the DEN-33 Spec 03 follow-ups folded in; the P2s of the Codex
+  re-reviews of r2 and r3):
+  1. DEN-42 cron fall-back → §8.3: DST handling moves into occurrence generation (each local wall time maps to
+     at most one instant, the first fold), so every repeated wall time is suppressed on ticks and at catch-up;
+     the cursor drops `last_local` (§13.2); §22.7 covers every-minute, `*/15` and daily schedules across the
+     full repeated hour with a restart between the folds.
+  2. DEN-43 startup order → §13.5: bootstrap a new file, inspect integrity and schema version before any
+     write, newer schema read-only with no marker at startup or shutdown (§10.8 step 3), corrupt files moved
+     aside untouched, marker written only for a supported schema and before migration; §22.8 cases.
+  3. DEN-44 `ForEach` approvals → §9.5 *Changed collections*: whole-collection binding kept; any change fails
+     at the call or at loop start (a new check, so an emptied collection is caught) under a one-shot
+     approval, a session grant pins only the count; fewer calls
+     through control flow is not a mismatch; §22.9 cases; spec 02 §8.8 rule 4 and §17.9 corrected (r6
+     amendment line there).
+  4. DEN-45 one-permit `Parallel` → §22.4: an idle root spawns its first branch; all-inline only when the
+     enclosing branch already holds the sole permit.
+  5. DEN-33 follow-ups → §3 recap synchronized with spec 02 r6 (`ForEach`, `onError`, `maxRunMs`,
+     `RunError.code: ErrorCode`, `Command.sources`, `UserKey`) and marked non-normative; `Run.trigger` copied
+     on replay as in §12.3; §21 names the unchained `Trigger` origin among the clean literal writers.
