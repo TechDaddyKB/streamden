@@ -128,24 +128,172 @@ pub struct RpcRequest {
     pub params: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
-/// A JSON-RPC response (§8.2). Exactly one of `result` and `error` is set.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+/// A JSON-RPC response (§8.2). Exactly one of `result` and `error` is present: a success carries
+/// `result` (which may be the JSON `null`, a valid tier-0 result) and never `error`; a failure carries
+/// `error` and never `result`. The hand-written serde impl enforces this on both directions, and the
+/// schema expresses it with a `oneOf` over `required`, so generated clients see the same rule.
+#[derive(Debug, Clone, PartialEq, TS)]
 pub struct RpcResponse {
     /// Always `"2.0"`.
     pub jsonrpc: JsonRpcVersion,
     /// The request ID, or `null` when the request could not be parsed. One of the few places where `null`
     /// is a valid value (§3).
-    #[schemars(required, schema_with = "nullable_request_id")]
     pub id: Option<RequestId>,
-    /// The result, on success.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional, as = "Option<serde_json::Value>")]
-    pub result: Option<serde_json::Value>,
-    /// The error, on failure.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub error: Option<RpcError>,
+    /// The outcome: `result` or `error`, flattened into the envelope.
+    #[ts(flatten)]
+    pub outcome: RpcOutcome,
+}
+
+/// The two outcomes of an [`RpcResponse`] (§8.2). On the wire this is the `result` **or** `error` member
+/// of the envelope, never both and never neither.
+#[derive(Debug, Clone, PartialEq, TS)]
+#[ts(untagged)]
+pub enum RpcOutcome {
+    /// The call succeeded.
+    Success {
+        /// The result. `null` is a valid result (a tier-0 operation may return nothing).
+        #[ts(as = "serde_json::Value")]
+        result: serde_json::Value,
+    },
+    /// The call failed.
+    Failure {
+        /// The error.
+        error: RpcError,
+    },
+}
+
+impl RpcResponse {
+    /// A success envelope.
+    pub fn success(id: Option<RequestId>, result: serde_json::Value) -> Self {
+        Self {
+            jsonrpc: JsonRpcVersion,
+            id,
+            outcome: RpcOutcome::Success { result },
+        }
+    }
+
+    /// A failure envelope.
+    pub fn failure(id: Option<RequestId>, error: RpcError) -> Self {
+        Self {
+            jsonrpc: JsonRpcVersion,
+            id,
+            outcome: RpcOutcome::Failure { error },
+        }
+    }
+
+    /// The result, when this is a success.
+    pub fn result(&self) -> Option<&serde_json::Value> {
+        match &self.outcome {
+            RpcOutcome::Success { result } => Some(result),
+            RpcOutcome::Failure { .. } => None,
+        }
+    }
+
+    /// The error, when this is a failure.
+    pub fn error(&self) -> Option<&RpcError> {
+        match &self.outcome {
+            RpcOutcome::Success { .. } => None,
+            RpcOutcome::Failure { error } => Some(error),
+        }
+    }
+}
+
+impl Serialize for RpcResponse {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("RpcResponse", 3)?;
+        s.serialize_field("jsonrpc", &self.jsonrpc)?;
+        s.serialize_field("id", &self.id)?;
+        match &self.outcome {
+            RpcOutcome::Success { result } => s.serialize_field("result", result)?,
+            RpcOutcome::Failure { error } => s.serialize_field("error", error)?,
+        }
+        s.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for RpcResponse {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        /// Distinguishes an absent `result` from a present JSON `null`: the field is only `Some` when
+        /// the key exists.
+        fn present<'de, D: Deserializer<'de>>(d: D) -> Result<Option<serde_json::Value>, D::Error> {
+            serde_json::Value::deserialize(d).map(Some)
+        }
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Raw {
+            jsonrpc: JsonRpcVersion,
+            #[serde(deserialize_with = "Option::deserialize")]
+            id: Option<RequestId>,
+            #[serde(default, deserialize_with = "present")]
+            result: Option<serde_json::Value>,
+            #[serde(default)]
+            error: Option<RpcError>,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        let outcome = match (raw.result, raw.error) {
+            (Some(result), None) => RpcOutcome::Success { result },
+            (None, Some(error)) => RpcOutcome::Failure { error },
+            (Some(_), Some(_)) => {
+                return Err(serde::de::Error::custom(
+                    "a response carries either `result` or `error`, not both",
+                ));
+            }
+            (None, None) => {
+                return Err(serde::de::Error::custom(
+                    "a response carries `result` or `error`; a success with no value sends `result: null`",
+                ));
+            }
+        };
+        Ok(Self {
+            jsonrpc: raw.jsonrpc,
+            id: raw.id,
+            outcome,
+        })
+    }
+}
+
+impl JsonSchema for RpcResponse {
+    fn schema_name() -> Cow<'static, str> {
+        Cow::Borrowed("RpcResponse")
+    }
+
+    fn schema_id() -> Cow<'static, str> {
+        Cow::Borrowed("den_protocol::rpc::RpcResponse")
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        let jsonrpc = generator.subschema_for::<JsonRpcVersion>();
+        let id = nullable_request_id(generator);
+        let error = generator.subschema_for::<RpcError>();
+        json_schema!({
+            "description": "A JSON-RPC response (§8.2). Exactly one of `result` and `error` is present; a success with no value sends `result: null`.",
+            "type": "object",
+            "properties": {
+                "jsonrpc": merge_description(jsonrpc, "Always `\"2.0\"`."),
+                "id": merge_description(id, "The request ID, or `null` when the request could not be parsed. One of the few places where `null` is a valid value (§3)."),
+                "result": {
+                    "description": "The result, on success. `null` is a valid result (a tier-0 operation may return nothing).",
+                    "x-den-nullable": true
+                },
+                "error": merge_description(error, "The error, on failure.")
+            },
+            "required": ["jsonrpc", "id"],
+            "oneOf": [
+                { "required": ["result"], "not": { "required": ["error"] } },
+                { "required": ["error"], "not": { "required": ["result"] } }
+            ]
+        })
+    }
+}
+
+/// Adds a `description` to a subschema (a `$ref` or an inline schema) the way the derive does.
+fn merge_description(schema: Schema, description: &str) -> Schema {
+    let mut value = schema.to_value();
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert("description".into(), description.into());
+    }
+    Schema::try_from(value).expect("object")
 }
 
 /// Schema of a required, nullable request ID (`RpcResponse.id`).

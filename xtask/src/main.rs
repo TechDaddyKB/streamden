@@ -59,8 +59,7 @@ fn repo_root() -> PathBuf {
 /// Builds the document, validates every example, and returns all generated files keyed by their
 /// repository-relative path.
 fn generate() -> Result<BTreeMap<PathBuf, String>> {
-    let doc = codegen::build(Catalog::core())?;
-    validate_examples(&doc)?;
+    let doc = build_validated()?;
     let mut files = BTreeMap::new();
     files.insert(PathBuf::from(PROTOCOL_JSON), doc.to_json_string());
     files.insert(
@@ -85,9 +84,17 @@ fn generate() -> Result<BTreeMap<PathBuf, String>> {
     Ok(files)
 }
 
-fn lint_catalog() -> Result<()> {
-    let doc = codegen::build(Catalog::core())?;
+/// Builds the document, validates every example as authored, then redacts secrets for publication
+/// (§3): a redacted value need not match its schema, so validation comes first.
+fn build_validated() -> Result<ProtocolDocument> {
+    let mut doc = codegen::build_unredacted(Catalog::core())?;
     validate_examples(&doc)?;
+    doc.redact_examples();
+    Ok(doc)
+}
+
+fn lint_catalog() -> Result<()> {
+    let doc = build_validated()?;
     println!(
         "lint-catalog: ok ({} operations, {} events, {} shared types)",
         doc.operations.len(),

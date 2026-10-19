@@ -419,8 +419,19 @@ fn lint_value_mode_enums(
             lint_value_mode_enums(prop, &format!("{path}/{name}"), types, err);
         }
     }
-    if let Some(items) = obj.get("items") {
-        lint_value_mode_enums(items, &format!("{path}/items"), types, err);
+    for key in ["items", "additionalProperties"] {
+        if let Some(child) = obj.get(key)
+            && child.is_object()
+        {
+            lint_value_mode_enums(child, &format!("{path}/{key}"), types, err);
+        }
+    }
+    for key in ["prefixItems", "oneOf", "anyOf", "allOf"] {
+        if let Some(Value::Array(branches)) = obj.get(key) {
+            for (i, branch) in branches.iter().enumerate() {
+                lint_value_mode_enums(branch, &format!("{path}/{key}/{i}"), types, err);
+            }
+        }
     }
 }
 
@@ -456,8 +467,18 @@ impl TemplateMode {
 
 /// Resolves a leaf's template mode (§10.1): an explicit `x-den-template` wins; otherwise numbers,
 /// integers, booleans and enum strings are `value`, strings with `x-ui.variables: true` are `text`, and
-/// everything else is literal.
+/// everything else is literal. A `const` is a literal: it is a discriminator or a fixed value, and a
+/// template there could never be resolved at save time. A `$ref` resolves through the referenced type
+/// with the property's own hints (`x-ui`, `x-den-template`) kept, so a shared string newtype on a
+/// variable-enabled field is `text`.
 pub fn resolve_template_mode(leaf: &Value, types: &BTreeMap<String, Value>) -> TemplateMode {
+    resolve_mode(leaf, types, 0)
+}
+
+/// Bound on `$ref` chains followed while resolving one leaf (a `$ref` whose target is itself a `$ref`).
+const MAX_REF_DEPTH: usize = 16;
+
+fn resolve_mode(leaf: &Value, types: &BTreeMap<String, Value>, depth: usize) -> TemplateMode {
     let Some(obj) = leaf.as_object() else {
         return TemplateMode::Literal;
     };
@@ -465,7 +486,14 @@ pub fn resolve_template_mode(leaf: &Value, types: &BTreeMap<String, Value>) -> T
         return explicit;
     }
     if let Some(target) = resolve_ref(obj, types) {
-        return resolve_template_mode(target, types);
+        if depth >= MAX_REF_DEPTH {
+            return TemplateMode::Literal;
+        }
+        let merged = Value::Object(merge_ref_target(obj, target));
+        return resolve_mode(&merged, types, depth + 1);
+    }
+    if obj.contains_key("const") {
+        return TemplateMode::Literal;
     }
     if enum_members(obj).is_some() {
         return TemplateMode::Value;
@@ -489,20 +517,70 @@ pub fn resolve_template_mode(leaf: &Value, types: &BTreeMap<String, Value>) -> T
     }
 }
 
+fn ref_name(obj: &Map<String, Value>) -> Option<String> {
+    let r = obj.get("$ref")?.as_str()?;
+    r.strip_prefix("#/types/")
+        .or_else(|| r.strip_prefix("#/$defs/"))
+        .map(str::to_owned)
+}
+
 fn resolve_ref<'a>(
     obj: &Map<String, Value>,
     types: &'a BTreeMap<String, Value>,
 ) -> Option<&'a Value> {
-    let r = obj.get("$ref")?.as_str()?;
-    let name = r
-        .strip_prefix("#/types/")
-        .or_else(|| r.strip_prefix("#/$defs/"))?;
-    types.get(name)
+    types.get(&ref_name(obj)?)
+}
+
+/// Keys that annotate a schema rather than constrain it (plus every `x-` extension).
+fn is_annotation_key(key: &str) -> bool {
+    matches!(
+        key,
+        "description"
+            | "title"
+            | "default"
+            | "examples"
+            | "deprecated"
+            | "readOnly"
+            | "writeOnly"
+            | "$comment"
+    ) || key.starts_with("x-")
+}
+
+/// Merges a `$ref` property's siblings (`description`, `x-secret`, `x-ui`, `maxProperties`, …) onto a copy
+/// of the referenced schema. JSON Schema 2020-12 applies `$ref` siblings in conjunction with the target,
+/// so inlining or resolving a reference must keep every one of them: an annotation on the property
+/// replaces the target's, and a constraint that collides with one of the target's goes into an `allOf`
+/// so both still apply.
+pub fn merge_ref_target(property: &Map<String, Value>, target: &Value) -> Map<String, Value> {
+    let mut merged = target.as_object().cloned().unwrap_or_default();
+    let mut conjunction = Map::new();
+    for (key, value) in property {
+        if key == "$ref" {
+            continue;
+        }
+        if is_annotation_key(key) || !merged.contains_key(key) {
+            merged.insert(key.clone(), value.clone());
+        } else if merged.get(key) != Some(value) {
+            conjunction.insert(key.clone(), value.clone());
+        }
+    }
+    if !conjunction.is_empty()
+        && let Some(all_of) = merged
+            .entry("allOf")
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+    {
+        all_of.push(Value::Object(conjunction));
+    }
+    merged
 }
 
 /// Derives the invocation and authoring schemas of an operation from its author params (§10.1).
 /// Returns `(params, paramsAuthoring)`: both carry a resolved `x-den-template` on every leaf; in
-/// `paramsAuthoring` every value-mode leaf becomes `anyOf: [<concrete>, TemplateString]`.
+/// `paramsAuthoring` every value-mode leaf becomes `anyOf: [<concrete>, TemplateString]`. Nesting is
+/// preserved through objects, arrays, composition branches (`oneOf`/`anyOf`/`allOf`, so tagged unions
+/// get their leaves derived) and references to structured shared types, which are inlined with the
+/// property's own siblings merged in; discriminator `const`s stay literal.
 pub fn derive_param_schemas(params: &Schema, types: &BTreeMap<String, Value>) -> (Schema, Schema) {
     let mut invocation = params.clone().to_value();
     let mut authoring = params.clone().to_value();
@@ -514,8 +592,49 @@ pub fn derive_param_schemas(params: &Schema, types: &BTreeMap<String, Value>) ->
     )
 }
 
-/// `visiting` holds the names of shared object types currently being inlined, so a recursive type
-/// keeps its `$ref` instead of recursing forever.
+/// Whether a schema has structure to descend into: an object, an array or a composition. An enum
+/// written as `oneOf` of `const`s (schemars' form for documented unit variants) is a leaf.
+fn is_structured(obj: &Map<String, Value>) -> bool {
+    if enum_members(obj).is_some() {
+        return false;
+    }
+    matches!(
+        obj.get("type").and_then(Value::as_str),
+        Some("object" | "array")
+    ) || [
+        "properties",
+        "patternProperties",
+        "additionalProperties",
+        "items",
+        "prefixItems",
+        "oneOf",
+        "anyOf",
+        "allOf",
+    ]
+    .iter()
+    .any(|k| obj.contains_key(*k))
+}
+
+/// Whether `obj` is the `TemplateString` schema (§10.1), or a schema that already admits it as an
+/// `anyOf` branch (`TemplateOr<T>`): such a field is value mode and already widened.
+fn is_template_string(obj: &Map<String, Value>) -> bool {
+    obj.get("type").and_then(Value::as_str) == Some("string")
+        && obj.get("pattern").and_then(Value::as_str)
+            == Some(crate::template::TEMPLATE_STRING_PATTERN)
+}
+
+fn admits_template_string(obj: &Map<String, Value>) -> bool {
+    obj.get("anyOf")
+        .and_then(Value::as_array)
+        .is_some_and(|branches| {
+            branches
+                .iter()
+                .any(|b| b.as_object().is_some_and(is_template_string))
+        })
+}
+
+/// `visiting` holds the names of shared types currently being inlined, so a recursive type keeps its
+/// `$ref` instead of recursing forever.
 fn annotate_leaves(
     schema: &mut Value,
     types: &BTreeMap<String, Value>,
@@ -526,80 +645,87 @@ fn annotate_leaves(
         return;
     };
     let explicit = obj.get("x-den-template").and_then(TemplateMode::from_json);
-    let is_object =
-        obj.get("type").and_then(Value::as_str) == Some("object") || obj.contains_key("properties");
-    if is_object {
-        obj.insert(
-            "x-den-template".into(),
-            explicit.unwrap_or(TemplateMode::Literal).to_json(),
-        );
-        if explicit == Some(TemplateMode::Value) {
+    // A `$ref` to a structured shared type is inlined (siblings kept) so its leaves can be derived; a
+    // `$ref` to a leaf type keeps the reference and resolves its mode through the target.
+    if let Some(name) = ref_name(obj) {
+        match types.get(&name) {
+            Some(target) if target.as_object().is_some_and(is_structured) => {
+                if visiting.contains(&name) {
+                    obj.insert("x-den-template".into(), Value::Bool(false));
+                    return;
+                }
+                let mut inlined = Value::Object(merge_ref_target(obj, target));
+                visiting.push(name);
+                annotate_leaves(&mut inlined, types, authoring, visiting);
+                visiting.pop();
+                *schema = inlined;
+            }
+            _ => annotate_leaf(schema, types, authoring),
+        }
+        return;
+    }
+    if is_structured(obj) {
+        let already_widened = explicit.is_none() && admits_template_string(obj);
+        let mode = if already_widened {
+            TemplateMode::Value
+        } else {
+            explicit.unwrap_or(TemplateMode::Literal)
+        };
+        obj.insert("x-den-template".into(), mode.to_json());
+        if already_widened {
+            return;
+        }
+        if mode == TemplateMode::Value {
             if authoring {
                 widen_to_template(schema);
             }
             return;
         }
-        if let Some(Value::Object(props)) = obj.get_mut("properties") {
-            for prop in props.values_mut() {
-                annotate_leaves(prop, types, authoring, visiting);
+        for key in ["properties", "patternProperties"] {
+            if let Some(Value::Object(props)) = obj.get_mut(key) {
+                for prop in props.values_mut() {
+                    annotate_leaves(prop, types, authoring, visiting);
+                }
             }
         }
-        if let Some(additional) = obj.get_mut("additionalProperties")
-            && additional.is_object()
-        {
-            annotate_leaves(additional, types, authoring, visiting);
+        for key in ["additionalProperties", "items"] {
+            if let Some(child) = obj.get_mut(key)
+                && child.is_object()
+            {
+                annotate_leaves(child, types, authoring, visiting);
+            }
+        }
+        for key in ["prefixItems", "oneOf", "anyOf", "allOf"] {
+            if let Some(Value::Array(branches)) = obj.get_mut(key) {
+                for branch in branches {
+                    // A branch that only constrains (`{ "maxProperties": 1 }`, `{ "required": [...] }`)
+                    // describes no leaf of its own and gets no mode.
+                    if branch.as_object().is_some_and(describes_a_value) {
+                        annotate_leaves(branch, types, authoring, visiting);
+                    }
+                }
+            }
         }
         return;
     }
-    if obj.get("type").and_then(Value::as_str) == Some("array") {
-        let explicit = obj.get("x-den-template").and_then(TemplateMode::from_json);
-        obj.insert(
-            "x-den-template".into(),
-            explicit.unwrap_or(TemplateMode::Literal).to_json(),
-        );
-        if explicit != Some(TemplateMode::Value)
-            && let Some(items) = obj.get_mut("items")
-        {
-            annotate_leaves(items, types, authoring, visiting);
-        }
-        if explicit == Some(TemplateMode::Value) && authoring {
-            widen_to_template(schema);
-        }
+    annotate_leaf(schema, types, authoring);
+}
+
+/// Whether a schema says what kind of value it describes (as opposed to a bare constraint fragment).
+fn describes_a_value(obj: &Map<String, Value>) -> bool {
+    obj.contains_key("type")
+        || obj.contains_key("$ref")
+        || obj.contains_key("enum")
+        || is_structured(obj)
+}
+
+fn annotate_leaf(schema: &mut Value, types: &BTreeMap<String, Value>, authoring: bool) {
+    let mode = resolve_template_mode(schema, types);
+    let Some(obj) = schema.as_object_mut() else {
         return;
-    }
-    // A `$ref` to a shared object type: authoring needs the leaves, so inline a copy, unless the type is
-    // already being inlined higher up (a recursive type keeps its `$ref` and stays literal).
-    let ref_name = obj
-        .get("$ref")
-        .and_then(Value::as_str)
-        .and_then(|r| r.rsplit('/').next())
-        .map(str::to_owned);
-    if let Some(target) = resolve_ref(obj, types)
-        && target.get("type").and_then(Value::as_str) == Some("object")
-        && let Some(name) = ref_name
-    {
-        if visiting.contains(&name) {
-            obj.insert("x-den-template".into(), Value::Bool(false));
-            return;
-        }
-        let mut inlined = target.clone();
-        if let Some(inl) = inlined.as_object_mut() {
-            if let Some(desc) = obj.get("description").cloned() {
-                inl.insert("description".into(), desc);
-            }
-            if let Some(mode) = obj.get("x-den-template").cloned() {
-                inl.insert("x-den-template".into(), mode);
-            }
-        }
-        visiting.push(name);
-        annotate_leaves(&mut inlined, types, authoring, visiting);
-        visiting.pop();
-        *schema = inlined;
-        return;
-    }
-    let mode = resolve_template_mode(&Value::Object(obj.clone()), types);
+    };
     obj.insert("x-den-template".into(), mode.to_json());
-    if authoring && mode == TemplateMode::Value {
+    if authoring && mode == TemplateMode::Value && !is_template_string(obj) {
         widen_to_template(schema);
     }
 }
@@ -621,6 +747,73 @@ fn widen_to_template(schema: &mut Value) {
     );
     widened.insert("x-den-template".into(), Value::String("value".into()));
     *obj = widened;
+}
+
+/// The redacted form of a secret (§3).
+pub const REDACTED: &str = "***";
+
+/// Bound on schema depth followed while redacting one value.
+const MAX_REDACT_DEPTH: usize = 64;
+
+/// Redacts every value at an `x-secret: true` position of `schema` to `"***"` (§3), so examples never
+/// publish a secret. Schema-aware: follows `properties`, `additionalProperties`, `items`, `prefixItems`,
+/// `$ref` (siblings included, so a secret marked on the reference counts) and every composition branch.
+/// A branch that does not apply to the value can only redact more, never less. Values the schema does
+/// not describe (an untyped `params` object, for instance) are left alone.
+pub fn redact_secrets(value: &mut Value, schema: &Value, types: &BTreeMap<String, Value>) {
+    redact(value, schema, types, 0);
+}
+
+fn redact(value: &mut Value, schema: &Value, types: &BTreeMap<String, Value>, depth: usize) {
+    if depth > MAX_REDACT_DEPTH {
+        return;
+    }
+    let Some(obj) = schema.as_object() else {
+        return;
+    };
+    let merged;
+    let obj = match resolve_ref(obj, types) {
+        Some(target) => {
+            merged = merge_ref_target(obj, target);
+            &merged
+        }
+        None => obj,
+    };
+    if obj.get("x-secret") == Some(&Value::Bool(true)) {
+        *value = Value::String(REDACTED.into());
+        return;
+    }
+    for key in ["oneOf", "anyOf", "allOf"] {
+        if let Some(Value::Array(branches)) = obj.get(key) {
+            for branch in branches {
+                redact(value, branch, types, depth + 1);
+            }
+        }
+    }
+    match value {
+        Value::Object(map) => {
+            for (name, member) in map.iter_mut() {
+                if let Some(prop) = obj.get("properties").and_then(|p| p.get(name)) {
+                    redact(member, prop, types, depth + 1);
+                } else if let Some(additional) = obj.get("additionalProperties")
+                    && additional.is_object()
+                {
+                    redact(member, additional, types, depth + 1);
+                }
+            }
+        }
+        Value::Array(items) => {
+            let prefix = obj.get("prefixItems").and_then(Value::as_array);
+            for (i, item) in items.iter_mut().enumerate() {
+                if let Some(prefixed) = prefix.and_then(|p| p.get(i)) {
+                    redact(item, prefixed, types, depth + 1);
+                } else if let Some(items_schema) = obj.get("items") {
+                    redact(item, items_schema, types, depth + 1);
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 fn reserved_params_for(def: &OperationDef) -> Vec<(&'static str, Value)> {
@@ -659,9 +852,19 @@ fn forbid_reserved_result_keys(result: &mut Value) {
     }
 }
 
-/// Builds the `protocol.json` document from a catalog (§9.1). Fails when the catalog does not pass
-/// [`lint`]. Consumes the catalog because the shared definitions table is taken out of it.
-pub fn build(mut catalog: Catalog) -> Result<ProtocolDocument, BuildError> {
+/// Builds the `protocol.json` document from a catalog (§9.1), examples redacted for publication (§3).
+/// Fails when the catalog does not pass [`lint`]. Consumes the catalog because the shared definitions
+/// table is taken out of it.
+pub fn build(catalog: Catalog) -> Result<ProtocolDocument, BuildError> {
+    let mut doc = build_unredacted(catalog)?;
+    doc.redact_examples();
+    Ok(doc)
+}
+
+/// [`build`] without the redaction step: examples exactly as authored, so `xtask` can validate them
+/// against the generated schemas before [`ProtocolDocument::redact_examples`] replaces every secret
+/// with `"***"` (a redacted object or number no longer matches its own schema). Never publish this form.
+pub fn build_unredacted(mut catalog: Catalog) -> Result<ProtocolDocument, BuildError> {
     let errors = lint(&catalog);
     if !errors.is_empty() {
         return Err(BuildError::Lint(errors));
@@ -783,6 +986,58 @@ pub fn build(mut catalog: Catalog) -> Result<ProtocolDocument, BuildError> {
 }
 
 impl ProtocolDocument {
+    /// The publication boundary of §3: replaces every `x-secret` position of every operation and event
+    /// example with `"***"`, guided by the published schemas ([`redact_secrets`]). Plan steps of dry-run
+    /// and draft examples name the operation they would call, so their `params` are redacted against
+    /// that operation's invocation schema. Idempotent.
+    pub fn redact_examples(&mut self) {
+        let types = &self.types;
+        let op_params: BTreeMap<String, Value> = self
+            .operations
+            .iter()
+            .map(|(name, entry)| (name.clone(), entry.def.params.as_value().clone()))
+            .collect();
+        for entry in self.operations.values_mut() {
+            let params_schema = entry.def.params.as_value().clone();
+            let result_schema = entry.def.result.as_value().clone();
+            let dry_run = entry.dry_run_result.clone();
+            let draft = entry.draft_result.clone();
+            for example in &mut entry.def.examples {
+                redact_secrets(&mut example.params, &params_schema, types);
+                let shape_schema = match example.shape {
+                    ResultShape::Normal => Some(&result_schema),
+                    ResultShape::DryRun => dry_run.as_ref().map(Schema::as_value),
+                    ResultShape::Draft => draft.as_ref().map(Schema::as_value),
+                };
+                if let Some(schema) = shape_schema {
+                    redact_secrets(&mut example.result, schema, types);
+                }
+                if example.shape != ResultShape::Normal
+                    && let Some(Value::Array(plan)) = example.result.get_mut("plan")
+                {
+                    for step in plan {
+                        let Some(schema) = step
+                            .get("operation")
+                            .and_then(Value::as_str)
+                            .and_then(|op| op_params.get(op))
+                        else {
+                            continue;
+                        };
+                        if let Some(params) = step.get_mut("params") {
+                            redact_secrets(params, schema, types);
+                        }
+                    }
+                }
+            }
+        }
+        for entry in self.events.values_mut() {
+            let payload_schema = entry.def.payload.as_value().clone();
+            for example in &mut entry.def.examples {
+                redact_secrets(example, &payload_schema, types);
+            }
+        }
+    }
+
     /// The canonical on-disk form: pretty-printed, sorted maps, `\n` endings, trailing newline (§14).
     pub fn to_json_string(&self) -> String {
         let mut s = serde_json::to_string_pretty(self).expect("protocol document serializes");

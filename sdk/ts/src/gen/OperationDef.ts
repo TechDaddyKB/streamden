@@ -86,6 +86,8 @@ since: string,
 deprecated?: Deprecation, 
 /**
  * At least one example; CI validates every example against the schemas. Tier ≥ 1 operations need a
- * normal and a dry-run example, tier-2 configuration operations also a draft example (§8.1).
+ * normal and a dry-run example, tier-2 configuration operations also a draft example (§8.1). In
+ * `protocol.json` every `x-secret` position of an example is published as `"***"` (§3), whatever
+ * its schema says; validation happens on the authored values before that.
  */
 examples: Array<OperationExample>, };

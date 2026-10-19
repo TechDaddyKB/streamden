@@ -47,6 +47,7 @@ highVolume: boolean,
  */
 critical: boolean, 
 /**
- * At least one example payload; the first is also the "Test trigger" fixture.
+ * At least one example payload; the first is also the "Test trigger" fixture. Published with every
+ * `x-secret` position redacted to `"***"` (§3).
  */
 examples: Array<JsonValue>, };

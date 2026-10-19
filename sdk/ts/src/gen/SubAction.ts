@@ -10,6 +10,7 @@ import type { PluginId } from "./PluginId";
 import type { RunMode } from "./RunMode";
 import type { Template } from "./Template";
 import type { TemplateOr } from "./TemplateOr";
+import type { UnknownNode } from "./UnknownNode";
 import type { JsonValue } from "./serde_json/JsonValue";
 
 /**
@@ -144,4 +145,4 @@ origin: string,
 /**
  * The original node JSON, untouched.
  */
-original: JsonValue, });
+original: JsonValue, } | UnknownNode);

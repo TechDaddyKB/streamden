@@ -113,6 +113,8 @@ export type * from "./Trigger";
 export type * from "./TriggerId";
 export type * from "./True";
 export type * from "./UnknownEventPayload";
+export type * from "./UnknownFragment";
+export type * from "./UnknownNode";
 export type * from "./UntrustedString";
 export type * from "./UserRef";
 export type * from "./VariableRecord";
