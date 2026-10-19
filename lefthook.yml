@@ -8,4 +8,4 @@ pre-commit:
 commit-msg:
   commands:
     commit-policy:
-      run: pnpm exec commitlint --edit "{1}"
+      run: node node_modules/@commitlint/cli/cli.js --edit "{1}"
