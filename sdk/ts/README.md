@@ -56,7 +56,7 @@ literal values in temporary TypeScript with `satisfies`, and compiles against th
 Known node/fragment fixtures use the narrowed union so the unknown fallback cannot conceal missing
 required fields. New directories and individually mapped fixtures fail until assigned a type.
 Manifest literals allow the protocol's `x-*` extension keys; the v0 generated manifest intentionally
-omits them. Seven invalid fixtures must fail compilation. Eight schema-only constraints (namespace
+omits them. Seventeen invalid fixtures must fail compilation. Eight schema-only constraints (namespace
 rules, reserved slugs, nonempty arrays, numeric bounds and the response union's exactly-one-member
 rule) remain the Rust/schema suite's responsibility. TypeScript structural types cannot replace runtime validation.
 
