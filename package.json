@@ -1,0 +1,16 @@
+{
+  "name": "streamden-dev-tools",
+  "private": true,
+  "packageManager": "pnpm@12.14.0",
+  "engines": { "node": ">=22.12.0" },
+  "scripts": {
+    "hooks:install": "lefthook install",
+    "check:branch": "node scripts/check-branch-name.cjs",
+    "test:hooks": "node scripts/check-branch-name.test.cjs",
+    "lint:commit": "commitlint"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "21.2.3",
+    "lefthook": "2.2.2"
+  }
+}

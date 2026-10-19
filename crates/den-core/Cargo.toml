@@ -1,0 +1,13 @@
+[package]
+name = "den-core"
+description = "StreamDen engine core: event bus, triggers, actions, queues, variables, storage."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# Engine ≠ shell: never depend on Tauri or any webview crate here.
+[dependencies]
+den-protocol.workspace = true

@@ -38,9 +38,19 @@ start it.
 1. **Orient:** `project_summary {slug:"streamden"}` (cheap; shows open cards and what you hold), then
    `project_card_get {slug, card:<n>}` for your card's full detail and history.
 2. **Claim** (only a card whose `agent:<vendor>` label is yours, or whose `reviewer:<vendor>` label is yours when
-   it's in Review): `project_card_claim {slug, card, role, worktree_path, username, client_request_id:"DEN-<n>-<role>-<yyyymmdd>"}`.
-   Passing `worktree_path` + `username` ties the claim to your session, so it frees itself if you die. If the card
-   is in Backlog, `project_card_move` it to the lane for your role (`planning` for plan, `coding` for code).
+   it's in Review, or an owner-dispatched shared `bakeoff` card):
+   `project_card_claim {slug, card, role, worktree_path, username, client_request_id:"DEN-<n>-<vendor>-<mode>-<dispatch-id>"}`.
+   `mode` is `work` or `review`, not the board role. Generate the ID once per dispatch and reuse it exactly
+   for transport retries within that dispatch. A later dispatch (including another round on the same day)
+   needs a fresh ID. `scripts/dispatch.sh` uses a UTC timestamp (`YYYYMMDDTHHMMSSZ`), process ID and random
+   suffix for `dispatch-id`; manual sessions may use a fresh UUID instead. Keep punctuation outside the ID.
+   Passing `worktree_path` + `username` ties the claim to your session, so it frees itself if you die.
+   Confirm the live claim with `project_card_get {slug, card, worktree_path, username}` and require
+   `claim.yours:true` before working, moving or releasing; a replayed `claimed:true` is insufficient.
+   If another vendor/session holds a shared bake-off card, report the holder and stop this dispatch;
+   never release or move their live claim. If unheld but not yours, report and stop; do not reuse that ID
+   for a new dispatch. Only after confirming ownership, `project_card_move` a Backlog card to the lane
+   for your role (`planning` for plan, `coding` for code).
 3. **Stay alive:** any call naming the card renews the claim (30-min TTL). On long runs, poll
    `project_card_get` with `worktree_path` + `username`.
 4. **Finish a step:** `project_card_release {slug, card, note:<handoff>}`:

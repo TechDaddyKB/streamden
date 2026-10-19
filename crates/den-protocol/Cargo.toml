@@ -1,0 +1,12 @@
+[package]
+name = "den-protocol"
+description = "StreamDen wire and storage contracts (Spec 02). Single-writer crate."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+# Provisional: Q-B6 decides between MIT OR Apache-2.0 and GPL-3.0-or-later.
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]

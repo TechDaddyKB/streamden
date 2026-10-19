@@ -1,0 +1,13 @@
+[package]
+name = "den-server"
+description = "StreamDen local server: REST, WebSocket JSON-RPC, MCP and static UI/overlay hosting."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+den-core.workspace = true
+den-protocol.workspace = true

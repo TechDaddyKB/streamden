@@ -32,6 +32,8 @@ repo="$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)"
 wt="$(dirname "$repo")/den-wt/$card"
 username="$vendor/$model"
 today="$(date +%F)"
+# Generate once per dispatch; retries use the same ID embedded in the prompt.
+claim_request_id="$card-$vendor-$mode-$(date -u +%Y%m%dT%H%M%SZ)-$$-$RANDOM"
 
 if [[ "$mode" == work ]]; then
   # Bake-off style cards are worked by several vendors: give each vendor its own worktree.
@@ -45,10 +47,19 @@ if [[ "$mode" == work ]]; then
     base="origin/main"; git -C "$repo" rev-parse --verify --quiet "$base" >/dev/null || base="main"
     git -C "$repo" worktree add "$wt" -b "agent/$vendor/$card-$slug" "$base"
   fi
+  if [[ -f "$wt/package.json" && -f "$wt/pnpm-lock.yaml" ]]; then
+    echo "Installing frozen dependencies in $wt"
+    if ! (cd "$wt" && pnpm install --frozen-lockfile --ignore-scripts); then
+      echo "Dependency install failed in $wt; agent not launched. Run pnpm install --frozen-lockfile --ignore-scripts there before retrying." >&2
+      exit 1
+    fi
+  else
+    echo "Dependency install skipped in $wt: package.json and pnpm-lock.yaml are both required."
+  fi
   prompt="You are $username working on StreamDen board card $card (card #$n, project slug 'streamden').
 Follow AGENTS.md and docs/agents/board.md exactly:
 1. project_summary(streamden), then project_card_get(card $n). Read its detail and history; respect depends_on/ready.
-2. Claim it: project_card_claim(slug streamden, card $n, role = plan for kind:spec cards, else code, worktree_path=$wt, username=$username, client_request_id=$card-$mode-$today), then move it to your lane.
+2. Claim it: project_card_claim(slug streamden, card $n, role = plan for kind:spec cards, else code, worktree_path=$wt, username=$username, client_request_id=$claim_request_id), then move it to your lane only after confirming the claim is yours.
 3. Work ONLY in this worktree ($wt) and only on the card's Scope (paths). Run its Done-when commands and keep evidence.
 4. Commit per AGENTS.md (D-037): Conventional Commit subject ending in ($card), a body with what/why and the checks you ran, then exactly one AI-Assisted-By trailer for your engine. No co-author lines. Do not push.
 5. Append your handoff (tasks/_TEMPLATE.md §B) to the card detail, then project_card_release with a one-line note (advance only if every Done-when passes; otherwise resolution handoff or blocked)."
@@ -56,11 +67,14 @@ else
   [[ -d "$wt" ]] || { echo "No worktree $wt to review" >&2; exit 1; }
   branch="$(git -C "$wt" branch --show-current)"
   prompt="You are $username reviewing StreamDen board card $card (card #$n, project slug 'streamden').
-1. project_summary(streamden), project_card_get(card $n). Claim it with role review (worktree_path=$wt, username=$username, client_request_id=$card-review-$today).
+1. project_summary(streamden), project_card_get(card $n). Claim it with role review (worktree_path=$wt, username=$username, client_request_id=$claim_request_id).
 2. Review branch $branch against origin/main (git diff origin/main...HEAD) and the card's Goal/Checks/Done-when, following the 'Code review rules' in AGENTS.md. Run the Done-when commands yourself. Do not edit code.
 3. Append '### Review — $today — $username' to the card detail: findings first, by severity, each with file:line, failure scenario and suggested fix.
 4. Release: no resolution (advance to Verifying) if nothing blocking; otherwise project_card_release with column coding and a one-line note."
 fi
+
+prompt="$prompt
+Claim safety (including shared bake-off cards): confirm the live claim with project_card_get using worktree_path=$wt and username=$username; require claim.yours=true before working, moving or releasing the card. A replayed claimed:true response alone is insufficient. If another vendor/session holds it, report the holder and stop this dispatch; never release or move another vendor's live claim. If the card is unheld and the claim is not yours, report and stop; do not re-dispatch with the same ID. For transport retries within this dispatch only, reuse this exact client_request_id: $claim_request_id"
 
 cd "$wt"
 echo "Launching $wrapper in $wt ($mode $card)…"

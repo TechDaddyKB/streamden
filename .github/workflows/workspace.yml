@@ -1,0 +1,74 @@
+# DEN-19 scaffold CI (D-035): Linux checks, Windows MSVC compilation.
+# Runtime validation on Windows remains the DEN-20 gate.
+name: Workspace
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: workspace-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+
+jobs:
+  workspace:
+    name: Workspace (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Tauri Linux prerequisites
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config curl wget file libwebkit2gtk-4.1-dev \
+            libssl-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
+      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+        with:
+          run_install: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - run: pnpm -r typecheck
+      # Build UI assets before compiling the desktop workspace.
+      - run: pnpm -r build
+      # rustup reads the pinned channel and components from rust-toolchain.toml;
+      # Windows runners use the native x86_64-pc-windows-msvc default host.
+      - name: Install repository Rust toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: ${{ matrix.os }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Format
+        if: runner.os == 'Linux'
+        run: cargo fmt --all --check
+      - name: Build workspace
+        run: cargo build --workspace --all-targets --locked
+      - name: Clippy
+        if: runner.os == 'Linux'
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Tests (including doctests)
+        if: runner.os == 'Linux'
+        run: cargo test --workspace --locked
