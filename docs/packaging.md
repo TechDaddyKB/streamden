@@ -24,23 +24,39 @@ current product-derived value; preserve it across updates. NSIS defaults to the 
 user. WebView2's bootstrapper downloads the runtime if needed; installers are not offline.
 No signing certificate or publishing credentials are configured.
 
-The [Packaging workflow](../.github/workflows/release-packaging.yml) runs manually or
-on `v*` tags, on Ubuntu 24.04 and Windows 2025. It uploads bundles for 14 days, including
-when a subsequent Linux smoke test fails. It never creates a GitHub release. All actions
+The [Packaging workflow](../.github/workflows/release-packaging.yml) runs manually, on
+`v*` tags, and on pull requests touching `packaging/**`, `apps/desktop/tauri.conf.json`
+or the packaging workflow itself. It builds on Ubuntu 24.04 and Windows 2025, then
+uploads bundles for 14 days before the separate install-smoke jobs run. It never creates
+a GitHub release. All actions
 and container images are pinned by digest; the Linux AppImage tools have SHA-256 checks
 in [`fetch-appimage-tools.sh`](../packaging/fetch-appimage-tools.sh). A changed upstream
 continuous asset fails verification and requires review before updating its digest.
 `pnpm install` keeps the repository minimumReleaseAge policy and frozen lockfile.
 
-Ubuntu 24.04 is the CI build baseline. Debian 13 (trixie) and Fedora 44 are the initial
-install-test targets. Older distributions are not validated; local Arch builds may need
+Ubuntu 24.04 is the CI build baseline. Digest snapshots of `debian:stable-slim`, `fedora:latest`
+and `archlinux:latest` are the install-test targets (resolved on 2026-10-19). Older
+distributions are not validated; local Arch builds may need
 newer glibc than these targets, so use CI artifacts for distribution tests. This narrows
 the older Ubuntu 22.04 baseline suggested in [the research](research/tech-stack.md#101-what-the-tauri-bundler-produces).
 
 ## Install and launch probes
 
-The workflow installs each native bundle using its package manager, creates an unprivileged
-user, then runs [`smoke-launch.sh`](../packaging/smoke-launch.sh) under an isolated Xvfb
+Three independent matrix jobs download the Linux artifact from the same workflow run.
+[`install-smoke.sh`](../packaging/install-smoke.sh) installs the deb with apt, the rpm
+with dnf, and a package built from the `streamden-bin` draft with `pacman -U`. For Arch,
+it copies the draft to a temporary build directory and substitutes only its source
+location and SHA-256 with the downloaded deb. This exercises the actual AUR payload
+extraction and dependency list without a published release or disabled checksums;
+`makepkg` runs as an unprivileged user. The checked-in draft stays fail-closed.
+
+Each job lists package-owned files and asserts `/usr/bin/streamden`,
+`/usr/share/applications/StreamDen.desktop`, and the 32/128/512-pixel icons in
+`/usr/share/icons/hicolor`. It logs `ldd /usr/bin/streamden` and fails on unresolved
+libraries or an ldd error. If `/usr/bin/streamdend` is present it runs
+`streamdend --version`; the current desktop-only packages explicitly skip that check.
+The jobs create an unprivileged user, then run
+[`smoke-launch.sh`](../packaging/smoke-launch.sh) under an isolated Xvfb
 and D-Bus session. X11/software-rendering settings apply only to this probe. Success means
 the process survived 15 seconds without selected startup-error diagnostics; it does not
 assert rendered pixels, Wayland/NVIDIA behaviour, or Windows runtime compatibility.
@@ -74,8 +90,16 @@ permission denied while trying to connect to the docker API at unix:///var/run/d
 
 Podman was not installed. The Docker denial was not bypassed. Coordinator: push this
 branch and run Packaging with `workflow_dispatch`; retain the Linux/Windows artifacts
-and Debian/Fedora step logs. Neither hosted run nor Windows installer execution was
-available during this local session.
+and all three install-smoke job logs. Packaging-related pull requests also run these
+jobs before merge. Neither hosted execution nor Windows installer execution was
+available during this local session. The exact current CI reproduction, after downloading
+the Linux artifact into `artifacts/` with its `deb/`, `rpm/` and `appimage/` directories, is:
+
+```bash
+# Use the digest-pinned SMOKE_IMAGE from the workflow for the chosen distribution.
+docker run --rm -v "$PWD:/work:ro" "$SMOKE_IMAGE" \
+  bash /work/packaging/install-smoke.sh debian  # or fedora / arch
+```
 
 ## AUR drafts
 
@@ -90,7 +114,8 @@ These are **unpublished drafts**. Release URLs use the permanent organisation fr
 exist. All-zero checksums deliberately fail source verification. Before AUR publication,
 transfer the repository, create reviewed release assets, replace versions/checksums,
 provide `cargo-tauri` 2.12.3 or newer, generate `.SRCINFO` with `makepkg --printsrcinfo`,
-then build/install and run package-level namcap in a clean Arch environment. PKGBUILD
+then run package-level namcap and validate the published source in a clean Arch
+environment. CI builds and installs the local-artifact variant described above. PKGBUILD
 lint does not establish that a release exists or that its dependencies install.
 
 Patterns: [Tauri AUR guide](https://v2.tauri.app/distribute/aur/) and
@@ -123,4 +148,13 @@ runtime dependencies are added for features the P0 shell does not implement.
   copy substituting `/usr/bin/true` for the unavailable `/usr/bin/streamdend`; exit 0.
   The original unit cannot pass executable validation until the daemon is installed.
 
-Rollback: revert the DEN-35 commit; no host package, service or release was installed.
+Round 2 rechecked the Tauri build (all three bundles), both PKGBUILD lints, actionlint,
+shell syntax, Markdown lint and all six workspace checks above: all exit 0. A temporary
+copy of the `streamden-bin` draft, adapted exactly as in CI, passed checksum validation
+and `makepkg --nodeps --noconfirm` on Arch and contained the expected binary, desktop
+entry and all three icons. This local probe skipped dependency checks and did not
+install the package; CI checks dependencies and installs it with pacman. Native package
+names are read from artifact metadata (the generated deb is named `stream-den`).
+Hosted container execution remains pending because local Docker access is unavailable.
+
+Rollback: revert the DEN-35 commits; no host package, service or release was installed.
