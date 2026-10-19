@@ -19,27 +19,35 @@ for i in $(seq 1 "$runs"); do
   else
     status="no-first-paint"
   fi
+  # Talk only to THIS pid's server (it may have fallen back to another port).
+  addr=$("$here/instance.sh" "$r/state" "$pid" 5) || addr=
   if (( i < runs )); then
-    "$here/api.sh" quit >/dev/null 2>&1; sleep 1.5
+    [[ -n $addr ]] && S1_ADDR=$addr S1_PID=$pid "$here/api.sh" quit >/dev/null 2>&1; sleep 1.5
     kill "$pid" 2>/dev/null
   fi
 done
 sleep 2
-win=$("$here/win.sh" "$pid" level | head -1)
-shot=$("$here/shot.sh" "$pid" level "$out/$tag.png" 2>&1)
-state=$(curl -s -m 5 "http://127.0.0.1:${S1_PORT:-47811}/api/state")
-"$here/api.sh" animation on=1 >/dev/null; sleep 2
-anim_json=$(python3 -I "$here/measure.py" "$pid" "$anim" 5)
-"$here/api.sh" animation on=0 >/dev/null; sleep 3
-idle_json=$(python3 -I "$here/measure.py" "$pid" "$idle" 5)
-"$here/api.sh" quit >/dev/null 2>&1; sleep 1.5
+export S1_ADDR=$addr S1_PID=$pid
+win=null shot="" state=null anim_json=null idle_json=null
+if [[ -n $addr ]] && kill -0 "$pid" 2>/dev/null; then
+  win=$("$here/win.sh" "$pid" level | head -1)
+  shot=$("$here/shot.sh" "$pid" level "$out/$tag.png" 2>&1)
+  state=$(curl -fsS -m 5 "http://$addr/api/state")
+  "$here/api.sh" animation on=1 >/dev/null || status="api-error"; sleep 2
+  anim_json=$(python3 -I "$here/measure.py" "$pid" "$anim" 5)
+  "$here/api.sh" animation on=0 >/dev/null || status="api-error"; sleep 3
+  idle_json=$(python3 -I "$here/measure.py" "$pid" "$idle" 5)
+  "$here/api.sh" quit >/dev/null 2>&1; sleep 1.5
+else
+  status="${status}+no-instance"
+fi
 kill "$pid" 2>/dev/null
 # stderr: drop Mesa's per-fd "pci id" chatter, keep everything else, counted
 errs=$(cat "$out"/run*/stderr.log | grep -v '^pci id for fd\|^\[s1\]\|^$' | sed -E 's/[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+//; s/\(s1-tauri-shell:[0-9]+\)/(app)/; s/pci id for fd [0-9]+/pci id for fd N/' | sort | uniq -c | sort -rn | jq -R -s 'split("\n") | map(select(length>0) | ltrimstr(" ") )')
 jq -n -c --arg tag "$tag" --arg status "$status" --argjson fps "$(printf '%s\n' "${fps[@]:-}" | jq -s -c 'map(select(.!=null))')" \
   --argjson exec_fps "$(printf '%s\n' "${exec_fps[@]:-}" | jq -s -c 'map(select(.!=null))')" \
   --arg shot "$shot" --argjson win "${win:-null}" --argjson state "${state:-null}" \
-  --argjson anim "$anim_json" --argjson idle "$idle_json" --argjson stderr "$errs" \
+  --argjson anim "${anim_json:-null}" --argjson idle "${idle_json:-null}" --argjson stderr "$errs" \
   '{tag:$tag,status:$status,first_paint_process_ms:$fps,first_paint_exec_ms:$exec_fps,shot:$shot,window:$win,
     quirk:$state.quirk_status,env:$state.env_applied,session:$state.session,anim:$anim,idle:$idle,stderr:$stderr}' \
   | tee -a "$root/runs/matrix/results.jsonl"

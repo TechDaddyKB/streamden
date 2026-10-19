@@ -1,0 +1,9 @@
+start: WebKitNetworkPr×1 WebKitWebProces×1 
+cycle 1 closed:   WebKitNetworkPr×1  | engine: pid=340770 tick=5 webviews=0
+cycle 1 reopened: WebKitNetworkPr×1 WebKitWebProces×1  | reopen-to-first-paint 254 ms
+cycle 2 closed:   WebKitNetworkPr×1  | engine: pid=340770 tick=8 webviews=0
+cycle 2 reopened: WebKitNetworkPr×1 WebKitWebProces×1  | reopen-to-first-paint 280 ms
+cycle 3 closed:   WebKitNetworkPr×1  | engine: pid=340770 tick=12 webviews=0
+cycle 3 reopened: WebKitNetworkPr×1 WebKitWebProces×1  | reopen-to-first-paint 264 ms
+
+{"root": 340770, "seconds": 60.0, "cpu_pct_one_core": 0.02, "cpu_pct_by_process": {"s1-tauri-shell": 0.02, "WebKitNetworkPr": 0.0}, "rss_mb_avg": 331.7, "rss_mb_max": 334.2, "pss_mb_avg": 184.2, "pss_mb_max": 186.8, "pss_mb_by_process_last": {"s1-tauri-shell": 136.3, "WebKitNetworkPr": 47.4}, "processes": {"s1-tauri-shell": 1, "WebKitNetworkPr": 1}}

@@ -1,0 +1,6 @@
+{"env":[],"event":"startup","level":0,"level_name":"defaults","pid":336289,"source":"default","t_unix_ms":1792385402259}
+{"event":"crash_loop_bump","from":0,"pid":337384,"previous_pid":336289,"t_unix_ms":1792385412110,"to":1}
+{"env":[],"event":"startup","level":1,"level_name":"early-gl-quirk","pid":337384,"source":"crash-loop: previous run (pid 336289, level 0) never painted","t_unix_ms":1792385412110}
+{"event":"first_paint","first_in_process":true,"label":"main","level":1,"pid":337384,"process_ms":349.555438,"since_open_ms":326.63937100000004,"t_unix_ms":1792385412460,"webview_ms":64.0}
+{"env":[],"event":"startup","level":1,"level_name":"early-gl-quirk","pid":338262,"source":"level file","t_unix_ms":1792385414606}
+{"event":"first_paint","first_in_process":true,"label":"main","level":1,"pid":338262,"process_ms":358.745169,"since_open_ms":337.718721,"t_unix_ms":1792385414965,"webview_ms":64.0}
