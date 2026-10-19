@@ -1,7 +1,8 @@
 # Spec 02: Protocol and contracts (WS-02)
 
-- **Status:** Revision 4, approved by the reviewer (Codex Astra, 2026-10-19; history in §19). Provisionally
-  approved by the coordinator on the owner's delegation (2026-10-19); owner confirmation pending. Card: DEN-14.
+- **Status:** Revision 5. r4 was approved by the reviewer (Codex Astra, 2026-10-19; history in §19) and
+  provisionally approved by the coordinator on the owner's delegation (2026-10-19); owner confirmation pending.
+  r5 is the DEN-30 follow-up (`plugins.call` classification), pending review. Card: DEN-14.
 - **Owns:** `crates/den-protocol` (single-writer), the codegen pipeline (`cargo xtask codegen`), and every generated
   artifact (`protocol.json`, OpenAPI, AsyncAPI, TS, Python, plugin manifest schema, MCP tool catalog).
 - **Builds on:** [architecture.md](../architecture.md) §2–4, [plugin-sdk-and-api.md](../research/plugin-sdk-and-api.md)
@@ -433,7 +434,21 @@ pub struct OperationDef {
   stops at that node. `dryRun: true` takes precedence over draft-first: under MCP a tier-2 configuration call with
   `dryRun: true` returns `DryRunResult` and creates nothing, not even a draft.
 - Plugin operations are first-class methods (`acme.send_chat`). `plugins.call { plugin, method, params }`
-  remains as a generic alias for clients that only know plugin IDs.
+  remains as a generic alias for clients that only know plugin IDs. It is a **catalog operation**, not a protocol
+  method: tier 1 in the catalog with a dynamic effective tier (§8.8 rule 2), scope `plugins:call[:<pluginId>]`,
+  `expose: { rpc: true, subAction: false, mcp: true }` (a stored action names the plugin operation itself),
+  `idempotent: false`, `external: true`, so it is the native MCP tool `plugins_call` and is reachable through
+  `invoke_operation("plugins.call")`. `plugin` is the plugin ID (§4) and `method` the operation's `localId`; the
+  target is `<installed slug>.<method>`, so only an operation that plugin contributes can be reached (an unknown
+  plugin or method → `NOT_FOUND`). The alias never widens what the **target** allows: the target MUST pass its
+  own exposure on the calling surface (the §9.6 exposure predicate when the context has an `Mcp` principal or
+  chain origin, so a target hidden from MCP or at tier 4 is `NOT_FOUND` there; otherwise `expose.rpc`, including
+  plugin host calls), and the caller needs the target's scopes in addition to `plugins:call`. `params` is
+  validated against the target's **author** params schema, so the reserved `dryRun` and `approvalId` are only
+  accepted on the outer call. Tier policy, approval, rate limits and audit apply as if the target were called
+  directly: the approval binds to the target's `operation` and the `args_hash` of `params` (§8.8 rule 4), so it
+  is interchangeable with an approval of the native call. Results, dry-run and draft shapes and the MCP
+  transforms (§9.6, `x-den-untrusted` wrapping included) use the target's schemas, never a generic one.
 
 ### 8.2 Envelope (WebSocket and REST `POST /api/v1/rpc`)
 
@@ -638,7 +653,7 @@ them.
    static target → `effectiveTier(target)` (a cycle counts once); `RunAction` whose target is a template or is
    otherwise unresolvable at check time → 4 ("unknown is dangerous"); `Placeholder`, control flow, disabled nodes
    and disabled targets → 0. `actions.run` is tier 1 in the catalog, but a call's effective tier is
-   `max(1, effectiveTier(target))`, and tier policy (MCP exclusion, approval, draft-first) applies to the
+   `max(1, effectiveTier(target))` (for `plugins.call`, `max(1, catalog tier of the target)`, host classification included, §8.1, §11), and tier policy (MCP exclusion, approval, draft-first) applies to the
    **effective** tier. The same computation is exposed as `actions.effective_tier` (tier 0) and in every dry-run
    `plan` (§8.1). Under an MCP context, `actions.run` on an action with effective tier 4 is refused with
    `PERMISSION_DENIED` (`tier_exceeds_context`) before anything runs; effective tier 3 requires approval. The two
@@ -798,6 +813,8 @@ From each operation that passes the **exposure predicate** `expose.mcp = true &&
 evaluated at runtime against the live catalog, filters every profile list and the meta-tools `search_operations`,
 `describe_operation` and `invoke_operation`, so no path reaches an operation a native tool could not. Protocol
 methods (§8.1, §12) are not operations: `invoke_operation` returns `NOT_FOUND` for them, as it does for tier 4.
+`plugins.call` is an operation and passes the predicate (`plugins_call`); its target is checked against the same
+predicate at call time (§8.1), so the alias reaches exactly the plugin operations a native tool could.
 Per tool:
 - **name** = method with `.` → `_` (`obs.set_scene` → `obs_set_scene`). Codegen fails unless it matches
   `^[a-z0-9_]{1,64}$`. Renames keep an entry in `schema/mcp-aliases.json`.
@@ -941,7 +958,9 @@ always validates against its bundled copy, never the network.
 
 Only the **protocol methods** are defined here: they are not catalog operations, have no tier and are never
 sub-actions or MCP tools (§8.1). Resource and configuration methods (`actions.*`, `variables.*`, `chat.*`…) are
-defined by their owning spec, but always as catalog operations following §8.1 and §8.8.
+defined by their owning spec, but always as catalog operations following §8.1 and §8.8. `plugins.call` is also a
+catalog operation, not a protocol method; this spec defines it in §8.1 (target rules), §8.8 (effective tier,
+approvals) and §9.6 (MCP).
 
 | Method / notification | Direction | Purpose |
 |---|---|---|
@@ -953,7 +972,6 @@ defined by their owning spec, but always as catalog operations following §8.1 a
 | `events.subscribe`, `events.unsubscribe` | C→S | §8.4 |
 | `event`, `events.dropped`, `system.deprecation_used`, `catalog.changed` | S→C notification | Delivery, back-pressure, deprecations, plugin install/uninstall (clients re-fetch `system.describe`) |
 | `batch.execute` | C→S | Serial batch |
-| `plugins.call` | C→S | Generic plugin method alias |
 
 ## 13. UI flows (protocol-visible parts only)
 
@@ -1103,7 +1121,17 @@ import-originated data is.
     target in place, and the result validates against `DraftResult` (no `deleted` key); `dryRun: true` on
     `actions_create` returns `DryRunResult` and creates no draft; `queues_update` yields a `PendingChange`; every
     tier-2 draft result validates against `draftResult` on WS and inside the MCP envelope; the same calls under a
-    user token return the normal result.
+    user token return the normal result. **`plugins.call`** (§8.1): `plugins_call` is in `tools/list` and
+    `invoke_operation("plugins.call")` is accepted; both, and the WS method, give the same result as the native
+    plugin tool for an MCP-exposed tier-1 target, including the wrapped `x-den-untrusted` fields; an unknown
+    plugin or `method` → `NOT_FOUND`; over MCP a target with `expose.mcp: false` or tier 4 → `NOT_FOUND`, while
+    over WS the `expose.mcp: false` target runs, a target with `expose.rpc: false` → `NOT_FOUND`, and a tier-4
+    target → `PERMISSION_DENIED` (`tier_exceeds_context`) for a `maxTier: 3` token and runs for a `maxTier: 4` user
+    token; a caller with `plugins:call` but without the target's scopes → `PERMISSION_DENIED`, and with
+    `plugins:call:<otherPlugin>` → `PERMISSION_DENIED`; `dryRun` or `approvalId` inside `params` → `INVALID_PARAMS`;
+    a tier-3 target → `APPROVAL_REQUIRED`, the approval replayed with changed `params` → `binding_mismatch` /
+    `args`, and replayed on the native tool with identical params → accepted; `dryRun: true` reports
+    `effectiveTier` = `max(1, target tier)`.
 14. **Dry-run and draft results** (§8.1): every tier ≥ 1 operation's normal and dry-run examples, and every tier-2
     configuration operation's draft example, validate against `result`, `DryRunResult` and `DraftResult`
     respectively in JSON Schema, TS and pydantic, and against no other of the three; the TS overload and Python
@@ -1169,3 +1197,8 @@ protocol design choice made here, not a product decision, and is open to reviewe
   second pass: the recorded seed render travelling with queued children, most-recent recording in loops,
   `ArgWrites::Named` so *Set argument* does not make every field dynamic, disabled nodes excluded from the writer
   set, and the full producer chain in approval requests.
+- **r5** (DEN-30): resolves the P2 follow-up from the r4 review. `plugins.call` is classified as a catalog
+  operation with a dynamic effective tier, not a protocol method: target restrictions (same plugin, target's own
+  exposure and scopes, per-surface exposure flag), `plugin`/`method` resolution, reserved params only on the outer
+  call, approvals and result transforms keyed on the target, MCP tool and meta-tool exposure, and its row removed
+  from the §12 protocol-method table (§8.1, §8.8 rule 2, §9.6, §12, §17.13).
