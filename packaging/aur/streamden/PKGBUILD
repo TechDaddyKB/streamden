@@ -1,0 +1,32 @@
+# Maintainer: Tech Daddy Digital
+# Draft only: replace the zero checksum with the reviewed release archive digest.
+pkgname=streamden
+pkgver=0.0.0
+pkgrel=1
+pkgdesc='Streaming automation hub (desktop shell built from source)'
+arch=('x86_64')
+url='https://github.com/tech-daddy-digital/streamden'
+license=('GPL-3.0-or-later')
+depends=('glibc' 'gcc-libs' 'cairo' 'gdk-pixbuf2' 'glib2' 'gtk3'
+         'hicolor-icon-theme' 'libsoup3' 'pango' 'webkit2gtk-4.1' 'openssl')
+makedepends=('cargo' 'cargo-tauri>=2.12.3' 'nodejs>=22.12' 'pnpm>=12' 'librsvg' 'libappindicator-gtk3')
+options=('!strip' '!debug' '!lto')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('0000000000000000000000000000000000000000000000000000000000000000')
+
+prepare() {
+  cd "$srcdir/$pkgname-$pkgver"
+  export CARGO_HOME="$srcdir/cargo-home"
+  cargo fetch --locked
+  pnpm install --frozen-lockfile --ignore-scripts
+}
+
+build() {
+  cd "$srcdir/$pkgname-$pkgver/apps/desktop"
+  export CARGO_HOME="$srcdir/cargo-home" CARGO_TARGET_DIR="$srcdir/target"
+  cargo tauri build --bundles deb -- --frozen
+}
+
+package() {
+  cp -a "$srcdir/target/release/bundle/deb/StreamDen_${pkgver}_amd64/data/." "$pkgdir/"
+}
