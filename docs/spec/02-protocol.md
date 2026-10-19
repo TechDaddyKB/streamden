@@ -91,7 +91,7 @@ pub struct EventMeta {
     pub payload_version: u32,        // per-event-type schema version, starts at 1
     pub test: bool,                  // simulator or "Test trigger"
     pub replay: bool,                // re-delivered from the replay buffer or from history
-    pub caused_by: Option<RunId>,    // set when emitted by an action run (loop protection, spec 03; restriction inheritance, §8.8 rule 5)
+    pub caused_by: Option<RunId>,    // set when emitted by a run, including the synthetic run of a direct operation call (loop protection, spec 03; restriction inheritance, §8.8 rules 1 and 5)
     pub correlation_id: Option<String>, // upstream message id, for dedupe and moderation links
 }
 ```
@@ -379,6 +379,7 @@ pub struct OperationDef {
     pub scopes: Vec<Scope>,           // e.g. ["obs:control"]
     pub expose: Exposure,             // { rpc: bool, sub_action: bool, mcp: bool }
     pub idempotent: bool,
+    pub writes_args: ArgWrites,       // None | Named { name_param: String /* params path holding the literal arg name; Set argument */ } | Any (Split, Parse JSON, …); data-flow writers for the binding hash (§8.8)
     pub external: bool,               // talks to an external platform/app (MCP openWorldHint)
     pub timeout_ms: Option<u32>,
     pub platforms: Option<Vec<Os>>,   // OS gate: ["windows"] for Windows-only apps; hidden elsewhere with a reason
@@ -408,8 +409,9 @@ pub struct OperationDef {
   `operations.<name>.dryRunResult` (tier ≥ 1), always the shared type `DryRunResult { dryRun: true, plan:
   Vec<PlanStep>, actions?: Vec<ActionRevisionRef>, diff?: Value, warnings: Vec<String>, wouldRequireApproval:
   bool, effectiveTier: RiskTier }` with `PlanStep { operation, params /* rendered, secrets redacted */, tier,
-  action?: ActionId, node?: NodeId, argsHash?: Sha256 /* binding hash, §8.8, on tier ≥ 3 steps */, target?:
-  String, description }`; and `operations.<name>.draftResult` (tier-2 configuration operations), always the shared
+  action?: ActionId, node?: NodeId, argsHash?: Sha256 /* binding hash, §8.8, on tier ≥ 3 steps */, dynamicFields?:
+  Vec<String> /* params paths that take run-produced values, §8.8 rule 4, on tier ≥ 3 steps */, target?: String,
+  description }`; and `operations.<name>.draftResult` (tier-2 configuration operations), always the shared
   type `DraftResult` (§6.1), meaning the call was deferred into a draft and nothing live changed. For a composite
   call `actions` pins every action the run can reach to its revision and `plan` lists every operation it would
   execute, repeats included; together they are exactly what an approval of that call binds to (§8.8 rule 4). The
@@ -562,21 +564,56 @@ pub struct PlannedCall {
     pub action: Option<ActionId>, pub node: Option<NodeId>, // a node in a stored action (both set), or
     pub plugin: Option<PluginId>,                           // a host call a plugin's dry run declared (spec 12); exactly one identity form is set
     pub operation: OperationName, pub args_hash: Sha256,
+    pub dynamic_fields: Vec<String>,                        // params paths (as in `fieldErrors.path`) whose binding render references any sentinel; part of the plan identity and shown to the approver (rule 4)
 }
 ```
 
 **Binding hash.** SHA-256 over the canonical JSON (sorted keys, no whitespace, NFC strings) of a call's or node's
 params after a **binding render**: a render against the **plan-time context**, which is the call's own `args`,
 the global, user and plugin variables as of render time, and the stored action content, in which everything else
-resolves to fixed sentinels: the volatile roots and functions (`now`, `run.*`, `random(…)`), the roots that only
-exist once a run executes (`event`, `match`), and every arg name that any `save_as` or `Set argument` node in the
-reachable tree can write (a static property of the tree, so plan time and execution time sentinel the same
-names). Rendering is pure (§10), so this is simply a second render, and both sides compute it identically. The
-hash therefore changes when the stored action content, the call's arguments or a variable a template reads
-directly changes, but not because time passed or because a value computed inside the run differed; those
-intermediate values are data, and the pinned revisions fix every node that produces or consumes them. The same
-hash appears per step in every dry-run plan (`PlanStep.argsHash`, §8.1), so a client can tell which step a
-mismatch refers to.
+resolves to tagged sentinels. The render **follows argument data flow instead of hiding it.** *Writers* are the
+enabled nodes that can put a value into a run arg (a disabled node is not a writer, as in rule 2; enabling it
+changes the revision): an `Op` whose operation has `writes_args` (§8.1: `Named` writes the one arg whose name is
+the literal value of its `name_param`, as *Set argument* does; `Any`, or `Named` with a templated name, can write
+any arg, as *Split* does), an `Op` with `save_as` (writes that name), a `RunAction` (its `args` map seeds the
+child's args), and a `Code` node (which can write any arg). The *args scope* of a node is the action it is in plus every inline `RunAction` target
+reachable from it (args flow into inline children and back, §6.3); a queued `RunAction` target is its own scope,
+seeded only by that node's `args`. *Tree order* is a pre-order walk of the stored document: children in array
+order, `If` then-arm before else-arm, `Switch` cases in order then `default`, `Parallel` branches in order, an
+inline target's tree at the position of its `RunAction` node, a cycle walked once. A path that reads an arg name
+resolves to a list, in tree order, of one entry per writer of that name in the scope (an any-name writer counts
+for every name, which is why *Set argument* declares its target: one `Set argument ts = {now}` must not make every
+field in the scope dynamic), preceded by the value that `actions.run.args`, or the seeding
+`RunAction.args` template binding-rendered in the parent's scope, supplies for that name, if any. A writer's entry
+is the binding render of its own source: for `writes_args`, its rendered params; for `save_as`, `{ "$den":
+"run_value", "node": <NodeId>, "operation": <name>, "params": <binding render of the producer's params> }`, so the
+inputs of an operation whose result flows into a tier-3 call are bound even though its result is not; for
+`RunAction.args`, the rendered template; for `Code`, `{ "$den": "code", "node": <NodeId> }` (its source is pinned
+by the revision). The render is recursive (a writer's source that reads a written arg expands the same way) and a
+name already on the recursion stack renders as `{ "$den": "cycle" }`. Only values that genuinely do not exist
+before the run executes are sentinels, each naming its source: the volatile roots and functions (`now`, `run.*`,
+`random(…)`), the roots that only exist once a run executes (`event`, `match`), and the `run_value`, `code` and
+`cycle` records above. A field is **dynamic** when its binding render *references* any sentinel; this is
+syntactic (an expression that mentions `now` is dynamic whether or not evaluation reaches it), so it is identical
+at plan time and execution time and independent of variable values.
+
+**No time-of-check gap.** Rendering is pure (§10), the writer set and tree order are static, and the engine
+renders a node's templates for execution and for binding in **one pass over one variable snapshot**, recording
+the binding render of every writer when it executes. Check (b) at a tier-3 node (rule 4) therefore hashes the
+node's params with every writer that has executed in this run contributing its **most recent recorded** binding
+render (a writer inside a loop is recorded once per iteration), writers that have not executed (an untaken
+branch) rendering against the node's own snapshot, and the node's direct variable reads taken from the same
+snapshot as its execution render. A queued `RunAction` child carries, from the moment it is enqueued, the
+recorded binding render of its seeding `args` (which already embeds the parent's recorded writer renders), and
+check (b) inside the child uses that record, never a fresh render of the seed template, so a parent that handed
+the child a changed value cannot be made to look approved by restoring the variable before the child starts. A value is bound exactly as it was
+consumed: a global changed between the approval and the writer that reads it is an `args` mismatch, and so is
+changing it back before the tier-3 node runs. Plan time and execution time compute the same hash whenever nothing
+the approver saw has changed: the hash moves when the stored action content, the call's arguments, or a variable
+that a template reads directly or through any chain of writers changes, but not because time passed or because an
+operation inside the run returned something different; those run-produced values are **dynamic fields**, listed
+per planned call and shown to the approver (rule 4), never a silent wildcard. The same hash appears per step in
+every dry-run plan (`PlanStep.argsHash`, §8.1), so a client can tell which step a mismatch refers to.
 
 The rules are normative for every surface. Spec 03 (engine) and spec 06 (API/MCP) implement them; §17.9 tests
 them.
@@ -585,8 +622,17 @@ them.
    children, `Code` nodes, `Parallel` branches, `batch.execute` entries and `plugins.call` targets inherit the
    context of the node or request that started them, with the run appended to `lineage`. A queued run keeps the
    context it was enqueued with, however long it waits. Runs that triggers start on events a run emitted inherit
-   its restrictions too (rule 5). Nothing executed on behalf of a context may exceed its `max_tier` or use a scope
-   it lacks, at any depth or any number of hops.
+   its restrictions too (rule 5). **Every invocation is a run.** An operation call that does not already execute
+   inside a run (a WS or REST operation call, a native MCP tool, `invoke_operation`, each `batch.execute` entry, a
+   plugin host call) executes as a **synthetic run**: the engine mints a `RunId` before dispatch, attaches the caller's
+   `AuthContext` to it, retains both for at least the attribution window (spec 03) and audits it. A synthetic run
+   has no action, tree, queue or template context (§10.1), only an identity and a context, so that every event the
+   engine itself emits for the call, synchronously or later (`variables.global_updated` from a direct
+   `variables.set`, the event a `triggers.test` call injects), plus every upstream event a connector attributes to
+   it (rule 5), is stamped `causedBy` that run and rule 5 applies to it exactly as to an event a stored action
+   emitted. Where rule 5 says "run" it means both;
+   a direct call is never a path to an unattributed event. Nothing executed on behalf of a context may exceed its
+   `max_tier` or use a scope it lacks, at any depth or any number of hops.
 2. **Effective tier.** `effectiveTier(action)` is the maximum tier over every enabled node reachable from the
    action: `Op` → the operation's catalog tier (host classification included, §11); `Code` → 4; `RunAction` with a
    static target → `effectiveTier(target)` (a cycle counts once); `RunAction` whose target is a template or is
@@ -610,10 +656,11 @@ them.
    client-supplied data: the revision of every action the run can reach, and one `PlannedCall` per tier-3 node
    occurrence (repeats are separate entries; both arms of an `If`/`Switch` are planned, so the plan is a superset
    of what runs; a cycle is planned once). Enforcement happens at three points. (a) **At the call:** the plan is
-   recomputed and must be identical (same action set and revisions, same multiset of calls), or the call gets
+   recomputed and must be identical (same action set and revisions, same multiset of calls, each with the same
+   `dynamic_fields`), or the call gets
    `APPROVAL_REQUIRED` with `details.reason = "binding_mismatch"`, `details.mismatch ∈ { "args", "revision",
    "unplanned_call" }` and `details.action`/`details.node`. (b) **Before every tier-3 node:** the node's `(action,
-   node, operation, bindingHash)`, or for a host call a plugin makes `(plugin, operation, bindingHash)`, must
+   node, operation, bindingHash)`, the hash computed from recorded writer renders as defined above, or for a host call a plugin makes `(plugin, operation, bindingHash)`, must
    consume one not-yet-consumed matching `PlannedCall`, otherwise the run **stops** with the same error. A plan is
    finite: a loop that reaches a tier-3 node more often than planned stops, and so does a tier-3 call that a
    plugin makes which its dry run did not declare (spec 12). (c) **Before a queued `RunAction` child starts**,
@@ -624,8 +671,20 @@ them.
    fields, the call's and every `PlannedCall`'s, but still pin revisions, node identities and the call multiset,
    and their `expires_at` applies to every descendant. One approval covers one execution unless it is a session
    grant. The handle TTL (§4) bounds when the approved call may **start**; once it has started, its descendants
-   are bound by the plan, not by the clock. Untrusted text never satisfies an approval (§16).
-5. **Restrictions follow `causedBy` chains.** When a run emits an event, the engine stamps `meta.causedBy` (§5.1)
+   are bound by the plan, not by the clock. **Dynamic fields are an explicit, visible policy, not a wildcard.** A
+   `PlannedCall` whose binding render references any sentinel lists the affected params paths in
+   `dynamic_fields`; the dry-run plan (`PlanStep.dynamicFields`, §8.1) and the approval request (spec 06/13) MUST
+   show them with their full producer chain ("`message`: the result of *Fetch quote* (`http.request`), whose URL is
+   the result of `variables.get url`"), because a producer's own inputs are bound but the inputs of *its* producers
+   are results and are pinned only by revision, so the approver must see the root of the chain. Approving the
+   call is approving that exactly those fields take run-time values, and nothing else does. A recomputed plan
+   with a different `dynamic_fields` set on any call is `binding_mismatch` / `args`; the set is syntactic, so it is
+   compared under a session grant too, although the grant exempts the hashes. The alternative, stopping at
+   the node for a second approval bound to the concrete rendered arguments, is rejected for one-shot approvals: an
+   MCP-origin run has nobody to answer mid-run (`unattended`, rule 5), and the pinned revision already fixes which
+   node produces the value and how it is consumed. Untrusted text never satisfies an approval (§16).
+5. **Restrictions follow `causedBy` chains.** When a run (an action run or the synthetic run of a direct call,
+   rule 1) emits an event, the engine stamps `meta.causedBy` (§5.1)
    and carries the emitting run's `AuthContext` alongside the event inside the engine (never on the wire), so
    dispatch needs no lookup. A trigger that fires on such an event starts its run under `Principal::Trigger` (who
    fired, for the audit log) with `surface: event`, but with a context **derived** from the causing run's and never
@@ -647,8 +706,9 @@ them.
    explicit consent boundary. Dry-run plans and `effectiveTier` do not look across chains (which triggers will fire
    is only known at emission), so the outer call can succeed while the chained run stops; `wouldRequireApproval`
    describes the call, not its chains. Events **without** `causedBy` start a fresh, unrestricted trigger context:
-   upstream events, manual "Test trigger" events, and a platform echoing back a message the engine sent, so the
-   taint covers the causation the engine can see. `causedBy` is server-assigned on every path (§16): the engine
+   upstream events the connector cannot attribute, including a platform echoing back a message the engine sent, so
+   the taint covers the causation the engine can see (a "Test trigger" event is injected by a direct call and is
+   attributed to its synthetic run, rule 1). `causedBy` is server-assigned on every path (§16): the engine
    stamps it from the emitting run; a core connector that can attribute an upstream event to the engine's own
    outbound call (its own chat messages, matched by `meta.correlationId`) SHOULD report the attribution so the
    engine stamps it (spec 05); the plugin host stamps it on events a plugin emits while servicing a host call made
@@ -845,7 +905,8 @@ construction, and `text` mode is the place for literal braces (`{{`).
   and field. Range, enum and pattern constraints apply to the rendered value (`{= volume * 2}` against `0..100`
   passes at 40 and fails at 60, at run time, not at save time). A failed node follows spec 03 error handling; the
   operation is never called with unvalidated params.
-- **Direct calls never carry templates.** WS, REST and MCP callers have no run context: their `params` validate
+- **Direct calls never carry templates.** WS, REST and MCP callers have no template context (their synthetic run,
+  §8.8 rule 1, carries authorization and causation, not variables): their `params` validate
   against the invocation schema, so `"{amount}"` in a numeric field is `INVALID_PARAMS`, and braces in string
   fields are literal characters. `actions.run.args` are values, not templates; they become `{args.*}` in the run.
 - **Fixtures** (`den-protocol`, §17.11): numeric `{amount}`; `{= volume * 2}` against `0..100` at 40 and at 60;
@@ -944,9 +1005,11 @@ import-originated data is.
 - Tier comes from the catalog and the host's classification, never only from the client or the plugin (§8.1, §11).
 - Authorization is transitive (§8.8): every node of every run is checked against the originating context's
   `maxTier` and scopes right before it executes; approvals bind to the call's arguments, to the revision of every
-  action the run can reach and to each planned tier-3 node with its binding hash; restrictions follow `causedBy`
-  chains; and an MCP context can never reach tier 4 through `actions.run`, a nested or queued `RunAction`,
-  `plugins.call`, `batch.execute` or a trigger on an event its run emitted.
+  action the run can reach and to each planned tier-3 node with its binding hash, which follows argument data flow
+  back to stored content and variables and names the fields that only exist at run time as explicit dynamic
+  fields; restrictions follow `causedBy` chains, and every direct call executes as a synthetic run so that its
+  events are attributed too; and an MCP context can never reach tier 4 through `actions.run`, a nested or queued
+  `RunAction`, `plugins.call`, `batch.execute` or a trigger on an event its run or its direct call emitted.
 - Templates are rendered and the result re-validated against the concrete invocation schema before any operation
   runs; direct API callers cannot submit templates at all (§10.1).
 - `x-secret` values never leave the keychain path; `x-den-untrusted` text is wrapped for AI consumers and never
@@ -987,14 +1050,36 @@ import-originated data is.
    A queuing B whose tier-3 node sends a templated message: approval replay with changed `actions.run` args →
    `binding_mismatch` / `args`; root unchanged, B edited after approval → `revision` with `details.action = B`;
    all revisions unchanged, a global the message template reads changed before B executes → `args` with
-   `details.node`; `{now}` in the message → still matches (sentinel); A edited to run the same tier-3 operation
-   twice → `unplanned_call`; a `While` reaching a tier-3 node more often than planned → stops; a message template
-   reading a `save_as` result from an earlier node → matches regardless of that result (sentinel); B queued and
+   `details.node`; `{now}` in the message → still matches (sentinel), and the plan lists `/message` under
+   `dynamicFields`; A edited to run the same tier-3 operation twice → `unplanned_call`; a `While` reaching a tier-3
+   node more often than planned → stops; a message template reading a `save_as` result from an earlier node →
+   matches regardless of that result, and the plan and the approval request list `/message` with the producing
+   node; B sets argument `message` from `{globals.message}` and its `chat.send` sends `{message}`, the global changed
+   after approval → `args` with `details.node` (the data-flow render reaches the global through the writer); the
+   same through two writers (`a = {globals.x}`, then `message = {a}`) → `args`; `message` supplied by
+   `actions.run.args` and overwritten by a writer → both the call value and the writer's source are in the hash,
+   changing either → `args`; B reads the global in a writer, waits in a `Delay`, then sends, and the global is
+   changed after approval and restored before the send → `args` (recorded writer render); A's `RunAction` seeds
+   B's `message` from `{globals.message}` and B sends `{message}`, the global changed → `args`, and changed then
+   restored while B waits in the queue → still `args` (the seed's recorded render travels with the queued run); a
+   `While` whose body sets `message` from a global and sends it, the global changed between iterations → the second
+   send fails `args` (most recent recording); `Set argument ts = {now}` elsewhere in the scope → only fields that read
+   `ts` are dynamic; an action that writes a global and reads it back through a writer before its tier-3 node →
+   always `args` (fail-closed, documented: pass values within a run through args); a tier-1
+   `http.request { url: "{globals.url}" }` saved as `quote` feeding `chat.send({quote.body})` → `/message` is
+   dynamic with the producing node, and changing `globals.url` after approval → `args` (producer params are
+   bound); a second writer of `message` added in another branch → `revision`; an approval whose
+   plan did not list `/message` as dynamic presented to a call whose recomputed plan does → `args`; B queued and
    executed minutes later with nothing changed → runs; a session grant: changed args pass, changed B revision fails,
    B executed after the grant's `expires_at` → `expired`. **Chains** (rule 5): the MCP run executes
    `variables.set`, `variables.global_updated` fires a user trigger whose action has a `Code` node → that node fails
    with `tier_exceeds_context` and `details.chain`, the run stops, and the audit links both runs through
-   `causedBy`; a two-hop chain (A → event → B → event → C) still inherits, `run.chain.hops` = 2; a tier-3 node in a
+   `causedBy`; the same with `variables.set` called **directly** as the native `variables_set` tool, through
+   `invoke_operation("variables.set")`, as a `batch.execute` entry, and over a `maxTier: 3` API token → the chained
+   `Code` node fails identically, `run.chain.originRun` is the synthetic run of that call and `hops` = 1; a direct
+   MCP call whose chained trigger reaches a tier-3 node → `unattended`, and one whose chained trigger reaches a
+   tier-2 configuration write → draft-first; `triggers.test` called over MCP on a trigger whose action has a `Code`
+   node → that node fails with `details.chain` naming the synthetic run, while the same test from the UI runs it; a two-hop chain (A → event → B → event → C) still inherits, `run.chain.hops` = 2; a tier-3 node in a
    chained run with an `Mcp` origin → `APPROVAL_REQUIRED` / `unattended`, while the same chain started by a UI token
    runs it without approval; a tier-2 configuration operation in a chained run with an `Mcp` origin → draft-first;
    the same chain under a user token runs the `Code` node; an upstream event without `causedBy` starts a fresh
@@ -1070,3 +1155,17 @@ protocol design choice made here, not a product decision, and is open to reviewe
   binding inputs), `PlannedCall` identity for plugin-declared host calls, the handle TTL bounding only the start of
   an approved call, `causedBy` stamped by the engine on every path with `chain_context_lost` fail-closed, chains
   excluded from dry-run plans, `dryRun` precedence over draft-first, and the `draftResult` artifact in §9.1.
+- **r4**: resolves the Codex (Astra) re-review of r3. Finding 1 (P1, direct-call attribution): every operation
+  invocation outside a run executes as a **synthetic run** with a `RunId` and the caller's retained `AuthContext`,
+  so events a direct `variables.set` (native tool, `invoke_operation`, `batch.execute` entry, API token) emits are
+  stamped `causedBy` and rule 5 applies to them (§5.1, §8.8 rules 1 and 5, §10.1, §16, §17.9). Finding 2 (P1,
+  sentinel bypass): the binding render follows argument data flow through `Set argument` writers back to stored
+  content and variables instead of sentinelling writable arg names; only run-produced values are sentinels, each
+  tagged with its source, and they are declared as `PlannedCall.dynamic_fields` / `PlanStep.dynamicFields`, part of
+  the plan identity and shown to the approver (§8.1, §8.8 binding hash and rule 4, §16, §17.9). A fresh-context
+  Claude reviewer pass on r4 added: `RunAction.args` and `writes_args` operations as writers, args scopes and tree
+  order, the one-pass render snapshot with recorded writer renders (no time-of-check gap), the producer's params
+  inside `run_value`, syntactic dynamic-ness, `triggers.test` events attributed to their synthetic run, and on a
+  second pass: the recorded seed render travelling with queued children, most-recent recording in loops,
+  `ArgWrites::Named` so *Set argument* does not make every field dynamic, disabled nodes excluded from the writer
+  set, and the full producer chain in approval requests.
