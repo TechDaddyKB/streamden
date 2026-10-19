@@ -195,18 +195,22 @@ def _execute(params):
     state = {"setArgs": {}}
     api = Api(state)
     ns = {"__name__": "__den_script__", "__builtins__": builtins, "args": args, "api": api}
-    exec(co, ns)  # fresh module namespace per execution
-    ret = None
-    fn = ns.get("execute")
-    if callable(fn):
-        ret = fn(args, api)
-    sys.stdout.flush()
+    # Fresh capture per execution, flushed on every exit path (error and cancel included) so
+    # a partial line is sent before this run's reply and never leaks into the next run.
+    cap = sys.stdout = _PrintCapture()
+    try:
+        exec(co, ns)  # fresh module namespace per execution
+        ret = None
+        fn = ns.get("execute")
+        if callable(fn):
+            ret = fn(args, api)
+    finally:
+        cap.flush()
     return {"ok": ret is not False, "setArgs": state["setArgs"]}
 
 
 def main():
     global _current_exec
-    sys.stdout = _PrintCapture()
     threading.Thread(target=_reader, name="den-reader", daemon=True).start()
     threading.Thread(target=_writer, name="den-writer", daemon=True).start()
     _send({"jsonrpc": "2.0", "method": "ready",

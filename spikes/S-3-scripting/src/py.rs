@@ -473,6 +473,26 @@ pub async fn run_checks(globals: Globals, r: &mut Report) {
     let (res, _) = pool.execute("raise ValueError('boom')", &json!({}), five_s).await;
     r.check(A, "exception -> error with message", matches!(&res, Err(ExecError::Script(m)) if m.contains("boom")), describe(&res));
 
+    // --- Reuse after error/cancel: a partial print() line must not leak into the next run -------------
+    // One worker, so the follow-up run is guaranteed to land on the same process.
+    let solo = Pool::new(cfg(), globals.clone(), 1).await.expect("pool");
+    let next = "print('new output')\n";
+    let (err, _) = solo.execute("print('old output', end='')\nraise ValueError('boom')\n", &json!({}), five_s).await;
+    let (after_err, _) = solo.execute(next, &json!({}), five_s).await;
+    let (cancel, _) = solo.execute("print('stale', end='')\nwhile True: pass\n", &json!({}), Duration::from_millis(100)).await;
+    let (after_cancel, _) = solo.execute(next, &json!({}), five_s).await;
+    let clean = |v: &Result<Json, ExecError>| matches!(v, Ok(v) if v["logs"] == json!(["new output"]));
+    r.check(
+        A,
+        "reuse after error/soft cancel: no partial print() leaks",
+        matches!(&err, Err(ExecError::Script(_)))
+            && matches!(&cancel, Err(ExecError::SoftTimeout))
+            && clean(&after_err)
+            && clean(&after_cancel),
+        format!("after error: {} ; after cancel: {}", describe(&after_err), describe(&after_cancel)),
+    );
+    drop(solo); // keep later RSS/latency measurements free of an extra worker
+
     // --- Protocol hygiene: user code writing to fd 1 / reading stdin --------------------------------
     let (res, _) = pool
         .execute(
