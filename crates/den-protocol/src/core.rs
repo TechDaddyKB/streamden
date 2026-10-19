@@ -40,6 +40,7 @@ fn register_shared_types(catalog: &mut Catalog) {
     reg::<crate::ids::RunId>(catalog);
     reg::<crate::ids::TokenId>(catalog);
     reg::<crate::ids::EntityId>(catalog);
+    reg::<crate::ids::GroupId>(catalog);
     reg::<crate::ids::PluginId>(catalog);
     reg::<crate::ids::Slug>(catalog);
     reg::<crate::ids::LocalId>(catalog);
@@ -69,10 +70,27 @@ fn register_shared_types(catalog: &mut Catalog) {
     reg::<crate::domain::Trigger>(catalog);
     reg::<crate::domain::SubAction>(catalog);
     reg::<crate::domain::Node>(catalog);
+    reg::<crate::domain::OnError>(catalog);
+    reg::<crate::domain::UpdatedBy>(catalog);
     reg::<crate::domain::VariableRecord>(catalog);
     reg::<crate::domain::PendingChange>(catalog);
     reg::<crate::domain::StoredDocument>(catalog);
     reg::<crate::template::Template>(catalog);
+    // §6.5 engine records
+    reg::<crate::records::Run>(catalog);
+    reg::<crate::records::RunState>(catalog);
+    reg::<crate::records::CancelReason>(catalog);
+    reg::<crate::records::RunError>(catalog);
+    reg::<crate::records::RunWarning>(catalog);
+    reg::<crate::records::Command>(catalog);
+    reg::<crate::records::CommandMode>(catalog);
+    reg::<crate::records::CommandLocation>(catalog);
+    reg::<crate::records::Cooldown>(catalog);
+    reg::<crate::records::Permissions>(catalog);
+    reg::<crate::records::PermissionMode>(catalog);
+    reg::<crate::records::UserKey>(catalog);
+    reg::<crate::records::CounterPolicy>(catalog);
+    reg::<crate::records::Timer>(catalog);
     // §8 results, catalog shapes, authorization, envelope
     reg::<DryRunResult>(catalog);
     reg::<DraftResult>(catalog);
@@ -157,6 +175,7 @@ fn plugins_call(catalog: &mut Catalog) -> OperationDef {
                         node: None,
                         args_hash: None,
                         dynamic_fields: None,
+                        untrusted_fields: None,
                         target: None,
                         description: "Read the gift catalog of Acme Live.".into(),
                     }],

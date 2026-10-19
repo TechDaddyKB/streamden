@@ -620,6 +620,36 @@
         }
       ]
     },
+    "CancelReason": {
+      "description": "Why a run was cancelled (§6.5).",
+      "oneOf": [
+        {
+          "const": "user",
+          "description": "The user cancelled it.",
+          "type": "string"
+        },
+        {
+          "const": "cleared",
+          "description": "Its queue was cleared.",
+          "type": "string"
+        },
+        {
+          "const": "shutdown",
+          "description": "The engine shut down.",
+          "type": "string"
+        },
+        {
+          "const": "timeout",
+          "description": "It exceeded `Queue.maxRunMs` (spec 03 §9.11).",
+          "type": "string"
+        },
+        {
+          "const": "parent",
+          "description": "A `Parallel` sibling or the parent run stopped it.",
+          "type": "string"
+        }
+      ]
+    },
     "Case": {
       "description": "One case of a [`Node::Switch`] (§6.4).",
       "properties": {
@@ -631,12 +661,17 @@
           },
           "type": "array"
         },
-        "value": {
-          "description": "The literal to compare the switch value with (after `autoType` coercion when enabled)."
+        "values": {
+          "description": "The values to compare the switch value with: at least one; the case matches when any renders\nequal to the switch value (`eq`, with `autoType` coercion when enabled).",
+          "items": {
+            "$ref": "#/types/Template"
+          },
+          "minItems": 1,
+          "type": "array"
         }
       },
       "required": [
-        "value"
+        "values"
       ],
       "type": "object"
     },
@@ -765,10 +800,193 @@
         }
       ]
     },
+    "Command": {
+      "description": "A chat command (spec 03 §7). Persisted document, kind `command`; configuration writes are tier 2.\n`revision` and `origin` are server-assigned like `Action`'s.",
+      "properties": {
+        "aliases": {
+          "description": "The texts that invoke it; at least one.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "caseSensitive": {
+          "default": false,
+          "description": "Match aliases case-sensitively.",
+          "type": "boolean"
+        },
+        "cooldown": {
+          "$ref": "#/types/Cooldown",
+          "default": {
+            "exemptRoles": [
+              "broadcaster"
+            ],
+            "globalMs": 0,
+            "userMs": 0
+          },
+          "description": "Cooldowns."
+        },
+        "counters": {
+          "$ref": "#/types/CounterPolicy",
+          "default": {
+            "persistGlobal": false,
+            "persistUser": false
+          },
+          "description": "Which counters persist."
+        },
+        "enabled": {
+          "description": "Disabled commands never trigger.",
+          "type": "boolean"
+        },
+        "group": {
+          "description": "Folder path; organisation only.",
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/types/CommandId",
+          "description": "The command ID."
+        },
+        "ignoreBotAccount": {
+          "default": false,
+          "description": "Ignore messages the bot account sends.",
+          "type": "boolean"
+        },
+        "ignoreInternal": {
+          "default": false,
+          "description": "Ignore messages the engine itself sent.",
+          "type": "boolean"
+        },
+        "listed": {
+          "default": false,
+          "description": "Shown by `commands.list_public`.",
+          "type": "boolean"
+        },
+        "mode": {
+          "$ref": "#/types/CommandMode",
+          "description": "How an alias matches the message."
+        },
+        "name": {
+          "description": "Display name.",
+          "type": "string"
+        },
+        "origin": {
+          "$ref": "#/types/Origin",
+          "default": {
+            "kind": "user"
+          },
+          "description": "Where the command came from. Server-assigned, read-only; ignored on input.",
+          "readOnly": true
+        },
+        "permissions": {
+          "$ref": "#/types/Permissions",
+          "default": {
+            "groups": [],
+            "mode": "allow",
+            "roles": [],
+            "users": []
+          },
+          "description": "Who may use it."
+        },
+        "platforms": {
+          "default": [],
+          "description": "Platforms it listens on; empty means all.",
+          "items": {
+            "$ref": "#/types/PlatformId"
+          },
+          "type": "array"
+        },
+        "revision": {
+          "default": 0,
+          "description": "Server-assigned, +1 on every write. Read-only.",
+          "format": "uint64",
+          "minimum": 0,
+          "readOnly": true,
+          "type": "integer"
+        },
+        "sources": {
+          "default": [],
+          "description": "Event types it listens to (`chat.message`, `chat.whisper`, `chat.sub_message`…, open); empty means\n`chat.message`.",
+          "items": {
+            "$ref": "#/types/EventType"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "enabled",
+        "aliases",
+        "mode"
+      ],
+      "type": "object"
+    },
     "CommandId": {
       "description": "Identifies a chat command record.",
       "format": "uuid",
       "type": "string"
+    },
+    "CommandLocation": {
+      "description": "Where a basic command alias must appear in the message (§6.5).",
+      "oneOf": [
+        {
+          "const": "start",
+          "description": "The message starts with the alias.",
+          "type": "string"
+        },
+        {
+          "const": "exact",
+          "description": "The message is exactly the alias.",
+          "type": "string"
+        },
+        {
+          "const": "anywhere",
+          "description": "The alias appears anywhere in the message.",
+          "type": "string"
+        }
+      ]
+    },
+    "CommandMode": {
+      "description": "How a command's aliases match a message (§6.5), tagged by `kind`.",
+      "oneOf": [
+        {
+          "description": "An alias matched as plain text at a location.",
+          "properties": {
+            "kind": {
+              "const": "basic",
+              "type": "string"
+            },
+            "location": {
+              "$ref": "#/types/CommandLocation",
+              "description": "Where in the message the alias must appear."
+            }
+          },
+          "required": [
+            "kind",
+            "location"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The message matched against a regular expression; captures land in `commands.triggered.captures`.",
+          "properties": {
+            "kind": {
+              "const": "regex",
+              "type": "string"
+            },
+            "pattern": {
+              "description": "The regular expression.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "pattern"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "CompareOp": {
       "description": "Comparison operators of [`Condition`] (§6.4), the Streamer.bot set.",
@@ -943,7 +1161,7 @@
       "if": {
         "properties": {
           "type": {
-            "pattern": "^(core|system|session|auth|actions|triggers|queues|variables|events|chat|tts|audio|plugins|obs|twitch|youtube|kick|x|bluesky|discord|vts|vmc|mcp|ai|code|ui|overlay|deck|util|batch|global|globals|user|event|run|trigger|action)\\."
+            "pattern": "^(core|system|session|auth|actions|triggers|queues|variables|events|chat|tts|audio|plugins|obs|twitch|youtube|kick|x|bluesky|discord|vts|vmc|mcp|ai|code|ui|overlay|deck|util|batch|global|globals|user|event|run|trigger|action|runs|signals|commands|timers|schedule|settings|catalog|http)\\."
           }
         },
         "required": [
@@ -969,6 +1187,52 @@
           "required": [
             "plugin"
           ]
+        }
+      },
+      "type": "object"
+    },
+    "Cooldown": {
+      "description": "Command cooldowns (§6.5).",
+      "properties": {
+        "exemptRoles": {
+          "default": [
+            "broadcaster"
+          ],
+          "description": "Roles the cooldowns do not apply to; default `[\"broadcaster\"]`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "globalMs": {
+          "default": 0,
+          "description": "Milliseconds before anyone may use the command again.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "userMs": {
+          "default": 0,
+          "description": "Milliseconds before the same user may use it again.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "CounterPolicy": {
+      "description": "Which command counters persist (§6.5).",
+      "properties": {
+        "persistGlobal": {
+          "default": false,
+          "description": "The global use counter survives a restart.",
+          "type": "boolean"
+        },
+        "persistUser": {
+          "default": false,
+          "description": "Per-user use counters survive a restart.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -1590,6 +1854,11 @@
     "FilterableField": {
       "description": "A payload field a trigger can filter on (§6.2).",
       "properties": {
+        "caseInsensitive": {
+          "default": false,
+          "description": "`eq`, `ne`, `in` and `not_in` compare strings case-insensitively for this field (A5; `contains`\nis case-insensitive regardless, spec 03 §6.2).",
+          "type": "boolean"
+        },
         "field": {
           "description": "Dotted path into the payload.",
           "type": "string"
@@ -1602,12 +1871,12 @@
           "type": "array"
         },
         "optionsFrom": {
-          "description": "An operation name whose result feeds the value picker, when the field has known values.",
-          "type": "string"
+          "$ref": "#/types/OperationName",
+          "description": "An operation whose result feeds the value picker, when the field has known values."
         },
         "specificity": {
-          "default": 0,
-          "description": "Rank used by spec 03's \"specific beats any\" precedence; higher is more specific.",
+          "default": 1,
+          "description": "Rank spec 03 §6.3 multiplies by the operator weight for \"specific beats any\" precedence; higher is\nmore specific. Default 1 (A5); `core.custom.name` is 4 (§5.2).",
           "format": "uint32",
           "minimum": 0,
           "type": "integer"
@@ -1763,6 +2032,11 @@
       ],
       "description": "One fragment of a chat message, tagged by `kind` (§5.3). The union is extensible: a `kind` this build\ndoes not know decodes as [`Fragment::Unknown`], which keeps the raw object and exposes its `text`, so\na newer server never breaks an older client's chat rendering (§7.2)."
     },
+    "GroupId": {
+      "description": "Identifies a user group (defined by spec 08; reserved here for `Command.permissions`, §6.5).",
+      "format": "uuid",
+      "type": "string"
+    },
     "Hello": {
       "description": "The `hello` notification the server sends on connect (§8.3).",
       "properties": {
@@ -1909,7 +2183,7 @@
           "if": {
             "properties": {
               "type": {
-                "pattern": "^(core|system|session|auth|actions|triggers|queues|variables|events|chat|tts|audio|plugins|obs|twitch|youtube|kick|x|bluesky|discord|vts|vmc|mcp|ai|code|ui|overlay|deck|util|batch|global|globals|user|event|run|trigger|action)\\."
+                "pattern": "^(core|system|session|auth|actions|triggers|queues|variables|events|chat|tts|audio|plugins|obs|twitch|youtube|kick|x|bluesky|discord|vts|vmc|mcp|ai|code|ui|overlay|deck|util|batch|global|globals|user|event|run|trigger|action|runs|signals|commands|timers|schedule|settings|catalog|http)\\."
               }
             },
             "required": [
@@ -2091,6 +2365,54 @@
           "required": [
             "kind",
             "condition"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Iterate over a collection (A2; semantics spec 03 §9.5, writer contract §8.8). Writes `itemVar` and\n`indexVar` (0-based) as ordinary run args; reserved roots are refused at save time.",
+          "properties": {
+            "children": {
+              "default": [],
+              "description": "The loop body.",
+              "items": {
+                "$ref": "#/types/SubAction"
+              },
+              "type": "array"
+            },
+            "indexVar": {
+              "description": "The run arg that receives the 0-based index, when wanted.",
+              "type": "string"
+            },
+            "itemVar": {
+              "description": "The run arg that receives the current element.",
+              "type": "string"
+            },
+            "items": {
+              "anyOf": [
+                true,
+                {
+                  "pattern": "^\\{(=|[A-Za-z_]).*\\}$",
+                  "type": "string",
+                  "x-den-template": "value"
+                }
+              ],
+              "description": "The collection: a literal, or one `{…}` form rendered once per loop to an array (element\norder) or an object (`{ key, value }` pairs in sorted key order). `null` or a missing value is\nzero iterations; any other scalar fails the node with `INVALID_PARAMS` (`not_iterable`)."
+            },
+            "kind": {
+              "const": "for_each",
+              "type": "string"
+            },
+            "maxIterations": {
+              "description": "Safety bound on iterations; absent means the engine default (spec 03).",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "items",
+            "itemVar"
           ],
           "type": "object"
         },
@@ -2279,6 +2601,21 @@
       "description": "Identifies a sub-action node in the tree (§6.4).",
       "format": "uuid",
       "type": "string"
+    },
+    "OnError": {
+      "description": "What a node failure does to the run (§6.4, A1). Applies to node failures only: an operation error,\nrendered params or a result that do not validate, a timeout, an unavailable `RunAction` target, a\nraising `Code` node.",
+      "oneOf": [
+        {
+          "const": "stop",
+          "description": "End the run `Failed { error }`.",
+          "type": "string"
+        },
+        {
+          "const": "continue",
+          "description": "Record the failure as a `RunWarning`, set `run.lastError` (§6.3) and go on with the next sibling.",
+          "type": "string"
+        }
+      ]
     },
     "OperationContribution": {
       "description": "An operation a plugin contributes (§11). Becomes method `<slug>.<id>`. A declared tier lower than the\nhost's classification of the permissions it uses is raised.",
@@ -2570,15 +2907,25 @@
           "type": "object"
         },
         {
-          "description": "Created from a template a plugin ships.",
+          "description": "Created from a template a plugin ships (spec 12); D-029 treats it like imported content.",
           "properties": {
             "kind": {
               "const": "plugin_template",
               "type": "string"
+            },
+            "plugin": {
+              "$ref": "#/types/PluginId",
+              "description": "The plugin that ships the template."
+            },
+            "template": {
+              "$ref": "#/types/LocalId",
+              "description": "The `localId` of the template contribution."
             }
           },
           "required": [
-            "kind"
+            "kind",
+            "plugin",
+            "template"
           ],
           "type": "object"
         }
@@ -2639,10 +2986,6 @@
           "$ref": "#/types/EntityId",
           "description": "The pending change ID."
         },
-        "kind": {
-          "description": "The kind of entity the change targets: `action`, `queue`, `command`, `overlay`, `settings`.",
-          "type": "string"
-        },
         "operation": {
           "$ref": "#/types/OperationName",
           "description": "The operation *Apply* will execute."
@@ -2652,14 +2995,68 @@
           "default": {},
           "description": "The operation's params as proposed.",
           "type": "object"
+        },
+        "targetKind": {
+          "description": "The kind of entity the change targets: `action`, `queue`, `command`, `timer`, `overlay`,\n`settings` (open). Named `targetKind` because the stored envelope's own `kind` is `pending_change`.",
+          "type": "string"
         }
       },
       "required": [
         "id",
-        "kind",
+        "targetKind",
         "operation",
         "createdBy"
       ],
+      "type": "object"
+    },
+    "PermissionMode": {
+      "description": "Whether a [`Permissions`] list allows or denies (§6.5).",
+      "oneOf": [
+        {
+          "const": "allow",
+          "description": "Only the listed users, roles and groups may use it; empty lists allow everyone.",
+          "type": "string"
+        },
+        {
+          "const": "deny",
+          "description": "Everyone but the listed users, roles and groups may use it.",
+          "type": "string"
+        }
+      ]
+    },
+    "Permissions": {
+      "description": "Who may use a command (§6.5): an allow list or a deny list of users, roles and groups.",
+      "properties": {
+        "groups": {
+          "default": [],
+          "description": "User groups (spec 08).",
+          "items": {
+            "$ref": "#/types/GroupId"
+          },
+          "type": "array"
+        },
+        "mode": {
+          "$ref": "#/types/PermissionMode",
+          "default": "allow",
+          "description": "Whether the lists allow or deny."
+        },
+        "roles": {
+          "default": [],
+          "description": "Platform roles (`broadcaster`, `moderator`, `vip`, `subscriber`…, open).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "users": {
+          "default": [],
+          "description": "Platform users.",
+          "items": {
+            "$ref": "#/types/UserKey"
+          },
+          "type": "array"
+        }
+      },
       "type": "object"
     },
     "PlanStep": {
@@ -2702,6 +3099,13 @@
         "tier": {
           "$ref": "#/types/RiskTier",
           "description": "The operation's tier."
+        },
+        "untrustedFields": {
+          "description": "Params paths whose render references a tainted source (spec 03 §21): shown to the approver inside\nthe untrusted wrapper, not part of the plan identity (A10).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -2742,6 +3146,14 @@
         "plugin": {
           "$ref": "#/types/PluginId",
           "description": "The plugin, for a declared host call."
+        },
+        "untrustedFields": {
+          "default": [],
+          "description": "Params paths whose render references a tainted source (spec 03 §21); shown to the approver inside\nthe untrusted wrapper, not part of the plan identity (A10).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -2874,8 +3286,61 @@
           "description": "Plugin-wide settings: a JSON Schema with `x-ui` hints and `x-secret` (B2.4). Always literal (§10.1)."
         },
         "slug": {
-          "$ref": "#/types/Slug",
-          "description": "Short slug: the prefix of every contribution (§4). Must not be a reserved slug."
+          "allOf": [
+            {
+              "$ref": "#/types/Slug"
+            }
+          ],
+          "description": "Short slug: the prefix of every contribution (§4). A reserved slug fails manifest validation (the\nschema and [`PluginManifest::validate`] alike) and is refused at install.",
+          "not": {
+            "enum": [
+              "core",
+              "system",
+              "session",
+              "auth",
+              "actions",
+              "triggers",
+              "queues",
+              "variables",
+              "events",
+              "chat",
+              "tts",
+              "audio",
+              "plugins",
+              "obs",
+              "twitch",
+              "youtube",
+              "kick",
+              "x",
+              "bluesky",
+              "discord",
+              "vts",
+              "vmc",
+              "mcp",
+              "ai",
+              "code",
+              "ui",
+              "overlay",
+              "deck",
+              "util",
+              "batch",
+              "global",
+              "globals",
+              "user",
+              "event",
+              "run",
+              "trigger",
+              "action",
+              "runs",
+              "signals",
+              "commands",
+              "timers",
+              "schedule",
+              "settings",
+              "catalog",
+              "http"
+            ]
+          }
         },
         "version": {
           "description": "SemVer version.",
@@ -3023,6 +3488,12 @@
         "maxPending": {
           "description": "Maximum pending runs; absent means the engine default (spec 03).",
           "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maxRunMs": {
+          "description": "A run exceeding it is cancelled (`cancelReason: timeout`, spec 03 §9.11); absent means no limit.\nCapped by `engine.queue.maxRunCeilingMs` (A9).",
+          "format": "uint64",
           "minimum": 0,
           "type": "integer"
         },
@@ -3241,6 +3712,170 @@
       ],
       "type": "object"
     },
+    "Run": {
+      "description": "One execution of an action (spec 03 §9, §12). Returned by `runs.get` and `runs.list`; stored in\nAction History. Read-only on the wire. Counters, cooldown state and the two args snapshots are spec 03\nstorage; `runs.get` returns the snapshots as plain objects next to the record.",
+      "properties": {
+        "action": {
+          "$ref": "#/types/ActionId",
+          "description": "The action that ran."
+        },
+        "actionName": {
+          "description": "The action's name at run time.",
+          "type": "string"
+        },
+        "actionRevision": {
+          "description": "The action's revision at run time (§8.8).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cancelReason": {
+          "$ref": "#/types/CancelReason",
+          "description": "Why it was cancelled; only when `state` is `cancelled`."
+        },
+        "chain": {
+          "$ref": "#/types/ChainOrigin",
+          "description": "Set when the context crossed a `causedBy` edge (§8.8 rule 5)."
+        },
+        "completedAt": {
+          "$ref": "#/types/Timestamp",
+          "description": "When it finished, in any final state."
+        },
+        "durationMs": {
+          "description": "Milliseconds from `startedAt` to `completedAt`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "error": {
+          "$ref": "#/types/RunError",
+          "description": "The failure, when `state` is `failed`, `rejected` or `dropped`."
+        },
+        "event": {
+          "$ref": "#/types/EventId",
+          "description": "The event that fired the trigger, or the replayed event."
+        },
+        "eventSnapshot": {
+          "$ref": "#/types/Event",
+          "description": "The firing or replayed event, secrets redacted."
+        },
+        "id": {
+          "$ref": "#/types/RunId",
+          "description": "The run ID (UUIDv7)."
+        },
+        "inline": {
+          "default": false,
+          "description": "An inline `RunAction` child, sharing the parent's task.",
+          "type": "boolean"
+        },
+        "parent": {
+          "$ref": "#/types/RunId",
+          "description": "The run whose `RunAction` node started this one."
+        },
+        "principalKind": {
+          "description": "The `kind` of the context's principal (`token`, `mcp`, `plugin`, `trigger`, `system`; §8.8 rule 7).",
+          "type": "string"
+        },
+        "queue": {
+          "$ref": "#/types/QueueId",
+          "description": "The queue it ran on."
+        },
+        "queuedAt": {
+          "$ref": "#/types/Timestamp",
+          "description": "When it was enqueued."
+        },
+        "replayOf": {
+          "$ref": "#/types/RunId",
+          "description": "The run this one replays (`runs.replay`)."
+        },
+        "startedAt": {
+          "$ref": "#/types/Timestamp",
+          "description": "When it started executing."
+        },
+        "state": {
+          "$ref": "#/types/RunState",
+          "description": "Where the run is in its life cycle."
+        },
+        "stoppedBy": {
+          "$ref": "#/types/NodeId",
+          "description": "The `Stop` node or `Code` node that ended the run early."
+        },
+        "surface": {
+          "$ref": "#/types/Surface",
+          "description": "The surface the context was created at (§8.8)."
+        },
+        "test": {
+          "default": false,
+          "description": "Started by the simulator or \"Test trigger\".",
+          "type": "boolean"
+        },
+        "trigger": {
+          "$ref": "#/types/TriggerId",
+          "description": "The trigger that started it: absent for `actions.run` and `RunAction` children; a replay copies the\nreplayed run's trigger (spec 03 §12.3)."
+        },
+        "untrustedArgsAfter": {
+          "default": [],
+          "description": "Arg names tainted in the snapshot after the run (spec 03 §21).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "untrustedArgsQueued": {
+          "default": [],
+          "description": "Arg names tainted in the queued snapshot (spec 03 §21).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "warnings": {
+          "default": [],
+          "description": "Non-fatal findings, including node failures under `onError: continue`.",
+          "items": {
+            "$ref": "#/types/RunWarning"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "action",
+        "actionName",
+        "actionRevision",
+        "queue",
+        "state",
+        "queuedAt",
+        "principalKind",
+        "surface"
+      ],
+      "type": "object"
+    },
+    "RunError": {
+      "description": "A run's fatal failure (§6.5), also the shape of `run.lastError` (§6.3).",
+      "properties": {
+        "code": {
+          "$ref": "#/types/ErrorCode",
+          "description": "The application error code (§8.5 `data.code`)."
+        },
+        "details": {
+          "description": "Code-specific details, as in `error.data.details` (§8.5)."
+        },
+        "message": {
+          "description": "Human-readable message.",
+          "type": "string"
+        },
+        "node": {
+          "$ref": "#/types/NodeId",
+          "description": "The node that failed, when the failure happened inside the tree."
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "type": "object"
+    },
     "RunId": {
       "description": "Identifies one run of an action, including the synthetic run of a direct operation call (§8.8 rule 1).",
       "format": "uuid",
@@ -3260,6 +3895,68 @@
           "type": "string"
         }
       ]
+    },
+    "RunState": {
+      "description": "Where a run is in its life cycle (§6.5).",
+      "oneOf": [
+        {
+          "const": "queued",
+          "description": "Waiting in its queue.",
+          "type": "string"
+        },
+        {
+          "const": "running",
+          "description": "Executing.",
+          "type": "string"
+        },
+        {
+          "const": "completed",
+          "description": "Finished without a fatal failure.",
+          "type": "string"
+        },
+        {
+          "const": "failed",
+          "description": "A node failed under `onError: stop`, or a check failed before a node ran.",
+          "type": "string"
+        },
+        {
+          "const": "cancelled",
+          "description": "Cancelled; see `cancelReason`.",
+          "type": "string"
+        },
+        {
+          "const": "rejected",
+          "description": "Refused before it was enqueued (a disabled draft, a paused queue).",
+          "type": "string"
+        },
+        {
+          "const": "dropped",
+          "description": "Dropped by the queue's overflow policy.",
+          "type": "string"
+        }
+      ]
+    },
+    "RunWarning": {
+      "description": "A non-fatal finding of a run (§6.5).",
+      "properties": {
+        "code": {
+          "description": "A stable code: `loop_cap`, `missing_value`, `break_outside_loop`, … (open).",
+          "type": "string"
+        },
+        "message": {
+          "description": "Human-readable message.",
+          "type": "string"
+        },
+        "node": {
+          "$ref": "#/types/NodeId",
+          "description": "The node it concerns, when any."
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "type": "object"
     },
     "Runtime": {
       "description": "How a plugin runs (§11), tagged by `kind`. `wasm` is reserved and rejected in v0.",
@@ -3489,7 +4186,7 @@
           "description": "The document itself."
         },
         "kind": {
-          "description": "The document kind: `action`, `queue`, `settings`, `export`, `design`, `plugin_data`, `pending_change`.",
+          "description": "The document kind, one of [`StoredDocument::KINDS`] (§7.3).",
           "type": "string"
         },
         "schemaVersion": {
@@ -3518,7 +4215,7 @@
           "if": {
             "properties": {
               "type": {
-                "pattern": "^(core|system|session|auth|actions|triggers|queues|variables|events|chat|tts|audio|plugins|obs|twitch|youtube|kick|x|bluesky|discord|vts|vmc|mcp|ai|code|ui|overlay|deck|util|batch|global|globals|user|event|run|trigger|action)\\."
+                "pattern": "^(core|system|session|auth|actions|triggers|queues|variables|events|chat|tts|audio|plugins|obs|twitch|youtube|kick|x|bluesky|discord|vts|vmc|mcp|ai|code|ui|overlay|deck|util|batch|global|globals|user|event|run|trigger|action|runs|signals|commands|timers|schedule|settings|catalog|http)\\."
               }
             },
             "required": [
@@ -3700,6 +4397,54 @@
           "required": [
             "kind",
             "condition"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Iterate over a collection (A2; semantics spec 03 §9.5, writer contract §8.8). Writes `itemVar` and\n`indexVar` (0-based) as ordinary run args; reserved roots are refused at save time.",
+          "properties": {
+            "children": {
+              "default": [],
+              "description": "The loop body.",
+              "items": {
+                "$ref": "#/types/SubAction"
+              },
+              "type": "array"
+            },
+            "indexVar": {
+              "description": "The run arg that receives the 0-based index, when wanted.",
+              "type": "string"
+            },
+            "itemVar": {
+              "description": "The run arg that receives the current element.",
+              "type": "string"
+            },
+            "items": {
+              "anyOf": [
+                true,
+                {
+                  "pattern": "^\\{(=|[A-Za-z_]).*\\}$",
+                  "type": "string",
+                  "x-den-template": "value"
+                }
+              ],
+              "description": "The collection: a literal, or one `{…}` form rendered once per loop to an array (element\norder) or an object (`{ key, value }` pairs in sorted key order). `null` or a missing value is\nzero iterations; any other scalar fails the node with `INVALID_PARAMS` (`not_iterable`)."
+            },
+            "kind": {
+              "const": "for_each",
+              "type": "string"
+            },
+            "maxIterations": {
+              "description": "Safety bound on iterations; absent means the engine default (spec 03).",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "items",
+            "itemVar"
           ],
           "type": "object"
         },
@@ -3896,6 +4641,10 @@
           "description": "Author's note.",
           "type": "string"
         },
+        "onError": {
+          "$ref": "#/types/OnError",
+          "description": "What a failure of this node does to the run (A1); default `stop`. Authorization and approval\nfailures always stop the run whatever this says (§8.8 rule 3)."
+        },
         "weight": {
           "description": "Weight used when the parent picks one random child.",
           "format": "float",
@@ -3948,6 +4697,69 @@
       "type": "string",
       "x-den-template": "text"
     },
+    "Timer": {
+      "description": "An interval timer (spec 03 §8). Persisted document, kind `timer`; configuration writes are tier 2.",
+      "properties": {
+        "enabled": {
+          "description": "Disabled timers never fire; a non-repeating timer disables itself after firing.",
+          "type": "boolean"
+        },
+        "id": {
+          "$ref": "#/types/TimerId",
+          "description": "The timer ID."
+        },
+        "intervalMs": {
+          "description": "Milliseconds between fires; at least 1000.",
+          "format": "uint64",
+          "minimum": 1000,
+          "type": "integer"
+        },
+        "minChatLines": {
+          "description": "Fire only if at least this many `chat.message` events arrived since the last fire.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "name": {
+          "description": "Display name.",
+          "type": "string"
+        },
+        "origin": {
+          "$ref": "#/types/Origin",
+          "default": {
+            "kind": "user"
+          },
+          "description": "Where the timer came from. Server-assigned, read-only; ignored on input.",
+          "readOnly": true
+        },
+        "randomUpperMs": {
+          "description": "When set, each delay is uniform in `[intervalMs, randomUpperMs]`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "repeat": {
+          "description": "`false`: fire once, then set `enabled = false`.",
+          "type": "boolean"
+        },
+        "revision": {
+          "default": 0,
+          "description": "Server-assigned, +1 on every write. Read-only.",
+          "format": "uint64",
+          "minimum": 0,
+          "readOnly": true,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "enabled",
+        "intervalMs",
+        "repeat"
+      ],
+      "type": "object"
+    },
     "TimerId": {
       "description": "Identifies a timer record.",
       "format": "uuid",
@@ -3998,7 +4810,7 @@
       "if": {
         "properties": {
           "type": {
-            "pattern": "^(core|system|session|auth|actions|triggers|queues|variables|events|chat|tts|audio|plugins|obs|twitch|youtube|kick|x|bluesky|discord|vts|vmc|mcp|ai|code|ui|overlay|deck|util|batch|global|globals|user|event|run|trigger|action)\\."
+            "pattern": "^(core|system|session|auth|actions|triggers|queues|variables|events|chat|tts|audio|plugins|obs|twitch|youtube|kick|x|bluesky|discord|vts|vmc|mcp|ai|code|ui|overlay|deck|util|batch|global|globals|user|event|run|trigger|action|runs|signals|commands|timers|schedule|settings|catalog|http)\\."
           }
         },
         "required": [
@@ -4130,6 +4942,7 @@
               "if",
               "switch",
               "while",
+              "for_each",
               "break_loop",
               "continue_loop",
               "stop",
@@ -4152,6 +4965,99 @@
       "description": "A string that carries viewer- or third-party-controlled text (chat text, usernames, titles, plugin\noutput). Marked `x-den-untrusted: true` in schemas; MCP and the AI layer wrap such values (§3, §9.6)\nand untrusted text never satisfies an approval (§16).",
       "type": "string",
       "x-den-untrusted": true
+    },
+    "UpdatedBy": {
+      "description": "The server-assigned writer identity on everything that records one (§6.1, A7): `VariableRecord.updatedBy`,\nthe `variables.*_updated` payloads, audit rows. Derived from the writing context's origin principal\n(§8.8 rule 5): `Token` → `user`, `Mcp` → `mcp`, `Plugin` → `plugin`, `System` → `system`, an unchained\n`Trigger` → `user`; with a chain the `chain.originPrincipal` decides; the importer → `imported`. Distinct\nfrom [`Origin`] (where a document came from) and [`Principal`] (who acts).",
+      "oneOf": [
+        {
+          "description": "The user, through the UI, a user token or their own stored automation.",
+          "properties": {
+            "kind": {
+              "const": "user",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The importer.",
+          "properties": {
+            "kind": {
+              "const": "imported",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "An MCP session, directly or through a `causedBy` chain it started.",
+          "properties": {
+            "kind": {
+              "const": "mcp",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A plugin.",
+          "properties": {
+            "kind": {
+              "const": "plugin",
+              "type": "string"
+            },
+            "pluginId": {
+              "$ref": "#/types/PluginId",
+              "description": "The plugin."
+            }
+          },
+          "required": [
+            "kind",
+            "pluginId"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The engine itself (startup, timers, migrations, `queues.pause` write-back).",
+          "properties": {
+            "kind": {
+              "const": "system",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "UserKey": {
+      "description": "A platform user without the volatile [`crate::UserRef`] fields (§6.5).",
+      "properties": {
+        "platform": {
+          "$ref": "#/types/PlatformId",
+          "description": "The platform."
+        },
+        "userId": {
+          "description": "The platform's stable user ID.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "platform",
+        "userId"
+      ],
+      "type": "object"
     },
     "UserRef": {
       "description": "A normalised reference to the actor of an event (§5.3). `login` and `displayName` are untrusted text.",
@@ -4216,21 +5122,33 @@
     "VariableRecord": {
       "description": "A stored variable value (§6.3).",
       "properties": {
+        "persisted": {
+          "description": "Survives a restart; an attribute of the entry, not part of its key (A11).",
+          "type": "boolean"
+        },
+        "untrusted": {
+          "description": "The provenance flag spec 03 §21 writes (chat-derived, plugin-, MCP- or import-written values).\nNever a client input: a write replaces value and flag together. Server-assigned, read-only.",
+          "readOnly": true,
+          "type": "boolean"
+        },
         "updatedAt": {
           "$ref": "#/types/Timestamp",
           "description": "When it was last written."
         },
         "updatedBy": {
-          "$ref": "#/types/Origin",
-          "description": "Who last wrote it. Server-assigned, read-only.",
+          "$ref": "#/types/UpdatedBy",
+          "description": "Who last wrote it (A7). Server-assigned, read-only.",
           "readOnly": true
         },
         "value": {
-          "description": "The value (any JSON value)."
+          "description": "The value (any JSON value). Its provenance is decided per value: MCP wraps it, and the engine seeds\ntaint from it, exactly when the sibling `untrusted` is `true` (§3, A10).",
+          "x-den-untrusted": "conditional"
         }
       },
       "required": [
         "value",
+        "persisted",
+        "untrusted",
         "updatedAt",
         "updatedBy"
       ],
@@ -4253,6 +5171,10 @@
     "CONNECTION_UNAVAILABLE": {
       "jsonrpcCode": -32000,
       "description": "Connector not connected."
+    },
+    "INTERNAL": {
+      "jsonrpcCode": -32000,
+      "description": "Engine fault that is not the caller's doing (storage error, lost worker, bug; details.reason); the call or run fails, nothing is retried, the audit log records it. Sent with -32000; -32603 stays reserved for envelope-level faults."
     },
     "INVALID_PARAMS": {
       "jsonrpcCode": -32602,
@@ -4373,6 +5295,8 @@
     "tts:speak",
     "plugins:call[:<pluginId>]",
     "plugins:manage",
+    "events:simulate",
+    "events:emit",
     "admin"
   ],
   "reservedSlugs": [
@@ -4412,7 +5336,15 @@
     "event",
     "run",
     "trigger",
-    "action"
+    "action",
+    "runs",
+    "signals",
+    "commands",
+    "timers",
+    "schedule",
+    "settings",
+    "catalog",
+    "http"
   ],
   "reservedRunContextRoots": [
     "event",
@@ -4425,6 +5357,11 @@
     "match",
     "args",
     "now"
+  ],
+  "dynamicTierOperations": [
+    "actions.run",
+    "plugins.call",
+    "runs.replay"
   ],
   "deprecations": {}
 }

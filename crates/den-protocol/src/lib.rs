@@ -17,6 +17,7 @@ pub mod domain;
 pub mod events;
 pub mod ids;
 pub mod manifest;
+pub mod records;
 pub mod results;
 pub mod rpc;
 pub mod schema;
@@ -36,16 +37,20 @@ pub use catalog::{
 };
 pub use domain::{
     Action, ActionRef, Case, CodeLang, CodeSource, CompareOp, Condition, Filter, FilterOp,
-    HistoryPolicy, Node, Origin, Overflow, PendingChange, Queue, RunMode, StoredDocument,
-    SubAction, Trigger, VariableRecord,
+    HistoryPolicy, Node, OnError, Origin, Overflow, PendingChange, Queue, RunMode, StoredDocument,
+    SubAction, Trigger, UpdatedBy, VariableRecord,
 };
 pub use events::{Event, EventMeta, SourceRef};
 pub use ids::{
-    ActionId, ApprovalId, CommandId, ConnectionId, EntityId, EventId, EventType, LocalId, NodeId,
-    OperationName, OverlayId, PlatformId, PluginId, QueueId, RunId, Scope, SessionId, Sha256, Slug,
-    TimerId, TokenId, TopicGlob, TriggerId, VariableName,
+    ActionId, ApprovalId, CommandId, ConnectionId, EntityId, EventId, EventType, GroupId, LocalId,
+    NodeId, OperationName, OverlayId, PlatformId, PluginId, QueueId, RunId, Scope, SessionId,
+    Sha256, Slug, TimerId, TokenId, TopicGlob, TriggerId, VariableName,
 };
 pub use manifest::PluginManifest;
+pub use records::{
+    CancelReason, Command, CommandLocation, CommandMode, Cooldown, CounterPolicy, PermissionMode,
+    Permissions, Run, RunError, RunState, RunWarning, Timer, UserKey,
+};
 pub use results::{
     ActionRevisionRef, DraftKind, DraftRef, DraftResult, DryRunResult, PlanStep, PluginCallParams,
     PluginCallResult,

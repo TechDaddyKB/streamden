@@ -8,7 +8,7 @@ import type { JsonValue } from "./serde_json/JsonValue";
  */
 export type StoredDocument = { 
 /**
- * The document kind: `action`, `queue`, `settings`, `export`, `design`, `plugin_data`, `pending_change`.
+ * The document kind, one of [`StoredDocument::KINDS`] (§7.3).
  */
 kind: string, 
 /**

@@ -1,9 +1,9 @@
-import type { Fragment, Node, SubAction, UnknownFragment, UnknownNode } from "./gen";
+import type { Fragment, Node, SubAction } from "./gen";
 
 // Derived from schema/protocol.json: types.Unknown{Node,Fragment}.properties.kind.not.enum.
 // The conformance test checks these lists against the canonical artifact on every run.
 const nodeKinds: ReadonlySet<string> = new Set<KnownNode["kind"]>([
-  "op", "group", "if", "switch", "while", "break_loop", "continue_loop", "stop",
+  "op", "group", "if", "switch", "while", "for_each", "break_loop", "continue_loop", "stop",
   "parallel", "delay", "run_action", "code", "placeholder",
 ]);
 const fragmentKinds: ReadonlySet<string> = new Set<KnownFragment["kind"]>(["text", "emote", "mention", "link", "cheermote"]);
@@ -24,8 +24,12 @@ export function isKnownNode(node: Node): boolean {
   return nodeKinds.has(node.kind);
 }
 
-/** Unknown nodes must remain read-only and retain their original members when saved. */
-export function isUnknownNode<T extends Node>(node: T): node is T & UnknownNode {
+/**
+ * Runtime kind test only: known variants are also assignable to UnknownNode, so an
+ * unknown type predicate would erase the known else branch. Narrow with !isKnownNode.
+ * Unknown nodes must remain read-only and retain their original members when saved.
+ */
+export function isUnknownNode(node: Node): boolean {
   return !nodeKinds.has(node.kind);
 }
 
@@ -34,7 +38,7 @@ export function isKnownFragment(fragment: Fragment): fragment is KnownFragment {
   return fragmentKinds.has(fragment.kind);
 }
 
-/** Render unknown fragments using their untrusted plain text. */
-export function isUnknownFragment(fragment: Fragment): fragment is UnknownFragment {
+/** Runtime kind test only. Narrow with !isKnownFragment; render unknown text as untrusted. */
+export function isUnknownFragment(fragment: Fragment): boolean {
   return !fragmentKinds.has(fragment.kind);
 }

@@ -1,0 +1,41 @@
+{
+  "id": "018f7a8c-9999-7000-8000-000000000002",
+  "revision": 1,
+  "name": "Dice",
+  "enabled": true,
+  "listed": false,
+  "aliases": [
+    "!roll"
+  ],
+  "mode": {
+    "kind": "regex",
+    "pattern": "^!roll(?:\\s+(?<sides>\\d+))?$"
+  },
+  "caseSensitive": true,
+  "sources": [],
+  "platforms": [],
+  "ignoreBotAccount": false,
+  "ignoreInternal": false,
+  "cooldown": {
+    "globalMs": 0,
+    "userMs": 0,
+    "exemptRoles": [
+      "broadcaster"
+    ]
+  },
+  "permissions": {
+    "mode": "deny",
+    "users": [],
+    "roles": [],
+    "groups": []
+  },
+  "counters": {
+    "persistGlobal": false,
+    "persistUser": false
+  },
+  "origin": {
+    "kind": "imported",
+    "from": "streamerbot",
+    "trusted": false
+  }
+}

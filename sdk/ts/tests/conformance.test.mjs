@@ -20,10 +20,10 @@ const modulePath = (path) => './' + relative(temporary, path).split('\\').join('
 
 const directoryTypes = {
   action: 'Action', action_ref: 'ActionRef', arg_writes: 'ArgWrites', auth: 'AuthContext',
-  code_source: 'CodeSource', event: 'Event', filter: 'Filter', fragment: 'Fragment',
+  code_source: 'CodeSource', command: 'Command', command_mode: 'CommandMode', event: 'Event', filter: 'Filter', fragment: 'Fragment',
   origin: 'Origin', pending_change: 'PendingChange', principal: 'Principal', queue: 'Queue',
   stored_document: 'StoredDocument', sub_action: 'SubAction', trigger: 'Trigger',
-  variable: 'VariableRecord',
+  run: 'Run', timer: 'Timer', updated_by: 'UpdatedBy', variable: 'VariableRecord',
 };
 const fileTypes = {
   'manifest/valid_acme.json': 'PluginManifest',
@@ -61,12 +61,30 @@ const rejected = {
 };
 // Constraints TS cannot express; serde/JSON Schema tests own these rejections.
 const schemaOnly = {
+  'invalid/command_without_aliases.json': 'nonempty array constraint',
+  'invalid/switch_case_without_values.json': 'nonempty array constraint',
+  'invalid/timer_interval_too_short.json': 'minimum numeric value constraint',
   'invalid/rpc_response_both.json': 'union members allow extra properties structurally',
   'invalid/sub_action_op_core_with_plugin.json': 'core/plugin namespace constraint',
   'invalid/trigger_core_with_plugin.json': 'core/plugin namespace constraint',
   'invalid/trigger_plugin_without_plugin.json': 'core/plugin namespace constraint',
   'manifest/invalid_reserved_slug.json': 'reserved string values',
 };
+
+// Each test owns its compiler configuration and output, including filtered runs.
+function compile(name, files) {
+  const build = mkdtempSync(join(temporary, `${name}-`));
+  const output = join(build, 'out');
+  writeFileSync(join(build, 'tsconfig.json'), JSON.stringify({
+    extends: join(root, 'tsconfig.json'),
+    compilerOptions: { rootDir: root, outDir: output, noEmit: false },
+    files,
+    include: [],
+  }));
+  const result = spawnSync(process.execPath, [compiler, '-p', join(build, 'tsconfig.json')], { encoding: 'utf8' });
+  assert.equal(result.status, 0, `${result.error ?? ''}\n${result.stdout}\n${result.stderr}`);
+  return output;
+}
 
 test('all protocol fixtures satisfy their generated TS types', () => {
   const statements = [`import type * as SDK from ${JSON.stringify(modulePath(join(root, 'src/index.js')))};`];
@@ -108,20 +126,14 @@ test('all protocol fixtures satisfy their generated TS types', () => {
   }
   assert.ok(accepted > 0);
   writeFileSync(join(temporary, 'fixtures.ts'), statements.join('\n'));
-  writeFileSync(join(temporary, 'tsconfig.json'), JSON.stringify({
-    extends: modulePath(join(root, 'tsconfig.json')),
-    compilerOptions: { rootDir: root, outDir: join(temporary, 'out'), noEmit: false },
-    files: [join(temporary, 'fixtures.ts'), join(root, 'tests/types.ts'), join(root, 'src/index.ts')],
-    include: [],
-  }));
-  const result = spawnSync(process.execPath, [compiler, '-p', join(temporary, 'tsconfig.json')], { encoding: 'utf8' });
-  assert.equal(result.status, 0, `${result.error ?? ''}\n${result.stdout}\n${result.stderr}`);
+  compile('fixtures', [join(temporary, 'fixtures.ts'), join(root, 'tests/types.ts'), join(root, 'src/index.ts')]);
   console.log(`Fixtures: ${accepted} valid, ${negative} negative, ${Object.keys(schemaOnly).length} schema-only constraints`);
 });
 
 test('guards classify every known schema kind and preserve future payloads', async () => {
   // Use compiler output so tests work on the minimum supported Node (22.12), without TS loaders.
-  const guards = await import(pathToFileURL(join(temporary, 'out/src/guards.js')).href);
+  const output = compile('guards', [join(root, 'src/guards.ts')]);
+  const guards = await import(pathToFileURL(join(output, 'src/guards.js')).href);
   for (const [type, known, unknown] of [
     ['UnknownNode', guards.isKnownNode, guards.isUnknownNode],
     ['UnknownFragment', guards.isKnownFragment, guards.isUnknownFragment],

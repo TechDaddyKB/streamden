@@ -4,5 +4,6 @@
   "blocking": true,
   "paused": true,
   "maxPending": 20,
-  "overflow": "drop_oldest"
+  "overflow": "drop_oldest",
+  "maxRunMs": 60000
 }

@@ -17,9 +17,26 @@ export function narrowNode(node: Node, subAction: SubAction): void {
     const ms: number | string = subAction.ms;
     void [id, ms];
   }
-  if (isUnknownNode(node)) {
+  if (!isKnownNode(node)) {
     const unknown: UnknownNode = node;
     void unknown;
+  }
+  if (!isKnownNode(subAction)) {
+    const unknown: UnknownNode = subAction;
+    const id: string = subAction.id;
+    void [unknown, id];
+  }
+  if (isUnknownNode(node)) {
+    const kind: string = node.kind;
+    void kind;
+  } else if (isKnownNode(node) && node.kind === "delay") {
+    const ms: number | string = node.ms;
+    void ms;
+  }
+  if (!isUnknownNode(subAction) && isKnownNode(subAction) && subAction.kind === "delay") {
+    const id: string = subAction.id;
+    const ms: number | string = subAction.ms;
+    void [id, ms];
   }
 }
 
@@ -30,9 +47,16 @@ export function narrowFragment(fragment: Fragment): void {
     fragment.url;
     void bits;
   }
-  if (isUnknownFragment(fragment)) {
+  if (!isKnownFragment(fragment)) {
     const unknown: UnknownFragment = fragment;
     void unknown;
+  }
+  if (isUnknownFragment(fragment)) {
+    const text: string = fragment.text;
+    void text;
+  } else if (isKnownFragment(fragment) && fragment.kind === "cheermote") {
+    const bits: number = fragment.bits;
+    void bits;
   }
 }
 

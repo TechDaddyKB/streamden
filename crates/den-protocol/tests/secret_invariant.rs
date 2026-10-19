@@ -1022,8 +1022,8 @@ fn stress_catalog() -> Catalog {
     dry_run_params["dryRun"] = json!(true);
     let step_ref = json!({ "$ref": "#/types/PlanStep" });
     for (name, tier) in [
-        ("stress.write", RiskTier::REVERSIBLE_WRITE),
-        ("stress.config", RiskTier::CONFIG),
+        ("batch.write", RiskTier::REVERSIBLE_WRITE),
+        ("batch.config", RiskTier::CONFIG),
     ] {
         // A plan step naming this operation, with its params planted (the lint only accepts
         // non-empty step params for operations of this catalog).
@@ -1130,13 +1130,13 @@ fn stress_catalog() -> Catalog {
     let types: BTreeMap<String, Value> = catalog.peek_definitions().into_iter().collect();
     let mut planter = Planter::new(&types);
     let example = planter
-        .instances(&[&authored], "stress.authored/params")
+        .instances(&[&authored], "batch.authored/params")
         .into_iter()
         .next()
         .expect("authored instance");
     catalog
         .register_operation(OperationDef {
-            name: OperationName::new("stress.authored").unwrap(),
+            name: OperationName::new("batch.authored").unwrap(),
             title: "Stress".into(),
             description: "Stress. JSON-authored shapes.".into(),
             category: vec!["Stress".into()],
@@ -1168,7 +1168,7 @@ fn stress_catalog() -> Catalog {
         .unwrap();
     catalog
         .register_event(EventDef {
-            r#type: EventType::new("stress.happened").unwrap(),
+            r#type: EventType::new("batch.happened").unwrap(),
             title: "Stress".into(),
             description: "Stress. A secret-bearing payload.".into(),
             category: vec!["Stress".into()],
@@ -1188,13 +1188,14 @@ fn stress_catalog() -> Catalog {
     let typed_result_schema = catalog.schema_for::<TypedResult>();
     let params = typed_params();
     let plan = vec![PlanStep {
-        operation: OperationName::new("stress.typed").unwrap(),
+        operation: OperationName::new("batch.typed").unwrap(),
         params: withhold_secrets(|| serde_json::to_value(&params).unwrap()),
         tier: RiskTier::CONFIG,
         action: None,
         node: None,
         args_hash: None,
         dynamic_fields: None,
+        untrusted_fields: None,
         target: None,
         description: "Typed.".into(),
     }];
@@ -1218,14 +1219,14 @@ fn stress_catalog() -> Catalog {
             id: EntityId::NIL,
             kind: DraftKind::PendingChange,
             draft_of: None,
-            operation: OperationName::new("stress.typed").unwrap(),
+            operation: OperationName::new("batch.typed").unwrap(),
         },
         plan,
         warnings: vec![],
     };
     catalog
         .register_operation(stress_op(
-            "stress.typed",
+            "batch.typed",
             typed_params_schema,
             typed_result_schema,
             RiskTier::CONFIG,
@@ -1249,7 +1250,7 @@ fn stress_catalog() -> Catalog {
     };
     let payload = catalog.schema_for::<TypedPayload>();
     let mut event = EventDef {
-        r#type: EventType::new("stress.typed_happened").unwrap(),
+        r#type: EventType::new("batch.typed_happened").unwrap(),
         title: "Stress".into(),
         description: "Stress. A typed secret-bearing payload.".into(),
         category: vec!["Stress".into()],
@@ -1577,9 +1578,11 @@ fn run(catalog: Catalog, label: &str) -> Report {
     }
 }
 
-/// A validation failure without the instance (the authored values carry exposed sentinels).
+/// A validation failure without the instance (the authored values carry exposed sentinels): the shared
+/// describer of DEN-53, which never formats the validator's error kind (its `anyOf`/`oneOf` contexts
+/// carry the instance).
 fn describe(e: &jsonschema::ValidationError<'_>) -> String {
-    format!("{:?} at {:?}", e.kind(), e.instance_path().as_str())
+    codegen::describe_validation_error(e)
 }
 
 /// Validates every example the way `xtask` does (params against the invocation schema, the result
@@ -1724,10 +1727,11 @@ fn fixtures_with_planted_secrets_redact() {
     use den_protocol::auth::{AuthContext, Principal};
     use den_protocol::domain::{
         Action, ActionRef, CodeSource, Filter, Origin, PendingChange, Queue, StoredDocument,
-        SubAction, Trigger, VariableRecord,
+        SubAction, Trigger, UpdatedBy, VariableRecord,
     };
     use den_protocol::events::Event;
     use den_protocol::manifest::PluginManifest;
+    use den_protocol::records::{Command, CommandMode, Run, Timer};
     use den_protocol::results::{DraftResult, DryRunResult, PluginCallParams, PluginCallResult};
     use den_protocol::rpc::{
         BatchExecuteParams, BatchExecuteResult, EventsDroppedNotification, EventsSubscribeParams,
@@ -1749,6 +1753,11 @@ fn fixtures_with_planted_secrets_redact() {
     dir::<VariableRecord>(&mut catalog, &mut subjects, "variable");
     dir::<PendingChange>(&mut catalog, &mut subjects, "pending_change");
     dir::<StoredDocument>(&mut catalog, &mut subjects, "stored_document");
+    dir::<UpdatedBy>(&mut catalog, &mut subjects, "updated_by");
+    dir::<CommandMode>(&mut catalog, &mut subjects, "command_mode");
+    dir::<Command>(&mut catalog, &mut subjects, "command");
+    dir::<Timer>(&mut catalog, &mut subjects, "timer");
+    dir::<Run>(&mut catalog, &mut subjects, "run");
     dir::<Event>(&mut catalog, &mut subjects, "event");
     dir::<AuthContext>(&mut catalog, &mut subjects, "auth");
     dir::<PluginManifest>(&mut catalog, &mut subjects, "manifest");

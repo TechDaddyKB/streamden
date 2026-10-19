@@ -2,6 +2,8 @@
 
 > Audience: the **owner** (dispatcher), plus any agent that needs to know the process.
 > Evidence and sources: [docs/research/ai-agent-fleet.md](../research/ai-agent-fleet.md) (benchmarks read 2026-10-18).
+> **Owner routing (D-044, 2026-10-19) overrides the tables below:** Codex GPT-6.1 Sol at medium effort implements
+> backend, engine, connectors, server, tooling and CI; Claude implements UI/UX; Grok QAs all implementation. See §2a.
 > **Routing below is provisional.** Lock it in after the S-5 bake-off (§6) and re-run the bake-off whenever a
 > vendor ships a new flagship.
 
@@ -27,6 +29,26 @@
 | Docs and user guides | Claude Sonnet 5.5 | GPT-6.1 Sol | Low–medium |
 | Live API/platform research, X data | Grok 4.7 | Claude or Codex verifies against official docs | Medium–high |
 | Code review | **Always a different vendor from the author** | — | Medium |
+
+### 2a. Owner routing override (D-044, 2026-10-19)
+
+Owner direction (chat): shift coding agents to GPT Sol 6.1 medium, except UI/UX ("I prefer the Anthropic look"),
+with Grok QAing and suggesting code fixes across the board, which also uses the subscription quotas better. The
+bake-off ([bakeoff-2026-10.md](bakeoff-2026-10.md)) showed Codex competitive on protocol and ops code at about
+1/8 the cost per solved task, and Grok's reviews found real concurrency bugs. This table wins over §2 and §3
+wherever they disagree.
+
+| Task type | Primary | QA / review |
+|---|---|---|
+| Backend: engine, connectors, server/API/MCP, tooling, CI, packaging, tests, import | Codex GPT-6.1 Sol, **medium** effort (Astra only if Sol fails at medium) | Grok 4.7: findings plus suggested patch diffs |
+| UI/UX: `web/ui`, `web/kit`, designer, overlay visuals, UX copy, UI docs | Claude (Sonnet 5.5; Opus for visual bugs) | Grok 4.7 (with before/after screenshots) |
+| Contracts and security-critical (`crates/den-protocol`, auth/approvals, secrets) | Codex Sol, medium (Claude Opus for contract design) | Grok **plus** a Claude review |
+| Specs, ADRs, contract design | Claude Opus/Fable (unchanged) | Codex Astra (unchanged) |
+| Live research | Grok 4.7 (unchanged) | Claude or Codex verifies |
+
+Grok QA never pushes to the author's branch: it files findings (file:line, failure scenario, suggested patch
+as a diff) on the card. The author applies or rejects them. "A different vendor reviews" still holds, so a
+Grok-authored PR goes to Claude or Codex.
 
 Evidence for the rows marked *from bake-off 2026-10*: [bakeoff-2026-10.md](bakeoff-2026-10.md) (one run per vendor per task, so the evidence is directional).
 
@@ -90,7 +112,8 @@ You can do all of this in the orchestrator console, or ask the planning agent to
    ```
 4. **Launch through the orchestrator** so auth, config, skills and fleet instructions are identical:
    - **Claude Code:** `clx` (the managed `claude` shim)
-   - **Codex:** `cdx` (for module work: `cdx --cd crates/<mod>` so the module `AGENTS.md` loads; 32 KiB cap)
+   - **Codex:** `cdx`; `dispatch.sh` passes `-m gpt-6.1-sol -c model_reasoning_effort="medium"` (override with
+     `DEN_MODEL` / `DEN_EFFORT`; `DEN_DRY_RUN=1` prints the launch without starting it). For module work: `cdx --cd crates/<mod>` so the module `AGENTS.md` loads; 32 KiB cap)
    - **Grok Build:** `cgx`. Grok also reads `CLAUDE.md` and `.claude` hooks, so keep both vendor-neutral.
 5. **Prompt:** "Work on DEN-<n>." plus the universal template in [PROMPTING.md](PROMPTING.md) §2. The agent
    claims the card, moves it into its lane, and releases it with a handoff note at the end.

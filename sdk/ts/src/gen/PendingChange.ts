@@ -15,9 +15,10 @@ export type PendingChange = {
  */
 id: EntityId, 
 /**
- * The kind of entity the change targets: `action`, `queue`, `command`, `overlay`, `settings`.
+ * The kind of entity the change targets: `action`, `queue`, `command`, `timer`, `overlay`,
+ * `settings` (open). Named `targetKind` because the stored envelope's own `kind` is `pending_change`.
  */
-kind: string, 
+targetKind: string, 
 /**
  * The live entity the change targets, when it targets an existing one.
  */

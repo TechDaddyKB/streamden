@@ -1,0 +1,81 @@
+{
+  "id": "018f7a8c-4444-7000-8000-000000000002",
+  "action": "018f7a8c-3e6b-7c1d-9a2b-5f4e3d2c1b0a",
+  "actionName": "Cheer alert",
+  "actionRevision": 3,
+  "trigger": "018f7a8c-1111-7000-8000-000000000001",
+  "event": "018f7a8c-3333-7000-8000-000000000001",
+  "queue": "00000000-0000-0000-0000-000000000000",
+  "state": "completed",
+  "queuedAt": "2026-10-18T20:15:03.120Z",
+  "startedAt": "2026-10-18T20:15:03.125Z",
+  "completedAt": "2026-10-18T20:15:03.410Z",
+  "durationMs": 285,
+  "principalKind": "trigger",
+  "surface": "event",
+  "inline": false,
+  "test": false,
+  "eventSnapshot": {
+    "id": "018f7a8c-3333-7000-8000-000000000001",
+    "type": "twitch.subscription",
+    "ts": "2026-10-18T20:15:03.120Z",
+    "source": {
+      "plugin": "core.twitch",
+      "connection": "018f7a8c-7777-7000-8000-000000000001",
+      "account": "dallas"
+    },
+    "platform": "twitch",
+    "user": {
+      "platform": "twitch",
+      "id": "44322889",
+      "login": "dallas",
+      "displayName": "Dallas",
+      "avatarUrl": "https://example.com/a.png",
+      "color": "#1E90FF",
+      "roles": [
+        "subscriber"
+      ],
+      "badges": [
+        {
+          "id": "subscriber",
+          "version": "12",
+          "title": "1-Year Subscriber"
+        }
+      ],
+      "pronouns": "he/him"
+    },
+    "payload": {
+      "tier": "1000",
+      "cumulativeMonths": 12,
+      "message": {
+        "text": "gg",
+        "fragments": [
+          {
+            "kind": "text",
+            "text": "gg"
+          }
+        ]
+      }
+    },
+    "meta": {
+      "payloadVersion": 1,
+      "test": false,
+      "replay": false,
+      "correlationId": "abc"
+    }
+  },
+  "untrustedArgsQueued": [
+    "message"
+  ],
+  "untrustedArgsAfter": [
+    "message",
+    "quote"
+  ],
+  "warnings": [
+    {
+      "node": "018f7a8c-0000-7000-8000-000000000018",
+      "code": "node_failed",
+      "message": "obs.set_scene: CONNECTION_UNAVAILABLE (onError: continue)"
+    }
+  ]
+}

@@ -12,9 +12,19 @@ crate rules.
 - Generated artifacts (`schema/*`, `sdk/*/gen`) come from `cargo xtask codegen`. Never hand-edit them.
 - License is provisional (`GPL-3.0-or-later` via the workspace) until Q-B6 is answered.
 
-- Layout (DEN-34): `ids`, `timestamp`, `shared`, `events`, `domain`, `template`, `results`, `auth`, `rpc`, `catalog`,
-  `manifest` hold the types; `schema` holds the generator settings and transforms; `core::register` registers what
-  Spec 02 itself defines; `codegen` builds `protocol.json`, the catalog lint and the TS export that `xtask` writes.
+- Layout (DEN-34, DEN-48): `ids`, `timestamp`, `shared`, `events`, `domain`, `records` (§6.5 engine records),
+  `template`, `results`, `auth`, `rpc`, `catalog`, `manifest` hold the types; `schema` holds the generator settings and
+  transforms; `core::register` registers what Spec 02 itself defines; `codegen` builds `protocol.json`, the catalog
+  lint, the example validator and the TS export that `xtask` writes.
+- A `Catalog` holds **core** registrations only (plugins contribute through manifests, §11), so every operation and
+  event registered must live under a slug in `RESERVED_SLUGS` (§4); synthetic test catalogs use `core.*`, `util.*`,
+  `batch.*`. A core event's payload-version steps need both functions registered
+  (`Catalog::register_payload_upgrade` / `register_payload_downgrade`, §5.2 A13).
+- Examples are validated by the shared `codegen::validate_examples` (what `xtask` runs) against the **producer** view
+  (`ProtocolDocument::producer_schema_at`: the receiving-only `unknown` branches of `Node` and `Fragment` stripped,
+  §7.2). Diagnostics go through `codegen::describe_validation_error`, which never formats the validator's error kind
+  or the instance (the authored values carry exposed secrets; DEN-53): keyword, schema location and an instance path
+  with authored map keys masked.
 - **Secrets (Spec 02 §3) are typed values first, schema marks second.** A position that holds a secret is
   `Secret<T>` (`src/secret.rs`) in the Rust type: it serializes as `"***"` unless the caller is inside
   `expose_secrets` (the wire path, synchronous and thread-local), `Debug` never shows it, its schema is

@@ -27,7 +27,12 @@ function renderNode(node: SubAction): string {
 }
 ```
 
-`isUnknownNode`, `isKnownFragment` and `isUnknownFragment` provide the complementary classifications.
+`isKnownFragment` narrows fragments in the same way as `isKnownNode`. Use `!isKnownNode` or
+`!isKnownFragment` to narrow the unknown arm; sub-actions retain their `id`.
+`isUnknownNode` and `isUnknownFragment` return booleans for runtime classification. They cannot be
+sound unknown type predicates: known variants are structurally assignable to the fallback, which
+would make the known `else` branch `never`. After a runtime unknown check, use the corresponding
+known guard before reading variant-specific fields.
 Unknown fragments render their plain `text` as untrusted text. These guards classify kinds of already
 decoded protocol values; they do not validate arbitrary JSON. Their kind lists are derived from
 `schema/protocol.json` (`types.UnknownNode` / `types.UnknownFragment`, `properties.kind.not.enum`), and
@@ -42,6 +47,8 @@ For `RpcResponse`, use `if ("error" in response)` to select the error branch; ot
 pnpm -C sdk/ts typecheck
 pnpm -C sdk/ts test
 cargo xtask codegen --check
+# Run the runtime guard test independently:
+node --test --test-name-pattern guards sdk/ts/tests/conformance.test.mjs
 ```
 
 The Node test runner discovers every JSON fixture under `crates/den-protocol/tests/fixtures/`, embeds
@@ -49,13 +56,14 @@ literal values in temporary TypeScript with `satisfies`, and compiles against th
 Known node/fragment fixtures use the narrowed union so the unknown fallback cannot conceal missing
 required fields. New directories and individually mapped fixtures fail until assigned a type.
 Manifest literals allow the protocol's `x-*` extension keys; the v0 generated manifest intentionally
-omits them. Seven invalid fixtures must fail compilation. Five schema-only constraints (namespace
-rules, reserved slugs and the response union's exactly-one-member rule) remain the Rust/schema
-suite's responsibility. TypeScript structural types cannot replace runtime validation.
+omits them. Seven invalid fixtures must fail compilation. Eight schema-only constraints (namespace
+rules, reserved slugs, nonempty arrays, numeric bounds and the response union's exactly-one-member
+rule) remain the Rust/schema suite's responsibility. TypeScript structural types cannot replace runtime validation.
 
 Temporary compiler inputs and output live under this package's ignored `node_modules/` and are removed
-at the end of the test run. No generated source is modified. The tests compile the runtime guards first,
-so they run on Node 22.12+ without relying on Node's later TypeScript stripping support.
+at the end of the test run. No generated source is modified. Each test compiles its own inputs into a
+separate output directory, so the guard test runs independently of fixture compilation. Tests run on
+Node 22.12+ without relying on Node's later TypeScript stripping support.
 
 ## Client and licensing status
 
