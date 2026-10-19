@@ -1,6 +1,11 @@
 # Spec 02: Protocol and contracts (WS-02)
 
-- **Status:** Revision 6. r4 was approved by the reviewer (Codex Astra, 2026-10-19; history in §19) and
+- **Status:** Revision 7 (DEN-68), reviewed by Codex Astra and accepted by the owner 2026-10-19 (D-058)
+  at exact `67627c5e169b4a85cd1f15bd243a7368f0e76061` for remaining CI and contract planning.
+  Dedicated design/contract approvals, implementation approval and owner merge remain separate.
+  The additions spec 03 r6 requests (A14–A16 there) are text only;
+  the `den-protocol` code lands with DEN-69 and DEN-118. r6 is on `main`. r4 was approved by the reviewer (Codex
+  Astra, 2026-10-19; history in §19) and
   provisionally approved by the coordinator on the owner's delegation (2026-10-19); approved by the owner 2026-10-19 (D-039).
   r5 (DEN-30 `plugins.call` classification, DEN-31 tier-0 MCP outputSchema) is on `main`. r6 folds in the contract
   amendments spec 03 §23 requested (A1–A13 and the two scopes, card DEN-33) and the shapes `den-protocol` v0 had to
@@ -70,7 +75,7 @@ translates to and from this protocol and never extends it).
 | Default queue | The nil UUID `00000000-0000-0000-0000-000000000000` | Matches Streamer.bot's export convention, so import is a straight mapping. |
 | Event IDs, run IDs | UUIDv7 | Monotonic per process, used for replay cursors (§8.4) and history. |
 | Plugin ID | Reverse-DNS, `^[a-z0-9]+(\.[a-z0-9-]+)+$`, ≤ 128 chars (`io.github.alice.acmelive`) | Namespace verification is the registry's job (spec 12, Q-K3). |
-| Slug | `^[a-z][a-z0-9_]{1,23}$`, unique per installation | Prefix for every event type, operation and variable namespace the plugin contributes. Reserved for core: `core`, `system`, `session`, `auth`, `actions`, `triggers`, `queues`, `variables`, `events`, `chat`, `tts`, `audio`, `plugins`, `obs`, `twitch`, `youtube`, `kick`, `x`, `bluesky`, `discord`, `vts`, `vmc`, `mcp`, `ai`, `code`, `ui`, `overlay`, `deck`, `util`, `batch`, `global`, `globals`, `user`, `event`, `run`, `trigger`, `action`, `runs`, `signals`, `commands`, `timers`, `schedule`, `settings`, `catalog`, `http`. Every namespace a core `register(&mut Catalog)` uses (§5.2) MUST be in this list; `lint-catalog` fails a core operation or event whose prefix is not reserved (§9.7). A plugin manifest whose `slug` is in this list fails manifest validation and is refused at install. |
+| Slug | `^[a-z][a-z0-9_]{1,23}$`, unique per installation | Prefix for every event type, operation and variable namespace the plugin contributes. Reserved for core: `core`, `system`, `session`, `auth`, `actions`, `triggers`, `queues`, `variables`, `events`, `chat`, `tts`, `audio`, `plugins`, `obs`, `twitch`, `youtube`, `kick`, `x`, `bluesky`, `discord`, `vts`, `vmc`, `mcp`, `ai`, `code`, `ui`, `overlay`, `deck`, `util`, `batch`, `global`, `globals`, `user`, `event`, `run`, `trigger`, `action`, `runs`, `signals`, `commands`, `timers`, `schedule`, `settings`, `templates`, `catalog`, `http`. Every namespace a core `register(&mut Catalog)` uses (§5.2) MUST be in this list; `lint-catalog` fails a core operation or event whose prefix is not reserved (§9.7). A plugin manifest whose `slug` is in this list fails manifest validation and is refused at install. |
 | Contribution IDs | `<slug>.<localId>` (`acme.gift`, `acme.send_chat`) | `localId` is `lower_snake_case`. Persisted references to a contribution are the shared type `ContributionRef { type, plugin? }` (§5.3), flattened into `Trigger` (§6.2) and `Node::Op` (§6.4): `plugin` (the plugin ID) is **required** when the slug is not reserved for core and **forbidden** when it is. The derive emits `plugin` as optional; codegen adds a generated `if/then/else` clause from the reserved-slug list to every schema that embeds a `ContributionRef` (`if type matches ^(core|system|…)\. then plugin is not allowed, else plugin is required`), and the save-time and import validators enforce the same rule in code, so the pair is part of the generated types and survives strict validation and round-trips. Installing a plugin whose slug is already used by a different plugin ID is refused locally (the registry also keeps slugs unique, spec 12). Import re-binds by `plugin`: if that plugin is installed but its current manifest uses a different slug (the author renamed it in a later version), `type` is rewritten to the installed slug; if it is not installed, an `Op` becomes `placeholder` and a `Trigger` is kept verbatim but `unresolved` (§6.2) until the plugin is installed; a non-reserved `type` without `plugin` cannot be re-bound safely and becomes `placeholder` with an import-report entry. |
 | API tokens | `sdt_` + 43 chars base64url (256 random bits) | The prefix lets secret scanners find leaked tokens. Stored as SHA-256 hashes and compared in constant time (spec 06). The protocol refers to a token only by its `TokenId` (above). |
 | Approval handles | `apr_` + 22 chars base64url | MCP approval flow, 120 s TTL. |
@@ -166,7 +171,7 @@ pub struct TwitchSubscription {
 - **Engine events and operations (A3).** Spec 03 §15 registers the engine's own operations and events through
   the same explicit `register(&mut Catalog)` (§9.1): the operations and events of `actions.*`, `triggers.*`,
   `events.*`, `runs.*`, `queues.*`, `variables.*`, `signals.*`, `commands.*`, `timers.*`, `schedule.*`,
-  `system.*`, `settings.*` (spec 03 §16), `core.test` and `core.custom`, with the flags it states (`highVolume` on
+  `system.*`, `settings.*` (spec 03 §16), `templates.*` (spec 03 §15), `core.test` and `core.custom`, with the flags it states (`highVolume` on
   `runs.node_started`, `runs.node_completed` and `variables.user_updated`; `critical` on `system.stopping`,
   `system.subscriber_stalled` and `system.storage_*`; `writesArgs: Named { nameParam: "name" }` on
   `variables.set_arg` and `Any` on `signals.wait`). `core.custom { name, data }` is the user-defined event
@@ -440,6 +445,28 @@ pub struct Timer {
     pub origin: Origin,
 }
 
+/// Engine settings (spec 03 §16). Persisted document, kind "settings", id = the nil UUID, schemaVersion 1; one section
+/// per owning spec, added additively (§7.2). Inside a section every field is required and carries its default and range
+/// in the schema; a top-level section is optional on `settings.update` input (an omitted section keeps its stored
+/// values), so adding a section later is not a breaking request change. Keys that apply only after a restart are
+/// marked `x-den-restart: true` and exported as the constant RESTART_ONLY_SETTINGS.
+pub struct Settings { pub engine: Option<EngineSettings> /* required in the stored document and in settings.get */ }
+pub struct EngineSettings {
+    pub bus: BusSettings,             // capacity, internalCapacity, subscriberCapacity (restart), criticalLane, subscriberStallMs
+    pub run: RunSettings,             // maxConcurrent, maxTasksPerRun, maxRunBytes, maxNodeExecutions, opTimeoutMs, codeTimeoutMs,
+                                      // maxLoopIterations, maxDelayMs, maxInlineDepth, maxLineage, maxChainHops, maxArgsBytes,
+                                      // attributionWindowMs, stormThreshold
+    pub queue: QueueSettings,         // defaultMaxPending, maxRunCeilingMs
+    pub signals: SignalSettings,      // queuedTtlMs, maxWaitMs
+    pub variables: VariableSettings,  // maxValueBytes
+    pub storage: StorageSettings,     // flushMs, dailyBackup
+    pub history: HistorySettings,     // maxRuns, maxAgeDays, maxSnapshotBytes, traceRuns
+    pub events: EventLogSettings,     // maxAgeHours, maxCount
+    pub shutdown: ShutdownSettings,   // graceMs
+    pub action: ActionLimits,         // maxNodes, maxDepth
+}
+pub struct SettingsWarning { pub key: Option<String>, pub code: String, pub message: String }   // settings.update result
+
 /// One execution of an action (spec 03 §9, §12). Returned by runs.get and runs.list; stored in Action History.
 pub struct Run {
     pub id: RunId,
@@ -454,7 +481,7 @@ pub struct Run {
     pub parent: Option<RunId>,           // the run whose RunAction node started this one
     pub inline: bool,                    // an inline RunAction child (shares the parent's task)
     pub test: bool, pub replay_of: Option<RunId>,
-    pub event_snapshot: Option<Event>,   // the firing or replayed event, secrets redacted
+    pub event_snapshot: Option<Event>,   // the firing or replayed event, secrets redacted; omitted (absent, §3) by runs.list, present on runs.get (spec 03 §12.6); `event` says whether there was one
     pub untrusted_args_queued: Vec<String>, pub untrusted_args_after: Vec<String>, // taint set of each snapshot (spec 03 §21)
     pub error: Option<RunError>,         // when state is failed, rejected or dropped
     pub stopped_by: Option<NodeId>,      // the Stop node or Code node that ended the run early
@@ -467,7 +494,14 @@ pub struct RunWarning { pub node: Option<NodeId>, pub code: String /* loop_cap, 
 ```
 
 `Command` and `Timer` are configuration documents: `revision` and `origin` are server-assigned like `Action`'s, their
-writes are tier 2 and draft-first under MCP (`PendingChange.targetKind` `command` / `timer`). `Run` is read-only on
+writes are tier 2 and draft-first under MCP (`PendingChange.targetKind` `command` / `timer`). `Settings` is one too
+(A14): `settings.update { settings, revision? }` (tier 2, scope `settings:write`, draft-first under MCP with
+`PendingChange.targetKind = "settings"`) replaces the whole document, and `settings.get` (tier 0, scope
+`settings:read`) reads it; spec 03 §16 defines every key, default and range, the hot-apply rule, the result shapes
+and the `settings.updated` event, and §13.2 there stores it. `settings.update` replaces whole sections: a present
+section must be complete, an absent one keeps its stored values. The dotted key `engine.run.maxConcurrent` names the
+JSON path inside `data` and is the form the result lists, `SettingsWarning.key` and the event use; `fieldErrors[].path`
+keeps the ordinary request JSON Pointer (`/settings/engine/run/maxConcurrent`, §8.5). `Run` is read-only on
 the wire. Counters, cooldown state and the two args snapshots are spec 03 storage; `runs.get` returns the snapshots
 as plain objects next to the record.
 
@@ -721,7 +755,8 @@ turns `\n` into `\r\n`). The worker and sidecar SDKs set binary mode (in Python,
 Format `<area>:<verb>[:<qualifier>]`: `actions:read`, `actions:run[:<actionId|tag>]`, `actions:write`,
 `variables:read`, `variables:write[:<namespace>]`, `events:read[:<glob>]`, `chat:send`, `chat:moderate`,
 `obs:control`, `tts:speak`, `plugins:call[:<pluginId>]`, `plugins:manage`, `events:simulate` (`triggers.test`,
-`events.simulate`, `events.replay`; spec 03 §6.5, §12.5), `events:emit` (`events.emit`), `admin`. Overlay tokens are limited to
+`events.simulate`, `events.replay`; spec 03 §6.5, §12.5), `events:emit` (`events.emit`), `settings:read` and
+`settings:write` (`settings.get`, `settings.update`; spec 03 §16), `admin`. Overlay tokens are limited to
 `events:read:<globs>` plus `variables:read:<names>`. Each operation lists its scopes in the catalog; the server
 checks them on every surface (WS, REST, MCP, plugin host calls).
 
@@ -1107,7 +1142,26 @@ Per tool:
   keeps the value's JSON type (so `{amount}` in a numeric param stays a number) and `{= expr}` yields a number,
   boolean or string (§10.1).
 - Templates are parsed when saved, and parse errors are shown with their position. The parser lives in
-  `den-core`; its grammar and AST types live in `den-protocol` so the UI can lint them with the same rules.
+  `den-core`; its grammar and AST types live in `den-protocol` so the UI can lint them with the same rules. The UI
+  gets those rules from the engine, not from a second implementation: the tier-0 operation `templates.parse {
+  source, mode }` (spec 03 §15, A15; a proposal of spec 03 r6 until this revision is reviewed) returns
+  `TemplateParseResult { ast: Option<TemplateAst>, errors: Vec<TemplateParseError>, warnings: Vec<TemplateLint>,
+  references: Vec<TemplatePath>, dynamicLookup: bool }` with `TemplateParseError { message, span }`,
+  `TemplateLint { code /* literal_brace, missing_value_likely… open */, message, span }`, `Span { start, end }`
+  (offsets in Unicode scalar values into `source`) and `TemplatePath` (the root and segments of one referenced
+  context path), all defined in `den-protocol` next to `TemplateAst` (card DEN-69). The editor calls it per
+  field (debounced, batched with `batch.execute`). **Parser limits** are fixed numbers independent of any
+  transport or session: `source` has schema `maxLength: 65536` (Unicode scalar values, as JSON Schema counts
+  them), so a longer source is `INVALID_PARAMS` from schema validation, never a parse diagnostic; a template
+  nested deeper than 32 or producing more than 10,000 AST nodes is a **parse diagnostic** (an entry in `errors`,
+  never `INTERNAL`) with `ast` absent, `references` empty and `dynamicLookup: false`; `warnings` may still be
+  present. The same three limits apply to every stored template at save time and on import (a violating
+  template is `INVALID_PARAMS` with `fieldErrors` naming the node and field). Spans count Unicode scalar values
+  into `source`, `end` exclusive (den-core's internal byte offsets never reach the wire). A result for the
+  largest permitted AST stays under the default message budget (§3), which is what bounds the node count. Spec 07
+  MAY additionally ship the parser module of `den-core`
+  (feature-gated, runtime-free) compiled to WASM for zero-latency highlighting, but never a TypeScript
+  re-implementation; the operation stays the reference the §17.11 template strings are checked against.
 - **Import (D-027):** `%x%` → `{x}`; `%x:fmt%` → `{x | number:"fmt"}` or `{x | date:"fmt"}` (by type);
   `~g~` → `{globals.g}`; `$math(e)$` → `{= e}` (variables inside are converted the same way); `$length(t)$` →
   `{t | length}`; `$parse(n)$` → `{= lookup("n")}`; flattened names (`input0`, `rawInputEscaped`) → generated
@@ -1512,3 +1566,13 @@ protocol design choice made here, not a product decision, and is open to reviewe
   never after a prefix; shrinking is not "fewer consumed"; only control flow over unchanged input is (§8.8 rule 4,
   §17.9). DEN-49 (2026-10-19): the session grant pins the capped count `min(len, cap)`, not the length, so a
   length change at or above the cap runs under it while a one-shot approval still fails `args`; §17.9 cap cases.
+- **r7** (DEN-68, text only; code in DEN-69 and DEN-118; **pending review**, so A14 and A15 are proposals until
+  then): the additions spec 03 r6 requests in its §23. A14 the `Settings { engine }` document (sections optional on
+  update input, complete when present), `SettingsWarning`, the `settings.get` / `settings.update` summary, the
+  `runs.list` elision note on `Run.eventSnapshot` and the scopes `settings:read`, `settings:write` (§6.5, §8.7).
+  A15 the reserved namespace `templates`, the `templates.parse` result types and parser limits, the WASM option for
+  the parser module and the exclusion of a TypeScript port (§4, §5.2, §10). Round 2 (Codex Astra review of
+  `dabe19e`): `Run.eventSnapshot` omitted rather than `null` on `runs.list` (§6.5); `fieldErrors[].path` stays a
+  request JSON Pointer for `settings.update` (§6.5); parser limits made transport-independent with
+  `source.maxLength`, the failure shape and span units (§10). A16 is registration-only (`runs.list` paging, `actions.run.queue`) and lives in
+  spec 03 §12.6 and §10.2.

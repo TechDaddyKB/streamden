@@ -691,3 +691,21 @@ UI notice says so (spec default); (b) exempt user-token and system origins from 
 guard alone; (c) make the limit a setting with a higher default (for example 64).
 **Recommendation:** (a).
 **Answer:** Spec default accepted by the owner on 2026-10-19 (D-039).
+
+### Q-E9 — How long may a user keep Action History and the event log? 🟩 (Round 4)
+Raised by [spec 03 r6 §16](spec/03-engine.md) (DEN-68). Q-E4 accepted the retention **defaults** (10,000 runs or
+7 days of Action History, 24 h / 50,000 events in the event log) and Q-H1 answered **chat** retention (a rolling
+24 h by default, plus a local chat-history store of up to 120 streams or 120 days, owned by spec 08). Neither says
+how far a user may raise `engine.history.maxAgeDays` and `engine.events.maxAgeHours` for non-chat data (run
+records with their argument snapshots, alert and automation events). Both are plain settings; the question is only
+the ceiling the settings validator enforces. Chat entries in the event log are pruned by spec 08 on the Q-H1
+setting whatever the answer here. Options: (a) **365 days** for both (a year of history fits a streaming season;
+the file sizes are bounded by `maxRuns` / `maxCount` anyway); (b) 120 days for both, the same figure as the chat
+store, so one number explains every retention screen; (c) no ceiling beyond the storage counters (`maxRuns`,
+`maxCount`), the user decides. Until answered, the spec validates only the lower bound (1 day / 1 h) and keeps the
+defaults.
+**Recommendation:** (a).
+**Answer:** Option (a), approved by the owner on 2026-10-19 (D-057): **365 days** for both non-chat
+Action History and the event log (`engine.history.maxAgeDays` maximum `365`;
+`engine.events.maxAgeHours` maximum `8760`). Existing defaults and the separate Q-H1 / D-054 chat-retention
+policy remain unchanged.
