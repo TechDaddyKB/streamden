@@ -37,3 +37,8 @@ export function buildCss() {
     `@media (prefers-reduced-motion: reduce) {\n${block(":root", reduced, "  ")}}\n`,
   ].join("\n");
 }
+
+/** Git may check text files out with CRLF (Windows autocrlf); line endings are not content drift. */
+export const normalizeEol = (text) => text.replace(/\r\n/g, "\n");
+
+export const isCssCurrent = (current, generated) => normalizeEol(current) === normalizeEol(generated);
