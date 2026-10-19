@@ -5,7 +5,7 @@
   r5 (DEN-30 `plugins.call` classification, DEN-31 tier-0 MCP outputSchema) is on `main`. r6 folds in the contract
   amendments spec 03 §23 requested (A1–A13 and the two scopes, card DEN-33) and the shapes `den-protocol` v0 had to
   assume (DEN-34, card DEN-38 folded into DEN-33); its `ForEach` approval expectations were corrected by DEN-44
-  (folded into DEN-42, pending review). Cards: DEN-33, DEN-42.
+  (folded into DEN-42) and qualified by the iteration cap in DEN-49 (pending review). Cards: DEN-33, DEN-42, DEN-49.
 - **Owns:** `crates/den-protocol` (single-writer), the codegen pipeline (`cargo xtask codegen`), and every generated
   artifact (`protocol.json`, OpenAPI, AsyncAPI, TS, Python, plugin manifest schema, MCP tool catalog).
 - **Builds on:** [architecture.md](../architecture.md) §2–4, [plugin-sdk-and-api.md](../research/plugin-sdk-and-api.md)
@@ -873,10 +873,11 @@ them.
    `min(len, cap) − 1`, a `missing` render for an empty collection, dynamic otherwise), which is what execution
    records. Every iteration's record carries the whole `items` render, so any change to the collection (an element, the order
    or the length, to or from empty) changes every body hash; it is never a mismatch only at the changed index. A
-   session grant exempts the body's hashes like any other but still pins the iteration count, because it is part
-   of the call multiset (A2). Besides (a) and (b) below, a `ForEach` occurrence that the plan expanded from a
+   session grant exempts the body's hashes like any other but still pins the capped iteration count
+   `min(len, cap)`, because it is part of the call multiset (A2); a length change that leaves it unchanged (both
+   lengths at or above the cap) passes a session grant, while a one-shot approval still binds the whole collection. Besides (a) and (b) below, a `ForEach` occurrence that the plan expanded from a
    concrete render is checked **at loop start**, before its first iteration: its `items` binding render must
-   equal the planned one (`args`), or under a session grant its iteration count must equal the planned one
+   equal the planned one (`args`), or under a session grant its capped iteration count must equal the planned one
    (`unplanned_call`), so a collection changed after the call started, emptied included, stops the run before any
    body node and never runs a prefix. Fewer calls on an unchanged collection because of control flow is not a
    mismatch (the plan is a superset). Enforcement happens at three points. (a) **At the call:** the plan is
@@ -1330,8 +1331,11 @@ import-originated data is.
    over `{globals.list}` of three elements plans three calls with distinct `foreach` records; the third element
    changed, the list grown to four, shrunk to two or emptied after approval → `args` at the call (every hash carries
    the whole collection) and, when changed after the call started, `args` at loop start with nothing sent; under
-   a session grant a changed element runs and a changed length → `unplanned_call` at the call or at loop start
-   (the count is pinned);
+   a session grant a changed element runs and a changed length (default cap, so a changed count) → `unplanned_call` at the call or at loop start
+   (the count is pinned); with `maxIterations: 2` over three elements (two planned calls), a fourth element
+   appended → `args` under a one-shot approval and runs two calls under a session grant (both lengths above the
+   cap), a removal to two elements runs under a session grant, and a removal to one element (crossing below the
+   cap) or, for a plan over one element, growth to three → `unplanned_call` at the call or at loop start;
    unchanged input whose body `BreakLoop`s after two iterations → runs (fewer consumed than planned); `items` from a `saveAs` of `http.request` → the body is planned once with
    `/message` dynamic, the warning names the loop, and a second iteration reaching `chat.send` stops with
    `unplanned_call`; a post-loop `chat.send { message: {item} }` → bound to the last record, and changing the
@@ -1506,4 +1510,5 @@ protocol design choice made here, not a product decision, and is open to reviewe
   DEN-44 (folded into DEN-42, 2026-10-19): a changed `ForEach` collection fails a one-shot approval at the call or
   at a new loop-start check (which also catches an emptied collection and pins the count under a session grant),
   never after a prefix; shrinking is not "fewer consumed"; only control flow over unchanged input is (§8.8 rule 4,
-  §17.9).
+  §17.9). DEN-49 (2026-10-19): the session grant pins the capped count `min(len, cap)`, not the length, so a
+  length change at or above the cap runs under it while a one-shot approval still fails `args`; §17.9 cap cases.

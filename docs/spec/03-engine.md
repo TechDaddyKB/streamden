@@ -1,8 +1,8 @@
 # Spec 03: Engine core (WS-03)
 
-- **Status:** Revision 4 (DEN-42 follow-ups, pending review). r3 was approved by the reviewer (Codex Astra,
+- **Status:** Revision 5 (DEN-49, pending review); r4 (DEN-42) is on `main`. r3 was approved by the reviewer (Codex Astra,
   2026-10-19; history in §25) and provisionally approved by the coordinator on the owner's delegation
-  (2026-10-19); owner confirmation of Q-E1–Q-E8 pending. Cards: DEN-15, DEN-42.
+  (2026-10-19); owner confirmation of Q-E1–Q-E8 pending. Cards: DEN-15, DEN-42, DEN-49.
 - **Owns:** `crates/den-core`: the event bus, trigger matching, commands, timers and cron, the run executor
   (sub-action tree), queues and scheduling, variables, Action History, and the SQLite storage layer. It also owns
   the engine-side implementation of the authorization rules in [spec 02 §8.8](02-protocol.md).
@@ -562,7 +562,7 @@ node)`. `Action.random` applies the same rule to the top-level `nodes`. `actions
   - *Planned-call multiplicity.* At plan time (dry run, approval) the engine renders `items` against the
     plan-time context: when the render is **concrete**, the loop is expanded to `min(len, cap)` iterations and
     each tier-3 node in the body gets one `PlannedCall` per iteration, with the `foreach` record for that index
-    in its binding render (the plan shows "*N* × `chat.send`", `N` = collection length); when it is
+    in its binding render (the plan shows "*N* × `chat.send`", `N` = `min(len, cap)`); when it is
     **dynamic**, the body is planned **once** (spec 02's finite-plan rule for `While`), so a second iteration
     reaching a tier-3 node stops with `unplanned_call`, which the dry-run warnings state in advance. Execution
     consumes the planned entries in iteration order. A read of `itemVar` **after** the loop binds to the
@@ -571,8 +571,8 @@ node)`. `Action.random` applies the same rule to the top-level `nodes`. `actions
     execution records.
   - *Changed collections.* Every iteration's record carries the **whole** `items` render, so any change to
     the collection after approval (an element, the order, the length, including to or from empty) changes the
-    `items` binding render and with it every body hash and, for a length change, the call multiset; it is
-    never a mismatch only at the changed index. It is caught at two points. *At the call* (spec 02 §8.8 rule
+    `items` binding render and with it every body hash and, when the capped iteration count `min(len, cap)`
+    changes, the call multiset; it is never a mismatch only at the changed index. It is caught at two points. *At the call* (spec 02 §8.8 rule
     4(a)) the recomputed plan differs. *At loop start*, when the approved plan expanded this `ForEach`
     occurrence from a concrete render, the node compares its rendered `items` with the plan before the first
     iteration: under a one-shot approval the binding render must equal the planned one, under a session grant
@@ -580,10 +580,12 @@ node)`. `Action.random` applies the same rule to the top-level `nodes`. `actions
     `binding_mismatch` / `args`, at the call or, when the collection changed after the call started, at loop
     start; no body node runs, an emptied collection is caught although it has no iteration, and a shorter
     collection never completes with spare planned calls. A session grant exempts the hashes but pins the
-    count: a changed element runs, a changed length is `unplanned_call` at the call or at loop start. Fewer
+    capped count: a changed element runs, a change of `min(len, cap)` is `unplanned_call` at the call or at
+    loop start, and a length change that leaves `min(len, cap)` unchanged (both lengths at or above the cap)
+    runs like a changed element, because the plan holds the same number of calls. Fewer
     calls on an **unchanged** collection because of control flow (`BreakLoop`, an `If` in the body, a failure
-    under `onError: continue`) is never a mismatch: the plan is a superset of what runs. §22.9 tests the changed-collection, changed-length, dynamic-collection, post-loop read
-    and session-grant cases.
+    under `onError: continue`) is never a mismatch: the plan is a superset of what runs. §22.9 tests the changed-collection, changed-length, dynamic-collection, post-loop read,
+    session-grant and iteration-cap cases.
 - **`BreakLoop` / `ContinueLoop`** affect the innermost enclosing `While` or `ForEach` **within the same action**;
   outside a loop they are no-ops with a warning (the editor forbids them, §18). They never cross a `Parallel`
   boundary or a `RunAction`.
@@ -1578,8 +1580,15 @@ and requires:
    loop → `args` at loop start, with no `chat.send` sent (the emptied collection included); an approval of
    `[]` (no body calls) and a collection that became `[a]` → `args` at the call; unchanged `[a, b, c]` with a
    `BreakLoop` after the second iteration → runs, one planned call unconsumed; under a **session grant** for
-   the same plan: a changed element runs, an append or a removal → `unplanned_call`, at the call before it
-   started and at loop start after, with no `chat.send` sent;
+   the same plan (default cap): a changed element runs, an append or a removal → `unplanned_call`, at the call before it
+   started and at loop start after, with no `chat.send` sent; **`ForEach` cap:** the same body with
+   `maxIterations: 2` over `[a, b, c]` plans two calls; under a one-shot approval an
+   append (`[a, b, c, d]`) → `args` at the call and at loop start (the whole collection is bound); under a
+   session grant, before the call or after it started: the append, or a removal to `[a, b]` (both lengths at or
+   above the cap, count 2 → 2) → runs two calls, and a removal to `[a]` (crossing below the cap, count 2 → 1)
+   → `unplanned_call`, at the call before it started and at loop start after, with no `chat.send` sent; a
+   session grant over `[a]` (one planned call) and a collection grown to `[a, b, c]` (count 1 → 2) →
+   `unplanned_call` the same way;
    a collection from `saveAs` → `dynamicFields` on the body and a one-iteration plan; **untrusted provenance:** the §21 chain (chat → global →
    restart → MCP read wrapped → dry-run `untrustedFields` → approval request shows the wrapper), `Code` writes
    tainted, `Plugin` writes tainted, foreign import tainted, literal user write clean; **readback paths
@@ -1765,3 +1774,8 @@ grammar"; signals are implemented as operations rather than new `Node` kinds so 
   5. DEN-33 follow-ups → §3 recap synchronized with spec 02 r6 (`ForEach`, `onError`, `maxRunMs`,
      `RunError.code: ErrorCode`, `Command.sources`, `UserKey`) and marked non-normative; `Run.trigger` copied
      on replay as in §12.3; §21 names the unchained `Trigger` origin among the clean literal writers.
+- **r5** (DEN-49, the P2 of the Codex review of r4): §9.5 *Changed collections* states the session-grant check
+  as a change of the capped iteration count `min(len, cap)`, not of the length, consistent with the loop-start
+  rule; one-shot approvals keep whole-collection binding. §22.9 adds `maxIterations: 2` cases: a length change
+  at or above the cap runs under a session grant and fails `args` under a one-shot approval, a change crossing
+  the cap is `unplanned_call`. Spec 02 §8.8 rule 4 and §17.9 synchronized (r6 amendment line there).
