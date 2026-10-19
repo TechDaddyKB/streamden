@@ -46,11 +46,12 @@ A later helper (`scripts/den-claim`) can compare the paths of claimed cards auto
 - Project `streamden` was created by the owner with the roster from `docs/agents/DELEGATION.md`. Its `about`
   block points at the repo and key docs. Board template "software": Backlog · Planning · Coding · Review ·
   Verifying · Done · Blocked.
-- 19 cards (DEN-1…DEN-19) were migrated with their dependencies. DEN-4 (S-3) sits in Review.
+- Cards DEN-1…DEN-19 were migrated with their dependencies; DEN-20 (cross-platform gate) was added and parked (D-035).
 - Agents reach the MCP through the stdio server the wrappers install (`cxx communicator mcp <engine>`; the `clx`
   entry for Claude Code). The communicator capability is off on this host, so the adapter uses the HTTPS MCP
-  endpoint, which works. Sessions not launched via the wrappers (e.g. Enjoy) may not load it natively; a small
-  stdio client using the same config works.
+  endpoint, which works.
+- Agents are launched with `scripts/dispatch.sh` (D-036). This host has no `cxx daemon` and no agent messaging yet,
+  so sessions can't be started or messaged from the console or MCP; enabling those is optional.
 
 ## Consequences
 - One MCP (the orchestrator's) covers board, merges, schedules and messaging for all three vendors.

@@ -9,6 +9,11 @@ Shared vocabulary for specs, code and agents. Use these names in types and UI un
 | **Alert** | A visual/audio notification played in an overlay in response to an event (sub, follow, super chat…). |
 | **Alert queue** | Ordered lanes that play alerts one at a time per lane, with priority, merge (gift bombs), pause/skip/replay. |
 | **Args / run context** | The variables available during one action run: event payload, plus values set by earlier sub-actions. |
+| **Card** | A work item on the codex-orchestrator board (project `streamden`), referred to as `DEN-<n>`. Its detail is the task spec; handoffs are appended to it. |
+| **Lane** | A board column: Backlog, Planning, Coding, Review, Verifying, Done, Blocked. Each working lane has a role (plan/code/review/verify). |
+| **Wrapper** | The orchestrator's launchers `clx` (Claude Code), `cdx` (Codex), `cgx` (Grok Build). They sync auth, config, skills and fleet instructions before starting the agent. |
+| **Git Director** | The orchestrator's merge-arbitration service (`git_register` → `git_merge_request` → `git_release`). Advisory; CI and the owner decide. |
+| **Spike** | A time-boxed, throwaway experiment (`spikes/S-<n>/`) that answers a design question; results go in `docs/spikes/S-<n>.md`. |
 | **Connector** | Code that talks to an external platform or app (Twitch, OBS, VTube Studio…). Implemented as a plugin (built-in or external). |
 | **Deck** | A grid of buttons (SAMMI / Stream Deck style) that run actions. Can be shown on a phone or tablet. |
 | **Designer** | The WYSIWYG editor for overlays, alerts and widgets. |
@@ -16,7 +21,7 @@ Shared vocabulary for specs, code and agents. Use these names in types and UI un
 | **Event** | A typed occurrence from a source: `{id, source, type, ts, platform?, user?, payload}`. |
 | **Filter profile** | A named set of chat filters (bots, words/regex, commands, roles, platforms) applied to a surface (dock, overlay, TTS). |
 | **Global variable** | A named value shared across actions. Persisted or temporary. |
-| **Lease** | A task's exclusive write claim on the paths in its `paths:` until `lease_expires`. |
+| **Lease** | A claimed card's exclusive write claim on its *Scope (paths)*. Board claims expire after 30 minutes unless renewed, and free themselves when the agent's session ends. |
 | **MCP** | Model Context Protocol. Our built-in server exposes app functions to AI agents as tools and resources. |
 | **Overlay** | A web page served by the engine (`/o/<id>`) and shown in OBS as a browser source. |
 | **Plugin** | An extension that adds triggers, sub-actions, settings, widgets or panels. Tiers: declarative, sidecar, embedded JS, WASM (later). Built-ins use the same model. |

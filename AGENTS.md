@@ -10,10 +10,11 @@ architectural change) · Vocabulary: `docs/GLOSSARY.md` · Feature checklist: `d
 This file is the **single source of truth** for Claude, Codex, Grok, Cursor and any other agent.
 `CLAUDE.md` only imports it. Module folders may add their own short `AGENTS.md`; the nearest one wins on conflicts.
 
-## Current phase: PLANNING
-- There is no production code yet. Until ADR-0002 (tech stack) is **Accepted**:
-  - only edit Markdown under `docs/`, `tasks/`, `PLAN.md`, or throwaway code under `spikes/<spike-id>/`;
-  - do not scaffold the real workspace (`crates/`, `apps/`, `web/`), even if asked casually. Ask the owner first.
+## Current phase: P0 FOUNDATIONS (Linux-first)
+- ADR-0002 (Rust + Tauri 2 + React/TS) is **accepted for Linux-first development** (D-035). There's no
+  production code yet. The real workspace (`crates/`, `apps/`, `web/`) is created **only** by card DEN-19,
+  after Spec 02 (DEN-14) is approved and spikes DEN-2/DEN-3 are done. Until then, edit Markdown, `scripts/`,
+  repo-hygiene files named by a card, or throwaway code under `spikes/<spike-id>/`.
 - Never answer a product question yourself. Add it to `docs/QUESTIONS.md` (next free ID, with options and your
   recommendation) and continue with whatever is unblocked.
 
@@ -77,8 +78,11 @@ All *Done when* commands pass (output pasted in the handoff note), CI is green, 
 docs and specs touched by the change are updated, and any new user-facing behaviour is in the relevant spec.
 
 ## Engineering rules (non-default only)
-- **Cross-platform always:** every feature must work on Linux (Wayland included) and Windows. macOS is tier 2
-  until Q-P2 is answered. If a third-party app is OS-specific, gate the feature and say so in the UI.
+- **Linux-first, portable always (D-035):** build and verify on Linux (Wayland, Hyprland + NVIDIA is the
+  reference box) until the v0.1 deliverable. Keep code portable: OS-specific code behind `cfg` gates or traits,
+  no Linux-only assumptions in shared code, and Windows must still **compile** in CI. Windows and KDE runtime
+  validation happens at the DEN-20 gate. macOS is tier 2. If a third-party app is OS-specific, gate the
+  feature and say so in the UI.
 - **Engine ≠ shell:** `den-core` and the integration crates must not depend on Tauri. The UI uses the same
   public API as third parties. Never add private UI-only endpoints.
 - **Schema-driven:** triggers, sub-actions, settings and plugin manifests are typed Rust structs with

@@ -1,6 +1,6 @@
 # ADR-0002: Technology stack — Rust engine + Tauri 2 shell + TypeScript web UI
 
-- **Status:** Proposed (accept after spikes S-1 and S-2: DEN-2, DEN-3)
+- **Status:** **Accepted for Linux-first development** (owner, 2026-10-18, D-035). Full cross-platform acceptance is gated on DEN-20 (KDE + Windows re-validation after the Linux v0.1 deliverable).
 - **Date:** 2026-10-18
 - **Research:** [docs/research/tech-stack.md](../research/tech-stack.md)
 
@@ -66,8 +66,9 @@ web-tech WYSIWYG designer. It must be maintainable by Claude, Codex and Grok age
 
 ## Acceptance checklist
 - [x] Spike S-1 on Hyprland + NVIDIA (E-1): GO with the conditions above
-- [ ] Spike S-1 on KDE (E-2) and Windows (E-3)
+- [ ] Spike S-1 on KDE (E-2) and Windows (E-3): **parked, DEN-20** (D-035)
 - [x] Spike S-2 on Linux (E-1)
-- [ ] Spike S-2 on Windows (E-3)
+- [ ] Spike S-2 on Windows (E-3): **parked, DEN-20** (D-035)
 - [x] Q-U1 (UI framework) answered: React + TypeScript (D-018)
-- [ ] Owner accepts
+- [x] Owner accepts for Linux-first development (D-035)
+- [ ] Cross-platform acceptance after DEN-20

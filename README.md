@@ -8,7 +8,7 @@ Python scripting, a plugin SDK, and a built-in MCP server for AI agents.
 
 Runs on **Windows, Linux (Debian/Ubuntu, Fedora, Arch + AUR) and macOS**. Local-first: no mystery cloud.
 
-> **Status:** planning and spikes (October 2026). No product code yet. Start with [PLAN.md](PLAN.md).
+> **Status:** P0 Foundations, Linux-first (October 2026). Spikes done; no product code yet. Start with [PLAN.md](PLAN.md).
 
 ## For humans
 - [PLAN.md](PLAN.md): vision, architecture summary, workstreams, phases

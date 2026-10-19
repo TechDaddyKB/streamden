@@ -4,7 +4,7 @@ These are the **human-only steps** that agents cannot do for you: creating devel
 
 Written 2026-10-18 against current official developer docs. Developer consoles change often. Where I could not confirm a button or field label in an official source, the text says **(verify on screen)**. If your screen differs from a runbook, trust the screen and ask an agent to fix the runbook.
 
-> **Tracked on the orchestrator board** (project `streamden`, cards labelled `kind:owner-action`): DEN-1 GitHub repo · DEN-6 Twitch dev app ·
+> **Tracked on the orchestrator board** (project `streamden`, cards labelled `kind:owner-action`): DEN-1 GitHub repo (**done**, https://github.com/TechDaddyKB/streamden; please verify) · DEN-6 Twitch dev app ·
 > DEN-16 Round-2 answers · DEN-17 baseline accounts. Name decided: **StreamDen** (D-015). For dev apps during
 > development, use "StreamDen Dev"; register production apps separately later.
 

@@ -79,7 +79,9 @@ You can do all of this in the orchestrator console, or ask the planning agent to
 
 1. **Pick a card** in Backlog with `ready: true`. Check that its *Scope (paths)* doesn't overlap any claimed card.
 2. **Dispatch:** set the `agent:<vendor>` label (and a `reviewer:<other vendor>` label).
-3. **Create the worktree** (vendor-neutral):
+3. **Shortcut:** `scripts/dispatch.sh DEN-<n> <claude|codex|grok> [work|review]` does steps 3–5 for you: it
+   creates or reuses the worktree, then launches the right wrapper with the standard prompt. The manual steps:
+   **Create the worktree** (vendor-neutral):
    ```bash
    git worktree add ../den-wt/DEN-<n> -b agent/<vendor>/DEN-<n>-<slug>
    cd ../den-wt/DEN-<n>

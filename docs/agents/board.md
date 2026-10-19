@@ -32,6 +32,7 @@ start it.
 - `reviewer:claude` · `reviewer:codex` · `reviewer:grok`: who reviews (must differ from `agent:*`)
 - `phase:P0` … `phase:P6` · `kind:spike|spec|contract|impl|test|research|docs|ops|owner-action` · `WS-01` … `WS-18`
 - `bakeoff`: S-5 cards that every vendor runs on its own branch
+- `parked`: deliberately deferred by the owner (sits in Blocked with a `blocked_reason`). Don't touch until un-parked.
 
 ## Agent protocol (MCP calls)
 1. **Orient:** `project_summary {slug:"streamden"}` (cheap; shows open cards and what you hold), then

@@ -5,6 +5,8 @@ Only record decisions the **owner** made or approved. Proposals live in ADRs wit
 
 | Date | ID | Decision | Source |
 |---|---|---|---|
+| 2026-10-18 | D-036 | Work runs through codex-orchestrator, not the Enjoy planning chat: the board, project memory and notes hold the state, and agents are launched with `scripts/dispatch.sh` (`clx`/`cdx`/`cgx`). | Owner |
+| 2026-10-18 | D-035 | **Linux-first:** KDE (E-2) and Windows (E-3) validation is parked until a working Linux deliverable (v0.1); work continues on the current stack. ADR-0002 is accepted for Linux-first development; cross-platform acceptance is gated on DEN-20. Code must stay portable (Windows still compiles in CI). | Owner |
 | 2026-10-18 | D-034 | Commit messages follow the owner's fleet policy: one Conventional Commit subject line that names the card, e.g. `feat(core): bounded action queue (DEN-8)`. No body, no `Task:`/`Agent:` trailers, no AI co-author lines. The vendor is visible in the branch name. | Owner fleet policy |
 | 2026-10-18 | D-033 | TTS at launch (P2): Piper + Kokoro (local, offline via sherpa-onnx) + OS voices + ElevenLabs + Azure. Other engines come as plugins. | Q-T1 |
 | 2026-10-18 | D-032 | Monetization: free and open source; the official hosted relay is funded by donations. No feature paywalls. | Q-B3 |
