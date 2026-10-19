@@ -22,7 +22,7 @@ Do not commit secrets; use fixtures and mocks where credentials are unavailable.
 Use Node.js 22.12 or newer and pnpm 12.14.0. From the repository root:
 
 ```sh
-pnpm install --lockfile=false --ignore-scripts
+pnpm install --frozen-lockfile --ignore-scripts
 node_modules/.bin/lefthook install
 node_modules/.bin/lefthook run pre-commit
 node_modules/.bin/lefthook run pre-commit --force
@@ -30,9 +30,9 @@ node_modules/.bin/lefthook run commit-msg -- /absolute/path/to/sample-message.tx
 node scripts/check-branch-name.test.cjs
 ```
 
-Dependencies are pinned in `package.json`. Each linked worktree needs its own dependency install.
-Without a root lockfile, the install resolves transitive dependencies anew. Once the generated root
-lockfile is checked in, use `pnpm install --frozen-lockfile --ignore-scripts` in each worktree instead.
+Dependencies are pinned in `package.json` and the generated root `pnpm-lock.yaml`.
+Each linked worktree needs its own dependency install. The lockfile pins transitive packages to
+releases eligible under pnpm's minimum release age; preserve that policy when updating tooling.
 Plain `pnpm exec` can auto-install dependencies and create a lockfile with pnpm 12.
 `pnpm --config.verifyDepsBeforeRun=false exec lefthook …` skips dependency verification, but
 package-manager setup can still write a lockfile. The commands above and the commit hook invoke
