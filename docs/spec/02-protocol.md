@@ -1,7 +1,7 @@
 # Spec 02: Protocol and contracts (WS-02)
 
 - **Status:** Revision 6. r4 was approved by the reviewer (Codex Astra, 2026-10-19; history in §19) and
-  provisionally approved by the coordinator on the owner's delegation (2026-10-19); owner confirmation pending.
+  provisionally approved by the coordinator on the owner's delegation (2026-10-19); approved by the owner 2026-10-19 (D-039).
   r5 (DEN-30 `plugins.call` classification, DEN-31 tier-0 MCP outputSchema) is on `main`. r6 folds in the contract
   amendments spec 03 §23 requested (A1–A13 and the two scopes, card DEN-33) and the shapes `den-protocol` v0 had to
   assume (DEN-34, card DEN-38 folded into DEN-33); its `ForEach` approval expectations were corrected by DEN-44

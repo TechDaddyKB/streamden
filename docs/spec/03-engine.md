@@ -2,7 +2,7 @@
 
 - **Status:** Revision 5 (DEN-49, pending review); r4 (DEN-42) is on `main`. r3 was approved by the reviewer (Codex Astra,
   2026-10-19; history in §25) and provisionally approved by the coordinator on the owner's delegation
-  (2026-10-19); owner confirmation of Q-E1–Q-E8 pending. Cards: DEN-15, DEN-42, DEN-49.
+  (2026-10-19); approved by the owner 2026-10-19 (D-039), Q-E1–Q-E8 answered with the spec defaults. Cards: DEN-15, DEN-42, DEN-49.
 - **Owns:** `crates/den-core`: the event bus, trigger matching, commands, timers and cron, the run executor
   (sub-action tree), queues and scheduling, variables, Action History, and the SQLite storage layer. It also owns
   the engine-side implementation of the authorization rules in [spec 02 §8.8](02-protocol.md).

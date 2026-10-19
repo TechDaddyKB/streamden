@@ -483,7 +483,7 @@ providers can power it (local models too)? Disclosure (the EU AI Act Art. 50 tra
 Replies pass moderation, the approval queue is the default, disclosure is on, and there's a hard budget cap.
 **Answer:**
 
-### Q-A6 — Do MCP-caused event chains inherit the MCP restrictions? 🟨 (Round 3)
+### Q-A6 — Do MCP-caused event chains inherit the MCP restrictions? 🟩 (Round 3)
 [Spec 02 §8.8](spec/02-protocol.md) makes authorization transitive: a run started over MCP can never reach tier 4
 (code, end stream) through nested or queued actions. But an MCP run can emit events (a chat message, a variable
 change), and the user's own triggers on those events start new runs. Options: (a) new runs start under the
@@ -493,7 +493,7 @@ scopes, approval policy) for every hop of `causedBy`, which also blocks legitima
 client is active; (c) configurable per MCP token, default (a).
 **Recommendation:** (a) was the spec author's recommendation; the Codex re-review (2026-10-19) rated resetting
 authority at each event a P1 privilege-widening path, and the coordinator chose (b).
-**Answer (provisional, coordinator 2026-10-19, owner to confirm):** (b). Event chains caused by an MCP-originated
+**Answer (owner confirmed 2026-10-19, D-038):** (b). Event chains caused by an MCP-originated
 run inherit the MCP restrictions for the whole `causedBy` chain (no hop limit), with audit linkage through
 `causedBy` and `run.chain`. Spec 02 §8.8 rule 5 is written that way, applies the same rule to every restricted
 principal (a plugin's limited permissions follow its chains too; a user token or system run is unaffected), stops a
@@ -535,61 +535,61 @@ Cloudflare (relay free tier), test accounts.
 Raised by [spec 03](spec/03-engine.md) (DEN-15). Each has a spec default so implementation is not blocked; the
 owner's answer either confirms it or changes the spec.
 
-### Q-E1 — Should queued runs survive a restart? 🟥 (Round 3)
+### Q-E1 — Should queued runs survive a restart? 🟩 (Round 3)
 Streamer.bot does not document what happens to pending runs at shutdown. Options: (a) **not durable**: waiting runs
 are cancelled (`Cancelled { Shutdown }`, visible in history) and nothing is replayed on the next start; (b) durable
 queues: waiting runs are persisted and resumed after restart, including after an update.
 **Recommendation:** (a), spec 03 §10.8. Replaying yesterday's alerts after an update is the surprising behaviour;
 (b) can be added later per queue.
-**Answer:**
+**Answer:** Spec default accepted by the owner on 2026-10-19 (D-039).
 
-### Q-E2 — Should a failed sub-action stop the run by default? 🟥 (Round 3)
+### Q-E2 — Should a failed sub-action stop the run by default? 🟩 (Round 3)
 Streamer.bot mostly continues after a failed sub-action and reports the failure in an output variable (`success`);
 only C# `return false` and a few explicit flags stop the action. Options: (a) **stop by default** (`onError: stop`),
 with `onError: continue` per node for "try"-style steps and for imports; (b) continue by default, stop per node.
 **Recommendation:** (a), spec 03 §9.10: a half-executed alert is worse than a visible failure, and the importer
 sets `continue` where Streamer.bot semantics need it.
-**Answer:**
+**Answer:** Spec default accepted by the owner on 2026-10-19 (D-039).
 
-### Q-E3 — One event, one action: fire once or once per matching trigger? 🟥 (Round 3)
+### Q-E3 — One event, one action: fire once or once per matching trigger? 🟩 (Round 3)
 When several triggers of the **same** action match one event, spec 03 §6.3 fires the action **once**, through its most
 specific matching trigger. Streamer.bot's documented behaviour covers only precedence *across* actions. Options:
 (a) once per action (spec default); (b) once per matching trigger (N runs).
 **Recommendation:** (a); duplicate alerts from overlapping triggers are a common Streamer.bot support question.
-**Answer:**
+**Answer:** Spec default accepted by the owner on 2026-10-19 (D-039).
 
-### Q-E4 — Action History and event log retention defaults 🟥 (Round 3)
+### Q-E4 — Action History and event log retention defaults 🟩 (Round 3)
 Spec 03 §12 proposes 10,000 runs or 7 days (whichever prunes more, keeping up to 1,000 recent failures extra), a
 24 h / 50,000-event log, history kept across restarts, snapshots capped at 256 KiB. Streamer.bot documents no
 retention. Related: Q-H1 (chat retention) bounds the event log for chat types.
 **Recommendation:** accept the defaults; all are settings.
-**Answer:**
+**Answer:** Spec default accepted by the owner on 2026-10-19 (D-039).
 
-### Q-E5 — `Stop` inside an inline Run Action: end the child only, or the whole chain? 🟥 (Round 3)
+### Q-E5 — `Stop` inside an inline Run Action: end the child only, or the whole chain? 🟩 (Round 3)
 Streamer.bot runs an inline action "as if nested", which suggests its Break stops the caller too. Spec 03 §9.5 ends
 only the child action's run and lets the parent continue, because a reusable child should not decide the caller's
 fate. Options: (a) child only (spec default); (b) whole chain; (c) a flag on the Run Action node.
 **Recommendation:** (a).
-**Answer:**
+**Answer:** Spec default accepted by the owner on 2026-10-19 (D-039).
 
-### Q-E6 — Command permissions: what does an empty list mean? 🟥 (Round 3)
+### Q-E6 — Command permissions: what does an empty list mean? 🟩 (Round 3)
 Streamer.bot: an empty Allow list allows everyone, an empty Deny list **denies everyone**. Spec 03 §7.1 makes an
 empty list neutral in both modes (empty Deny denies nobody) and lets the importer write an explicit list.
 **Recommendation:** neutral (spec default); the Streamer.bot rule reads as an accident of implementation.
-**Answer:**
+**Answer:** Spec default accepted by the owner on 2026-10-19 (D-039).
 
-### Q-E7 — When a `While` loop hits its iteration cap, warn or fail? 🟥 (Round 3)
+### Q-E7 — When a `While` loop hits its iteration cap, warn or fail? 🟩 (Round 3)
 Spec 03 §9.5 ends the loop, records a warning on the run, and continues after the loop (default cap 10,000,
 ceiling 1,000,000). Streamer.bot has no cap and offers a manual "Break Running" kill switch. Options: (a) warn and
 continue (spec default); (b) fail the run.
 **Recommendation:** (a).
-**Answer:**
+**Answer:** Spec default accepted by the owner on 2026-10-19 (D-039).
 
-### Q-E8 — Does the `causedBy` hop limit apply to the user's own re-trigger loops? 🟥 (Round 3)
+### Q-E8 — Does the `causedBy` hop limit apply to the user's own re-trigger loops? 🟩 (Round 3)
 Spec 03 §14.3 stops any chain after 16 `causedBy` hops, for every principal, and audits it. That also ends a
 deliberate Streamer.bot-style loop (action A → custom event → A, "repeat until a global flips") after 16 rounds.
 Options: (a) keep the limit for everyone; `While`, timers and queued Run Action are the supported loop forms and the
 UI notice says so (spec default); (b) exempt user-token and system origins from the hop limit and rely on the storm
 guard alone; (c) make the limit a setting with a higher default (for example 64).
 **Recommendation:** (a).
-**Answer:**
+**Answer:** Spec default accepted by the owner on 2026-10-19 (D-039).
