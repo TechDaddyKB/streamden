@@ -37,8 +37,21 @@ Never ask the owner to paste secrets into chat, the repo, the board, or any agen
 - The repo holds specs, contracts, ADRs and docs. Cards link to them and never copy them.
 
 ## Commands
-_Filled in during P0._ The planned toolchain is Rust stable (cargo, clippy, nextest), pnpm + Vite + TypeScript,
-and Tauri 2 CLI. Run the commands in your task's `done_when` and paste their output as evidence.
+Toolchain: Rust 1.99.1 (`rust-toolchain.toml`), Node ≥ 22.12 with pnpm 12 (`packageManager`), Tauri CLI 2
+(`cargo install tauri-cli --version 2.12.3 --locked`). Linux also needs the WebKitGTK 4.1 dev packages.
+
+| Purpose | Command (repo root unless noted) |
+|---|---|
+| First setup (commit hooks: see `CONTRIBUTING.md`) | `pnpm install --frozen-lockfile --ignore-scripts` |
+| Build all Rust crates and apps | `cargo build --workspace` |
+| Build all web packages | `pnpm -r build` |
+| Run the desktop UI (Vite dev server + window) | `cargo tauri dev` in `apps/desktop` |
+| Release build of the desktop UI with `web/ui` embedded | `cargo tauri build` in `apps/desktop` |
+| Lint and format | `cargo clippy --workspace --all-targets -- -D warnings` · `cargo fmt --all --check` · `pnpm -r typecheck` |
+| Tests | `cargo test --workspace` (nextest once Spec 02 tests land) |
+
+Module rules: `crates/AGENTS.md`, `apps/AGENTS.md`, `web/AGENTS.md`. Run the commands in your task's `done_when`
+and paste their output as evidence.
 
 ## Workflow (every agent, every session)
 1. **Start:** `project_summary` for `streamden`, then `project_card_get` for your card (`DEN-<n>`: detail,

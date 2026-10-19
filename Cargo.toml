@@ -1,0 +1,24 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/den-protocol",
+    "crates/den-core",
+    "crates/den-server",
+    "apps/daemon",
+    "apps/desktop",
+]
+# Spikes are throwaway projects with their own lockfiles; never workspace members.
+exclude = ["spikes"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.99"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/TechDaddyKB/streamden"
+publish = false
+
+[workspace.dependencies]
+den-protocol = { path = "crates/den-protocol" }
+den-core = { path = "crates/den-core" }
+den-server = { path = "crates/den-server" }

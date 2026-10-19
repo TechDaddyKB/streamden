@@ -1,0 +1,21 @@
+[package]
+name = "streamden"
+description = "StreamDen desktop UI process (Tauri 2 shell, thin)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[build-dependencies]
+tauri-build = { version = "2.7.3", features = [] }
+
+# UI process only: talks to the engine over the local API like any other client, so it must never
+# depend on den-core or den-server (ADR-0002 S-1 condition 5, D-006).
+[dependencies]
+den-protocol.workspace = true
+tauri = { version = "2.12.4", features = [] }
+# Apache-2.0. Early GL context for WebKitGTK on Wayland + NVIDIA (S-1 level 1); a no-op elsewhere.
+tauri-plugin-wayland-nvidia-quirk = "0.1.0"
+
