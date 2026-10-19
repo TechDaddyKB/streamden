@@ -1098,7 +1098,8 @@ filter and no Action History record. Chat messages are in
 this log; the owner's Q-H1 answer (2026-10-19) governs **chat** retention only: a rolling 24 h by default,
 configurable, plus a separate local chat-history store with a user-defined length up to 120 streams or 120 days,
 owned by spec 08, which prunes `chat.*` entries from this log on that setting. The ceiling of `maxAgeHours` for
-the log as a whole is Q-E9 (§16, §24), not derived from Q-H1.
+the log as a whole is 8,760 h (365 days; Q-E9, answered by the owner on 2026-10-19, D-057; §16, §24), not derived
+from Q-H1.
 
 ### 12.6 Listing runs: order, paging and sources
 
@@ -1479,8 +1480,8 @@ source.
 | `engine.variables.maxValueBytes` | 262144 | 1024–4194304 | §11.4 |
 | `engine.storage.flushMs` | 1000 | 0 (sync) – 10000 | §11.4 |
 | `engine.storage.dailyBackup` | true | boolean | §13.6 |
-| `engine.history.maxRuns` / `maxAgeDays` / `maxSnapshotBytes` / `traceRuns` | 10000 / 7 / 262144 / 200 | 100–1000000 / 1–(Q-E9) / 4096–1048576 / 0–10000 | §12 |
-| `engine.events.maxAgeHours` / `maxCount` | 24 / 50000 | 1–(Q-E9) / 1000–10000000 | §12.5 |
+| `engine.history.maxRuns` / `maxAgeDays` / `maxSnapshotBytes` / `traceRuns` | 10000 / 7 / 262144 / 200 | 100–1000000 / 1–365 / 4096–1048576 / 0–10000 | §12 |
+| `engine.events.maxAgeHours` / `maxCount` | 24 / 50000 | 1–8760 / 1000–10000000 | §12.5 |
 | `engine.shutdown.graceMs` | 5000 | 0–60000 | §10.8 |
 | `engine.action.maxNodes` / `maxDepth` | 2000 / 32 | 50–20000 / 4–64 | §9.13 |
 
@@ -1488,10 +1489,13 @@ The ranges of the `engine.history.*`, `engine.events.*` and `engine.action.*` ro
 `engine.signals.*` row were added in r6 (the earlier revisions gave only their defaults). They are **validator
 bounds** chosen by this spec, not product limits, with one exception: how long a user may keep Action History
 and the event log is a product choice (Q-E4 accepted the **defaults** only; Q-H1 answers **chat** retention
-only), so the upper bounds of `history.maxAgeDays` and `events.maxAgeHours` are **open as Q-E9** (§24) and the
-table shows no number for them. Until the owner answers, the validator enforces only the lower bound of those
-two keys and the implementation cards (DEN-146, DEN-118, DEN-119) carry no upper bound for them; the defaults
-(7 days, 24 h) are unchanged either way. `maxSnapshotBytes` and `maxNodes` bound what is **stored**; transport
+only), so the upper bounds of `history.maxAgeDays` and `events.maxAgeHours` were asked as Q-E9 (§24) and
+**answered by the owner on 2026-10-19 (D-057, recorded by DEN-159): 365 days for both** non-chat stores, so
+`history.maxAgeDays` accepts `1`–`365` and `events.maxAgeHours` accepts `1`–`8760` (365 × 24), both inclusive.
+The defaults (7 days, 24 h) and the count limits (`maxRuns`, `maxCount`) are unchanged, a value above the
+ceiling is rejected like any other out-of-range value (below), and chat retention stays governed separately by
+Q-H1 / D-054 (spec 08, §12.5). The implementation cards (DEN-146, DEN-118, DEN-119) carry these two ceilings
+as plain `maximum` constraints. `maxSnapshotBytes` and `maxNodes` bound what is **stored**; transport
 is bounded separately by the session's message budget (§12.6), which is why their ceilings are plain storage
 limits and the `message_size` warning below is advice. A value outside its range is **rejected, never
 clamped**: `settings.update` fails with `INVALID_PARAMS` and stores nothing, and a stored document with a key
@@ -1917,7 +1921,10 @@ and requires:
     a partial `engine.run` section is `INVALID_PARAMS` while an omitted top-level section keeps its stored values;
     an out-of-range value yields one `fieldErrors` entry per field with the request pointer
     (`/settings/engine/run/maxConcurrent`) while the same field appears as `engine.run.maxConcurrent` in
-    `changed` after a valid write (one fixture shows both), and stores nothing; a stale `revision` is `CONFLICT`;
+    `changed` after a valid write (one fixture shows both), and stores nothing; the retention ceilings are
+    inclusive (`engine.history.maxAgeDays: 365` and `engine.events.maxAgeHours: 8760` are stored, `366` and
+    `8761` fail with `/settings/engine/history/maxAgeDays` / `/settings/engine/events/maxAgeHours` and are
+    never clamped, D-057); a stale `revision` is `CONFLICT`;
     **concurrent writers** (forced interleaving): two unconditional updates, and two updates with the same
     explicit `revision`, never both succeed against one stored revision, commit, apply and publish in revision
     order, and the effective configuration never shows an older revision than the stored one; a storage failure
@@ -2024,11 +2031,12 @@ cards DEN-69 and DEN-118):
 
 Q-E1–Q-E8 were answered by the owner on 2026-10-19 with the spec defaults (D-039); the list is kept as the record
 of what was asked. The eight DEN-65 gaps were engineering decisions, taken in §7.1, §10.2, §10.3, §12.6, §15, §16
-and §19; r6 raised one product question, Q-E9.
+and §19; r6 raised one product question, Q-E9, answered by the owner on 2026-10-19 (D-057).
 
 - **Q-E9:** the upper bound a user may set for `engine.history.maxAgeDays` and `engine.events.maxAgeHours`
-  (Action History and the event log for non-chat data; Q-E4 accepted the defaults, Q-H1 covers chat only). Spec
-  default until answered: only the lower bound is validated (§16).
+  (Action History and the event log for non-chat data; Q-E4 accepted the defaults, Q-H1 covers chat only).
+  Answered: option (a), **365 days** for both (`maxAgeDays` ≤ 365, `maxAgeHours` ≤ 8760); defaults and count
+  limits unchanged, chat retention stays Q-H1 / D-054 (§16, D-057, recorded by DEN-159).
 
 - **Q-E1:** should queued runs survive a restart (durable queues)? Spec default: no (§10.8).
 - **Q-E2:** should a failed sub-action stop the run by default? Spec default: yes, `onError: stop` (§9.10).
@@ -2144,7 +2152,7 @@ grammar"; signals are implemented as operations rather than new `Node` kinds so 
 - **r6** (DEN-68, the gaps found while slicing Spec 03 into engine cards, DEN-65):
   1. Settings → §16 rewritten around the `Settings { engine: EngineSettings }` document (spec 02 §6.5, A14):
      dotted keys as JSON paths, the missing ranges filled as validator bounds (reject, never clamp; defaults
-     unchanged; the DEN-67/DEN-146 handoff; the two retention ceilings left to Q-E9), `x-den-restart`, `settings.get` / `settings.update`
+     unchanged; the DEN-67/DEN-146 handoff; the two retention ceilings left to Q-E9 until Round 5), `x-den-restart`, `settings.get` / `settings.update`
      (whole document, every field required, `CONFLICT` on a stale revision, hot-apply and restart reporting,
      warnings, dry-run diff), `settings.updated`, startup fallback to defaults; §13.2 fixed id; §15 rows; §17;
      §22.13.
@@ -2198,6 +2206,10 @@ grammar"; signals are implemented as operations rather than new `Node` kinds so 
   (§12.1, §12.6, §22.6); R3-2 the §16 introduction no longer lists `fieldErrors[].path` among the dotted-key
   users: dotted document keys are reserved for the result lists, warnings, diff and event, and
   `fieldErrors[].path` is the request JSON Pointer (§16).
+  **Round 5** (the owner's Q-E9 answer of 2026-10-19, D-057, recorded by DEN-159): the two retention ceilings
+  filled in as validator bounds, `engine.history.maxAgeDays` 1–365 and `engine.events.maxAgeHours` 1–8760,
+  inclusive, rejected above like every other range; defaults, count limits and the Q-H1 / D-054 chat policy
+  unchanged; the interim lower-bound-only rule withdrawn (§12.5, §16, §22.13, §24). No other text changed.
   Owner answers applied: Q-E1–Q-E8 marked confirmed (D-039) where the text asked for confirmation (§6.3, §7.1,
   §9.5, §9.10, §10.8, §12.2, §24); the Q-H1 and Q-C5 answers of 2026-10-19 recorded where §12.5 and §13.6
   deferred to them (no behaviour change here; spec 08 owns the chat history store). Cards DEN-69, 70, 77, 82, 93,
