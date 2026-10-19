@@ -1,0 +1,81 @@
+.page {
+  min-height: 100vh;
+  margin: 0;
+  padding: 32px 24px;
+  background: #0b1017;
+  color: #e7eef8;
+  font-family: "Liberation Sans", "Nimbus Sans", sans-serif;
+  font-size: 16px;
+}
+
+.layout {
+  width: min(720px, 100%);
+  margin: 0 auto;
+}
+
+.kicker {
+  margin: 0 0 4px;
+  color: #8ea0b8;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 0 0 8px;
+  font-size: 28px;
+  font-weight: 650;
+}
+
+.lede {
+  margin: 0 0 20px;
+  color: #b7c6da;
+}
+
+.add {
+  border: 0;
+  border-radius: 8px;
+  background: #3d7eff;
+  color: #f7fbff;
+  font: inherit;
+  font-weight: 650;
+  padding: 8px 14px;
+  cursor: pointer;
+}
+
+.add:focus-visible {
+  outline: 2px solid #c5d8ff;
+  outline-offset: 2px;
+}
+
+.added {
+  margin-top: 20px;
+}
+
+.added h2 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 650;
+  color: #b7c6da;
+}
+
+.list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chip {
+  border: 1px solid #2a384c;
+  border-radius: 999px;
+  background: #162033;
+  padding: 4px 10px;
+  font-size: 13px;
+}
+
+.empty {
+  color: #8ea0b8;
+}

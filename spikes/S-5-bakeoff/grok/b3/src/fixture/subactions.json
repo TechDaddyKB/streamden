@@ -1,0 +1,1811 @@
+[
+  {
+    "id": "core.logic.if-else",
+    "name": "If / Else",
+    "category": [
+      "Core",
+      "Logic"
+    ],
+    "description": "If / Else in Core / Logic."
+  },
+  {
+    "id": "core.logic.switch",
+    "name": "Switch",
+    "category": [
+      "Core",
+      "Logic"
+    ],
+    "description": "Switch in Core / Logic."
+  },
+  {
+    "id": "core.logic.while",
+    "name": "While",
+    "category": [
+      "Core",
+      "Logic"
+    ],
+    "description": "While in Core / Logic."
+  },
+  {
+    "id": "core.logic.break",
+    "name": "Break",
+    "category": [
+      "Core",
+      "Logic"
+    ],
+    "description": "Break in Core / Logic."
+  },
+  {
+    "id": "core.logic.loop-continue",
+    "name": "Loop Continue",
+    "category": [
+      "Core",
+      "Logic"
+    ],
+    "description": "Loop Continue in Core / Logic."
+  },
+  {
+    "id": "core.logic.delay",
+    "name": "Delay",
+    "category": [
+      "Core",
+      "Logic"
+    ],
+    "description": "Delay in Core / Logic."
+  },
+  {
+    "id": "core.logic.comment",
+    "name": "Comment",
+    "category": [
+      "Core",
+      "Logic"
+    ],
+    "description": "Comment in Core / Logic."
+  },
+  {
+    "id": "core.logic.random",
+    "name": "Random",
+    "category": [
+      "Core",
+      "Logic"
+    ],
+    "description": "Random in Core / Logic."
+  },
+  {
+    "id": "core.logic.group",
+    "name": "Group",
+    "category": [
+      "Core",
+      "Logic"
+    ],
+    "description": "Group in Core / Logic."
+  },
+  {
+    "id": "core.logic.set-weight",
+    "name": "Set Weight",
+    "category": [
+      "Core",
+      "Logic"
+    ],
+    "description": "Set Weight in Core / Logic."
+  },
+  {
+    "id": "core.logic.evaluate-expression",
+    "name": "Evaluate Expression",
+    "category": [
+      "Core",
+      "Logic"
+    ],
+    "description": "Evaluate Expression in Core / Logic."
+  },
+  {
+    "id": "core.logic.wait",
+    "name": "Wait",
+    "category": [
+      "Core",
+      "Logic"
+    ],
+    "description": "Wait in Core / Logic."
+  },
+  {
+    "id": "core.actions.run-action",
+    "name": "Run Action",
+    "category": [
+      "Core",
+      "Actions"
+    ],
+    "description": "Run Action in Core / Actions."
+  },
+  {
+    "id": "core.actions.stop-action",
+    "name": "Stop Action",
+    "category": [
+      "Core",
+      "Actions"
+    ],
+    "description": "Stop Action in Core / Actions."
+  },
+  {
+    "id": "core.actions.enable-action",
+    "name": "Enable Action",
+    "category": [
+      "Core",
+      "Actions"
+    ],
+    "description": "Enable Action in Core / Actions."
+  },
+  {
+    "id": "core.actions.disable-action",
+    "name": "Disable Action",
+    "category": [
+      "Core",
+      "Actions"
+    ],
+    "description": "Disable Action in Core / Actions."
+  },
+  {
+    "id": "core.actions.get-action-state",
+    "name": "Get Action State",
+    "category": [
+      "Core",
+      "Actions"
+    ],
+    "description": "Get Action State in Core / Actions."
+  },
+  {
+    "id": "core.actions.duplicate-action",
+    "name": "Duplicate Action",
+    "category": [
+      "Core",
+      "Actions"
+    ],
+    "description": "Duplicate Action in Core / Actions."
+  },
+  {
+    "id": "core.actions.run-action-inline",
+    "name": "Run Action Inline",
+    "category": [
+      "Core",
+      "Actions"
+    ],
+    "description": "Run Action Inline in Core / Actions."
+  },
+  {
+    "id": "core.actions.queue-action",
+    "name": "Queue Action",
+    "category": [
+      "Core",
+      "Actions"
+    ],
+    "description": "Queue Action in Core / Actions."
+  },
+  {
+    "id": "core.arguments.set-argument",
+    "name": "Set Argument",
+    "category": [
+      "Core",
+      "Arguments"
+    ],
+    "description": "Set Argument in Core / Arguments."
+  },
+  {
+    "id": "core.arguments.unset-argument",
+    "name": "Unset Argument",
+    "category": [
+      "Core",
+      "Arguments"
+    ],
+    "description": "Unset Argument in Core / Arguments."
+  },
+  {
+    "id": "core.arguments.get-argument",
+    "name": "Get Argument",
+    "category": [
+      "Core",
+      "Arguments"
+    ],
+    "description": "Get Argument in Core / Arguments."
+  },
+  {
+    "id": "core.arguments.increment-argument",
+    "name": "Increment Argument",
+    "category": [
+      "Core",
+      "Arguments"
+    ],
+    "description": "Increment Argument in Core / Arguments."
+  },
+  {
+    "id": "core.arguments.set-argument-if-missing",
+    "name": "Set Argument If Missing",
+    "category": [
+      "Core",
+      "Arguments"
+    ],
+    "description": "Set Argument If Missing in Core / Arguments."
+  },
+  {
+    "id": "core.arguments.copy-argument",
+    "name": "Copy Argument",
+    "category": [
+      "Core",
+      "Arguments"
+    ],
+    "description": "Copy Argument in Core / Arguments."
+  },
+  {
+    "id": "core.globals.set-global",
+    "name": "Set Global",
+    "category": [
+      "Core",
+      "Globals"
+    ],
+    "description": "Set Global in Core / Globals."
+  },
+  {
+    "id": "core.globals.get-global",
+    "name": "Get Global",
+    "category": [
+      "Core",
+      "Globals"
+    ],
+    "description": "Get Global in Core / Globals."
+  },
+  {
+    "id": "core.globals.unset-global",
+    "name": "Unset Global",
+    "category": [
+      "Core",
+      "Globals"
+    ],
+    "description": "Unset Global in Core / Globals."
+  },
+  {
+    "id": "core.globals.increment-global",
+    "name": "Increment Global",
+    "category": [
+      "Core",
+      "Globals"
+    ],
+    "description": "Increment Global in Core / Globals."
+  },
+  {
+    "id": "core.globals.persist-global",
+    "name": "Persist Global",
+    "category": [
+      "Core",
+      "Globals"
+    ],
+    "description": "Persist Global in Core / Globals."
+  },
+  {
+    "id": "core.globals.set-user-global",
+    "name": "Set User Global",
+    "category": [
+      "Core",
+      "Globals"
+    ],
+    "description": "Set User Global in Core / Globals."
+  },
+  {
+    "id": "core.queues.pause-queue",
+    "name": "Pause Queue",
+    "category": [
+      "Core",
+      "Queues"
+    ],
+    "description": "Pause Queue in Core / Queues."
+  },
+  {
+    "id": "core.queues.resume-queue",
+    "name": "Resume Queue",
+    "category": [
+      "Core",
+      "Queues"
+    ],
+    "description": "Resume Queue in Core / Queues."
+  },
+  {
+    "id": "core.queues.clear-queue",
+    "name": "Clear Queue",
+    "category": [
+      "Core",
+      "Queues"
+    ],
+    "description": "Clear Queue in Core / Queues."
+  },
+  {
+    "id": "core.queues.set-queue-blocking",
+    "name": "Set Queue Blocking",
+    "category": [
+      "Core",
+      "Queues"
+    ],
+    "description": "Set Queue Blocking in Core / Queues."
+  },
+  {
+    "id": "core.queues.get-queue-pending-count",
+    "name": "Get Queue Pending Count",
+    "category": [
+      "Core",
+      "Queues"
+    ],
+    "description": "Get Queue Pending Count in Core / Queues."
+  },
+  {
+    "id": "core.queues.pause-all-queues",
+    "name": "Pause All Queues",
+    "category": [
+      "Core",
+      "Queues"
+    ],
+    "description": "Pause All Queues in Core / Queues."
+  },
+  {
+    "id": "core.files.read-file",
+    "name": "Read File",
+    "category": [
+      "Core",
+      "Files"
+    ],
+    "description": "Read File in Core / Files."
+  },
+  {
+    "id": "core.files.write-file",
+    "name": "Write File",
+    "category": [
+      "Core",
+      "Files"
+    ],
+    "description": "Write File in Core / Files."
+  },
+  {
+    "id": "core.files.append-file",
+    "name": "Append File",
+    "category": [
+      "Core",
+      "Files"
+    ],
+    "description": "Append File in Core / Files."
+  },
+  {
+    "id": "core.files.tail-file",
+    "name": "Tail File",
+    "category": [
+      "Core",
+      "Files"
+    ],
+    "description": "Tail File in Core / Files."
+  },
+  {
+    "id": "core.files.watch-file",
+    "name": "Watch File",
+    "category": [
+      "Core",
+      "Files"
+    ],
+    "description": "Watch File in Core / Files."
+  },
+  {
+    "id": "core.files.delete-file",
+    "name": "Delete File",
+    "category": [
+      "Core",
+      "Files"
+    ],
+    "description": "Delete File in Core / Files."
+  },
+  {
+    "id": "core.network.http-request",
+    "name": "HTTP Request",
+    "category": [
+      "Core",
+      "Network"
+    ],
+    "description": "HTTP Request in Core / Network."
+  },
+  {
+    "id": "core.network.websocket-send",
+    "name": "WebSocket Send",
+    "category": [
+      "Core",
+      "Network"
+    ],
+    "description": "WebSocket Send in Core / Network."
+  },
+  {
+    "id": "core.network.udp-send",
+    "name": "UDP Send",
+    "category": [
+      "Core",
+      "Network"
+    ],
+    "description": "UDP Send in Core / Network."
+  },
+  {
+    "id": "core.network.open-websocket",
+    "name": "Open WebSocket",
+    "category": [
+      "Core",
+      "Network"
+    ],
+    "description": "Open WebSocket in Core / Network."
+  },
+  {
+    "id": "core.network.close-websocket",
+    "name": "Close WebSocket",
+    "category": [
+      "Core",
+      "Network"
+    ],
+    "description": "Close WebSocket in Core / Network."
+  },
+  {
+    "id": "core.network.http-download",
+    "name": "HTTP Download",
+    "category": [
+      "Core",
+      "Network"
+    ],
+    "description": "HTTP Download in Core / Network."
+  },
+  {
+    "id": "core.system.play-sound",
+    "name": "Play Sound",
+    "category": [
+      "Core",
+      "System"
+    ],
+    "description": "Play Sound in Core / System."
+  },
+  {
+    "id": "core.system.text-to-speech",
+    "name": "Text to Speech",
+    "category": [
+      "Core",
+      "System"
+    ],
+    "description": "Text to Speech in Core / System."
+  },
+  {
+    "id": "core.system.show-toast",
+    "name": "Show Toast",
+    "category": [
+      "Core",
+      "System"
+    ],
+    "description": "Show Toast in Core / System."
+  },
+  {
+    "id": "core.system.run-process",
+    "name": "Run Process",
+    "category": [
+      "Core",
+      "System"
+    ],
+    "description": "Run Process in Core / System."
+  },
+  {
+    "id": "core.system.clipboard-set",
+    "name": "Clipboard Set",
+    "category": [
+      "Core",
+      "System"
+    ],
+    "description": "Clipboard Set in Core / System."
+  },
+  {
+    "id": "core.system.open-url",
+    "name": "Open URL",
+    "category": [
+      "Core",
+      "System"
+    ],
+    "description": "Open URL in Core / System."
+  },
+  {
+    "id": "core.timers.start-timer",
+    "name": "Start Timer",
+    "category": [
+      "Core",
+      "Timers"
+    ],
+    "description": "Start Timer in Core / Timers."
+  },
+  {
+    "id": "core.timers.stop-timer",
+    "name": "Stop Timer",
+    "category": [
+      "Core",
+      "Timers"
+    ],
+    "description": "Stop Timer in Core / Timers."
+  },
+  {
+    "id": "core.timers.reset-timer",
+    "name": "Reset Timer",
+    "category": [
+      "Core",
+      "Timers"
+    ],
+    "description": "Reset Timer in Core / Timers."
+  },
+  {
+    "id": "core.timers.set-timer-interval",
+    "name": "Set Timer Interval",
+    "category": [
+      "Core",
+      "Timers"
+    ],
+    "description": "Set Timer Interval in Core / Timers."
+  },
+  {
+    "id": "core.users.get-user-info",
+    "name": "Get User Info",
+    "category": [
+      "Core",
+      "Users"
+    ],
+    "description": "Get User Info in Core / Users."
+  },
+  {
+    "id": "core.users.set-user-group",
+    "name": "Set User Group",
+    "category": [
+      "Core",
+      "Users"
+    ],
+    "description": "Set User Group in Core / Users."
+  },
+  {
+    "id": "core.users.add-user-to-group",
+    "name": "Add User to Group",
+    "category": [
+      "Core",
+      "Users"
+    ],
+    "description": "Add User to Group in Core / Users."
+  },
+  {
+    "id": "core.users.remove-user-from-group",
+    "name": "Remove User from Group",
+    "category": [
+      "Core",
+      "Users"
+    ],
+    "description": "Remove User from Group in Core / Users."
+  },
+  {
+    "id": "core.commands.add-command",
+    "name": "Add Command",
+    "category": [
+      "Core",
+      "Commands"
+    ],
+    "description": "Add Command in Core / Commands."
+  },
+  {
+    "id": "core.commands.remove-command",
+    "name": "Remove Command",
+    "category": [
+      "Core",
+      "Commands"
+    ],
+    "description": "Remove Command in Core / Commands."
+  },
+  {
+    "id": "core.commands.enable-command",
+    "name": "Enable Command",
+    "category": [
+      "Core",
+      "Commands"
+    ],
+    "description": "Enable Command in Core / Commands."
+  },
+  {
+    "id": "core.commands.disable-command",
+    "name": "Disable Command",
+    "category": [
+      "Core",
+      "Commands"
+    ],
+    "description": "Disable Command in Core / Commands."
+  },
+  {
+    "id": "core.commands.set-command-cooldown",
+    "name": "Set Command Cooldown",
+    "category": [
+      "Core",
+      "Commands"
+    ],
+    "description": "Set Command Cooldown in Core / Commands."
+  },
+  {
+    "id": "core.commands.get-command-state",
+    "name": "Get Command State",
+    "category": [
+      "Core",
+      "Commands"
+    ],
+    "description": "Get Command State in Core / Commands."
+  },
+  {
+    "id": "core.quotes.add-quote",
+    "name": "Add Quote",
+    "category": [
+      "Core",
+      "Quotes"
+    ],
+    "description": "Add Quote in Core / Quotes."
+  },
+  {
+    "id": "core.quotes.get-quote",
+    "name": "Get Quote",
+    "category": [
+      "Core",
+      "Quotes"
+    ],
+    "description": "Get Quote in Core / Quotes."
+  },
+  {
+    "id": "core.quotes.delete-quote",
+    "name": "Delete Quote",
+    "category": [
+      "Core",
+      "Quotes"
+    ],
+    "description": "Delete Quote in Core / Quotes."
+  },
+  {
+    "id": "core.quotes.edit-quote",
+    "name": "Edit Quote",
+    "category": [
+      "Core",
+      "Quotes"
+    ],
+    "description": "Edit Quote in Core / Quotes."
+  },
+  {
+    "id": "core.midi.send-midi-note",
+    "name": "Send MIDI Note",
+    "category": [
+      "Core",
+      "MIDI"
+    ],
+    "description": "Send MIDI Note in Core / MIDI."
+  },
+  {
+    "id": "core.midi.send-midi-cc",
+    "name": "Send MIDI CC",
+    "category": [
+      "Core",
+      "MIDI"
+    ],
+    "description": "Send MIDI CC in Core / MIDI."
+  },
+  {
+    "id": "core.midi.all-notes-off",
+    "name": "All Notes Off",
+    "category": [
+      "Core",
+      "MIDI"
+    ],
+    "description": "All Notes Off in Core / MIDI."
+  },
+  {
+    "id": "twitch.chat.send-message",
+    "name": "Send Message",
+    "category": [
+      "Twitch",
+      "Chat"
+    ],
+    "description": "Send Message in Twitch / Chat."
+  },
+  {
+    "id": "twitch.chat.send-announcement",
+    "name": "Send Announcement",
+    "category": [
+      "Twitch",
+      "Chat"
+    ],
+    "description": "Send Announcement in Twitch / Chat."
+  },
+  {
+    "id": "twitch.chat.send-reply",
+    "name": "Send Reply",
+    "category": [
+      "Twitch",
+      "Chat"
+    ],
+    "description": "Send Reply in Twitch / Chat."
+  },
+  {
+    "id": "twitch.chat.delete-message",
+    "name": "Delete Message",
+    "category": [
+      "Twitch",
+      "Chat"
+    ],
+    "description": "Delete Message in Twitch / Chat."
+  },
+  {
+    "id": "twitch.chat.clear-chat",
+    "name": "Clear Chat",
+    "category": [
+      "Twitch",
+      "Chat"
+    ],
+    "description": "Clear Chat in Twitch / Chat."
+  },
+  {
+    "id": "twitch.chat.send-whisper",
+    "name": "Send Whisper",
+    "category": [
+      "Twitch",
+      "Chat"
+    ],
+    "description": "Send Whisper in Twitch / Chat."
+  },
+  {
+    "id": "twitch.chat.set-emote-mode",
+    "name": "Set Emote Mode",
+    "category": [
+      "Twitch",
+      "Chat"
+    ],
+    "description": "Set Emote Mode in Twitch / Chat."
+  },
+  {
+    "id": "twitch.chat.set-slow-mode",
+    "name": "Set Slow Mode",
+    "category": [
+      "Twitch",
+      "Chat"
+    ],
+    "description": "Set Slow Mode in Twitch / Chat."
+  },
+  {
+    "id": "twitch.chat.set-follower-mode",
+    "name": "Set Follower Mode",
+    "category": [
+      "Twitch",
+      "Chat"
+    ],
+    "description": "Set Follower Mode in Twitch / Chat."
+  },
+  {
+    "id": "twitch.chat.timeout-user",
+    "name": "Timeout User",
+    "category": [
+      "Twitch",
+      "Chat"
+    ],
+    "description": "Timeout User in Twitch / Chat."
+  },
+  {
+    "id": "twitch.channel.update-title",
+    "name": "Update Title",
+    "category": [
+      "Twitch",
+      "Channel"
+    ],
+    "description": "Update Title in Twitch / Channel."
+  },
+  {
+    "id": "twitch.channel.update-category",
+    "name": "Update Category",
+    "category": [
+      "Twitch",
+      "Channel"
+    ],
+    "description": "Update Category in Twitch / Channel."
+  },
+  {
+    "id": "twitch.channel.set-stream-marker",
+    "name": "Set Stream Marker",
+    "category": [
+      "Twitch",
+      "Channel"
+    ],
+    "description": "Set Stream Marker in Twitch / Channel."
+  },
+  {
+    "id": "twitch.channel.create-clip",
+    "name": "Create Clip",
+    "category": [
+      "Twitch",
+      "Channel"
+    ],
+    "description": "Create Clip in Twitch / Channel."
+  },
+  {
+    "id": "twitch.channel.get-follower-count",
+    "name": "Get Follower Count",
+    "category": [
+      "Twitch",
+      "Channel"
+    ],
+    "description": "Get Follower Count in Twitch / Channel."
+  },
+  {
+    "id": "twitch.channel.set-stream-language",
+    "name": "Set Stream Language",
+    "category": [
+      "Twitch",
+      "Channel"
+    ],
+    "description": "Set Stream Language in Twitch / Channel."
+  },
+  {
+    "id": "twitch.channel.set-stream-tags",
+    "name": "Set Stream Tags",
+    "category": [
+      "Twitch",
+      "Channel"
+    ],
+    "description": "Set Stream Tags in Twitch / Channel."
+  },
+  {
+    "id": "twitch.channel.run-commercial",
+    "name": "Run Commercial",
+    "category": [
+      "Twitch",
+      "Channel"
+    ],
+    "description": "Run Commercial in Twitch / Channel."
+  },
+  {
+    "id": "twitch.moderation.ban-user",
+    "name": "Ban User",
+    "category": [
+      "Twitch",
+      "Moderation"
+    ],
+    "description": "Ban User in Twitch / Moderation."
+  },
+  {
+    "id": "twitch.moderation.unban-user",
+    "name": "Unban User",
+    "category": [
+      "Twitch",
+      "Moderation"
+    ],
+    "description": "Unban User in Twitch / Moderation."
+  },
+  {
+    "id": "twitch.moderation.untimeout-user",
+    "name": "Untimeout User",
+    "category": [
+      "Twitch",
+      "Moderation"
+    ],
+    "description": "Untimeout User in Twitch / Moderation."
+  },
+  {
+    "id": "twitch.moderation.add-blocked-term",
+    "name": "Add Blocked Term",
+    "category": [
+      "Twitch",
+      "Moderation"
+    ],
+    "description": "Add Blocked Term in Twitch / Moderation."
+  },
+  {
+    "id": "twitch.moderation.remove-blocked-term",
+    "name": "Remove Blocked Term",
+    "category": [
+      "Twitch",
+      "Moderation"
+    ],
+    "description": "Remove Blocked Term in Twitch / Moderation."
+  },
+  {
+    "id": "twitch.moderation.warn-user",
+    "name": "Warn User",
+    "category": [
+      "Twitch",
+      "Moderation"
+    ],
+    "description": "Warn User in Twitch / Moderation."
+  },
+  {
+    "id": "twitch.moderation.shield-mode",
+    "name": "Shield Mode",
+    "category": [
+      "Twitch",
+      "Moderation"
+    ],
+    "description": "Shield Mode in Twitch / Moderation."
+  },
+  {
+    "id": "twitch.moderation.clear-chat-messages",
+    "name": "Clear Chat Messages",
+    "category": [
+      "Twitch",
+      "Moderation"
+    ],
+    "description": "Clear Chat Messages in Twitch / Moderation."
+  },
+  {
+    "id": "twitch.rewards.create-reward",
+    "name": "Create Reward",
+    "category": [
+      "Twitch",
+      "Rewards"
+    ],
+    "description": "Create Reward in Twitch / Rewards."
+  },
+  {
+    "id": "twitch.rewards.update-reward",
+    "name": "Update Reward",
+    "category": [
+      "Twitch",
+      "Rewards"
+    ],
+    "description": "Update Reward in Twitch / Rewards."
+  },
+  {
+    "id": "twitch.rewards.delete-reward",
+    "name": "Delete Reward",
+    "category": [
+      "Twitch",
+      "Rewards"
+    ],
+    "description": "Delete Reward in Twitch / Rewards."
+  },
+  {
+    "id": "twitch.rewards.fulfill-redemption",
+    "name": "Fulfill Redemption",
+    "category": [
+      "Twitch",
+      "Rewards"
+    ],
+    "description": "Fulfill Redemption in Twitch / Rewards."
+  },
+  {
+    "id": "twitch.rewards.cancel-redemption",
+    "name": "Cancel Redemption",
+    "category": [
+      "Twitch",
+      "Rewards"
+    ],
+    "description": "Cancel Redemption in Twitch / Rewards."
+  },
+  {
+    "id": "twitch.rewards.pause-rewards",
+    "name": "Pause Rewards",
+    "category": [
+      "Twitch",
+      "Rewards"
+    ],
+    "description": "Pause Rewards in Twitch / Rewards."
+  },
+  {
+    "id": "twitch.polls.create-poll",
+    "name": "Create Poll",
+    "category": [
+      "Twitch",
+      "Polls"
+    ],
+    "description": "Create Poll in Twitch / Polls."
+  },
+  {
+    "id": "twitch.polls.end-poll",
+    "name": "End Poll",
+    "category": [
+      "Twitch",
+      "Polls"
+    ],
+    "description": "End Poll in Twitch / Polls."
+  },
+  {
+    "id": "twitch.polls.archive-poll",
+    "name": "Archive Poll",
+    "category": [
+      "Twitch",
+      "Polls"
+    ],
+    "description": "Archive Poll in Twitch / Polls."
+  },
+  {
+    "id": "twitch.polls.get-poll",
+    "name": "Get Poll",
+    "category": [
+      "Twitch",
+      "Polls"
+    ],
+    "description": "Get Poll in Twitch / Polls."
+  },
+  {
+    "id": "twitch.polls.terminate-poll",
+    "name": "Terminate Poll",
+    "category": [
+      "Twitch",
+      "Polls"
+    ],
+    "description": "Terminate Poll in Twitch / Polls."
+  },
+  {
+    "id": "twitch.predictions.create-prediction",
+    "name": "Create Prediction",
+    "category": [
+      "Twitch",
+      "Predictions"
+    ],
+    "description": "Create Prediction in Twitch / Predictions."
+  },
+  {
+    "id": "twitch.predictions.lock-prediction",
+    "name": "Lock Prediction",
+    "category": [
+      "Twitch",
+      "Predictions"
+    ],
+    "description": "Lock Prediction in Twitch / Predictions."
+  },
+  {
+    "id": "twitch.predictions.resolve-prediction",
+    "name": "Resolve Prediction",
+    "category": [
+      "Twitch",
+      "Predictions"
+    ],
+    "description": "Resolve Prediction in Twitch / Predictions."
+  },
+  {
+    "id": "twitch.predictions.cancel-prediction",
+    "name": "Cancel Prediction",
+    "category": [
+      "Twitch",
+      "Predictions"
+    ],
+    "description": "Cancel Prediction in Twitch / Predictions."
+  },
+  {
+    "id": "twitch.predictions.get-prediction",
+    "name": "Get Prediction",
+    "category": [
+      "Twitch",
+      "Predictions"
+    ],
+    "description": "Get Prediction in Twitch / Predictions."
+  },
+  {
+    "id": "twitch.raids.start-raid",
+    "name": "Start Raid",
+    "category": [
+      "Twitch",
+      "Raids"
+    ],
+    "description": "Start Raid in Twitch / Raids."
+  },
+  {
+    "id": "twitch.raids.cancel-raid",
+    "name": "Cancel Raid",
+    "category": [
+      "Twitch",
+      "Raids"
+    ],
+    "description": "Cancel Raid in Twitch / Raids."
+  },
+  {
+    "id": "twitch.raids.send-shoutout",
+    "name": "Send Shoutout",
+    "category": [
+      "Twitch",
+      "Raids"
+    ],
+    "description": "Send Shoutout in Twitch / Raids."
+  },
+  {
+    "id": "twitch.raids.welcome-incoming-raid",
+    "name": "Welcome Incoming Raid",
+    "category": [
+      "Twitch",
+      "Raids"
+    ],
+    "description": "Welcome Incoming Raid in Twitch / Raids."
+  },
+  {
+    "id": "twitch.subscriptions.get-subscriber-count",
+    "name": "Get Subscriber Count",
+    "category": [
+      "Twitch",
+      "Subscriptions"
+    ],
+    "description": "Get Subscriber Count in Twitch / Subscriptions."
+  },
+  {
+    "id": "twitch.subscriptions.check-subscription",
+    "name": "Check Subscription",
+    "category": [
+      "Twitch",
+      "Subscriptions"
+    ],
+    "description": "Check Subscription in Twitch / Subscriptions."
+  },
+  {
+    "id": "twitch.subscriptions.set-sub-only",
+    "name": "Set Sub Only",
+    "category": [
+      "Twitch",
+      "Subscriptions"
+    ],
+    "description": "Set Sub Only in Twitch / Subscriptions."
+  },
+  {
+    "id": "twitch.subscriptions.gift-sub-thanks",
+    "name": "Gift Sub Thanks",
+    "category": [
+      "Twitch",
+      "Subscriptions"
+    ],
+    "description": "Gift Sub Thanks in Twitch / Subscriptions."
+  },
+  {
+    "id": "twitch.subscriptions.sub-counter-add",
+    "name": "Sub Counter Add",
+    "category": [
+      "Twitch",
+      "Subscriptions"
+    ],
+    "description": "Sub Counter Add in Twitch / Subscriptions."
+  },
+  {
+    "id": "twitch.ads.start-ad",
+    "name": "Start Ad",
+    "category": [
+      "Twitch",
+      "Ads"
+    ],
+    "description": "Start Ad in Twitch / Ads."
+  },
+  {
+    "id": "twitch.ads.snooze-ad",
+    "name": "Snooze Ad",
+    "category": [
+      "Twitch",
+      "Ads"
+    ],
+    "description": "Snooze Ad in Twitch / Ads."
+  },
+  {
+    "id": "twitch.ads.get-ad-schedule",
+    "name": "Get Ad Schedule",
+    "category": [
+      "Twitch",
+      "Ads"
+    ],
+    "description": "Get Ad Schedule in Twitch / Ads."
+  },
+  {
+    "id": "twitch.ads.set-ad-snooze",
+    "name": "Set Ad Snooze",
+    "category": [
+      "Twitch",
+      "Ads"
+    ],
+    "description": "Set Ad Snooze in Twitch / Ads."
+  },
+  {
+    "id": "twitch.charity.get-charity-campaign",
+    "name": "Get Charity Campaign",
+    "category": [
+      "Twitch",
+      "Charity"
+    ],
+    "description": "Get Charity Campaign in Twitch / Charity."
+  },
+  {
+    "id": "twitch.charity.set-charity-goal",
+    "name": "Set Charity Goal",
+    "category": [
+      "Twitch",
+      "Charity"
+    ],
+    "description": "Set Charity Goal in Twitch / Charity."
+  },
+  {
+    "id": "twitch.charity.announce-charity",
+    "name": "Announce Charity",
+    "category": [
+      "Twitch",
+      "Charity"
+    ],
+    "description": "Announce Charity in Twitch / Charity."
+  },
+  {
+    "id": "twitch.guest-star.invite-guest",
+    "name": "Invite Guest",
+    "category": [
+      "Twitch",
+      "Guest Star"
+    ],
+    "description": "Invite Guest in Twitch / Guest Star."
+  },
+  {
+    "id": "twitch.guest-star.remove-guest",
+    "name": "Remove Guest",
+    "category": [
+      "Twitch",
+      "Guest Star"
+    ],
+    "description": "Remove Guest in Twitch / Guest Star."
+  },
+  {
+    "id": "twitch.guest-star.set-guest-volume",
+    "name": "Set Guest Volume",
+    "category": [
+      "Twitch",
+      "Guest Star"
+    ],
+    "description": "Set Guest Volume in Twitch / Guest Star."
+  },
+  {
+    "id": "twitch.guest-star.move-guest-slot",
+    "name": "Move Guest Slot",
+    "category": [
+      "Twitch",
+      "Guest Star"
+    ],
+    "description": "Move Guest Slot in Twitch / Guest Star."
+  },
+  {
+    "id": "youtube.chat.send-message",
+    "name": "Send Message",
+    "category": [
+      "YouTube",
+      "Chat"
+    ],
+    "description": "Send Message in YouTube / Chat."
+  },
+  {
+    "id": "youtube.chat.delete-message",
+    "name": "Delete Message",
+    "category": [
+      "YouTube",
+      "Chat"
+    ],
+    "description": "Delete Message in YouTube / Chat."
+  },
+  {
+    "id": "youtube.chat.timeout-user",
+    "name": "Timeout User",
+    "category": [
+      "YouTube",
+      "Chat"
+    ],
+    "description": "Timeout User in YouTube / Chat."
+  },
+  {
+    "id": "youtube.chat.set-slow-mode",
+    "name": "Set Slow Mode",
+    "category": [
+      "YouTube",
+      "Chat"
+    ],
+    "description": "Set Slow Mode in YouTube / Chat."
+  },
+  {
+    "id": "youtube.chat.pin-message",
+    "name": "Pin Message",
+    "category": [
+      "YouTube",
+      "Chat"
+    ],
+    "description": "Pin Message in YouTube / Chat."
+  },
+  {
+    "id": "youtube.chat.reply-to-super-thanks",
+    "name": "Reply to Super Thanks",
+    "category": [
+      "YouTube",
+      "Chat"
+    ],
+    "description": "Reply to Super Thanks in YouTube / Chat."
+  },
+  {
+    "id": "youtube.broadcast.update-title",
+    "name": "Update Title",
+    "category": [
+      "YouTube",
+      "Broadcast"
+    ],
+    "description": "Update Title in YouTube / Broadcast."
+  },
+  {
+    "id": "youtube.broadcast.update-description",
+    "name": "Update Description",
+    "category": [
+      "YouTube",
+      "Broadcast"
+    ],
+    "description": "Update Description in YouTube / Broadcast."
+  },
+  {
+    "id": "youtube.broadcast.set-category",
+    "name": "Set Category",
+    "category": [
+      "YouTube",
+      "Broadcast"
+    ],
+    "description": "Set Category in YouTube / Broadcast."
+  },
+  {
+    "id": "youtube.broadcast.get-viewer-count",
+    "name": "Get Viewer Count",
+    "category": [
+      "YouTube",
+      "Broadcast"
+    ],
+    "description": "Get Viewer Count in YouTube / Broadcast."
+  },
+  {
+    "id": "youtube.broadcast.add-to-playlist",
+    "name": "Add to Playlist",
+    "category": [
+      "YouTube",
+      "Broadcast"
+    ],
+    "description": "Add to Playlist in YouTube / Broadcast."
+  },
+  {
+    "id": "youtube.broadcast.set-thumbnail-note",
+    "name": "Set Thumbnail Note",
+    "category": [
+      "YouTube",
+      "Broadcast"
+    ],
+    "description": "Set Thumbnail Note in YouTube / Broadcast."
+  },
+  {
+    "id": "kick.chat.send-message",
+    "name": "Send Message",
+    "category": [
+      "Kick",
+      "Chat"
+    ],
+    "description": "Send Message in Kick / Chat."
+  },
+  {
+    "id": "kick.chat.delete-message",
+    "name": "Delete Message",
+    "category": [
+      "Kick",
+      "Chat"
+    ],
+    "description": "Delete Message in Kick / Chat."
+  },
+  {
+    "id": "kick.chat.timeout-user",
+    "name": "Timeout User",
+    "category": [
+      "Kick",
+      "Chat"
+    ],
+    "description": "Timeout User in Kick / Chat."
+  },
+  {
+    "id": "kick.chat.ban-user",
+    "name": "Ban User",
+    "category": [
+      "Kick",
+      "Chat"
+    ],
+    "description": "Ban User in Kick / Chat."
+  },
+  {
+    "id": "kick.chat.clear-chat",
+    "name": "Clear Chat",
+    "category": [
+      "Kick",
+      "Chat"
+    ],
+    "description": "Clear Chat in Kick / Chat."
+  },
+  {
+    "id": "kick.chat.send-reply",
+    "name": "Send Reply",
+    "category": [
+      "Kick",
+      "Chat"
+    ],
+    "description": "Send Reply in Kick / Chat."
+  },
+  {
+    "id": "kick.channel.update-title",
+    "name": "Update Title",
+    "category": [
+      "Kick",
+      "Channel"
+    ],
+    "description": "Update Title in Kick / Channel."
+  },
+  {
+    "id": "kick.channel.set-category",
+    "name": "Set Category",
+    "category": [
+      "Kick",
+      "Channel"
+    ],
+    "description": "Set Category in Kick / Channel."
+  },
+  {
+    "id": "kick.channel.get-followers",
+    "name": "Get Followers",
+    "category": [
+      "Kick",
+      "Channel"
+    ],
+    "description": "Get Followers in Kick / Channel."
+  },
+  {
+    "id": "kick.channel.send-announcement",
+    "name": "Send Announcement",
+    "category": [
+      "Kick",
+      "Channel"
+    ],
+    "description": "Send Announcement in Kick / Channel."
+  },
+  {
+    "id": "obs.scenes.set-current-scene",
+    "name": "Set Current Scene",
+    "category": [
+      "OBS",
+      "Scenes"
+    ],
+    "description": "Set Current Scene in OBS / Scenes."
+  },
+  {
+    "id": "obs.scenes.create-scene",
+    "name": "Create Scene",
+    "category": [
+      "OBS",
+      "Scenes"
+    ],
+    "description": "Create Scene in OBS / Scenes."
+  },
+  {
+    "id": "obs.scenes.remove-scene",
+    "name": "Remove Scene",
+    "category": [
+      "OBS",
+      "Scenes"
+    ],
+    "description": "Remove Scene in OBS / Scenes."
+  },
+  {
+    "id": "obs.scenes.set-scene-name",
+    "name": "Set Scene Name",
+    "category": [
+      "OBS",
+      "Scenes"
+    ],
+    "description": "Set Scene Name in OBS / Scenes."
+  },
+  {
+    "id": "obs.scenes.get-current-scene",
+    "name": "Get Current Scene",
+    "category": [
+      "OBS",
+      "Scenes"
+    ],
+    "description": "Get Current Scene in OBS / Scenes."
+  },
+  {
+    "id": "obs.scenes.set-preview-scene",
+    "name": "Set Preview Scene",
+    "category": [
+      "OBS",
+      "Scenes"
+    ],
+    "description": "Set Preview Scene in OBS / Scenes."
+  },
+  {
+    "id": "obs.sources.set-source-visibility",
+    "name": "Set Source Visibility",
+    "category": [
+      "OBS",
+      "Sources"
+    ],
+    "description": "Set Source Visibility in OBS / Sources."
+  },
+  {
+    "id": "obs.sources.set-source-mute",
+    "name": "Set Source Mute",
+    "category": [
+      "OBS",
+      "Sources"
+    ],
+    "description": "Set Source Mute in OBS / Sources."
+  },
+  {
+    "id": "obs.sources.toggle-source-mute",
+    "name": "Toggle Source Mute",
+    "category": [
+      "OBS",
+      "Sources"
+    ],
+    "description": "Toggle Source Mute in OBS / Sources."
+  },
+  {
+    "id": "obs.sources.set-source-volume",
+    "name": "Set Source Volume",
+    "category": [
+      "OBS",
+      "Sources"
+    ],
+    "description": "Set Source Volume in OBS / Sources."
+  },
+  {
+    "id": "obs.sources.refresh-browser-source",
+    "name": "Refresh Browser Source",
+    "category": [
+      "OBS",
+      "Sources"
+    ],
+    "description": "Refresh Browser Source in OBS / Sources."
+  },
+  {
+    "id": "obs.sources.set-text-source",
+    "name": "Set Text Source",
+    "category": [
+      "OBS",
+      "Sources"
+    ],
+    "description": "Set Text Source in OBS / Sources."
+  },
+  {
+    "id": "obs.sources.screenshot-source",
+    "name": "Screenshot Source",
+    "category": [
+      "OBS",
+      "Sources"
+    ],
+    "description": "Screenshot Source in OBS / Sources."
+  },
+  {
+    "id": "obs.sources.set-source-filter",
+    "name": "Set Source Filter",
+    "category": [
+      "OBS",
+      "Sources"
+    ],
+    "description": "Set Source Filter in OBS / Sources."
+  },
+  {
+    "id": "obs.filters.set-filter-enabled",
+    "name": "Set Filter Enabled",
+    "category": [
+      "OBS",
+      "Filters"
+    ],
+    "description": "Set Filter Enabled in OBS / Filters."
+  },
+  {
+    "id": "obs.filters.set-filter-settings",
+    "name": "Set Filter Settings",
+    "category": [
+      "OBS",
+      "Filters"
+    ],
+    "description": "Set Filter Settings in OBS / Filters."
+  },
+  {
+    "id": "obs.filters.add-filter",
+    "name": "Add Filter",
+    "category": [
+      "OBS",
+      "Filters"
+    ],
+    "description": "Add Filter in OBS / Filters."
+  },
+  {
+    "id": "obs.filters.remove-filter",
+    "name": "Remove Filter",
+    "category": [
+      "OBS",
+      "Filters"
+    ],
+    "description": "Remove Filter in OBS / Filters."
+  },
+  {
+    "id": "obs.streaming.start-streaming",
+    "name": "Start Streaming",
+    "category": [
+      "OBS",
+      "Streaming"
+    ],
+    "description": "Start Streaming in OBS / Streaming."
+  },
+  {
+    "id": "obs.streaming.stop-streaming",
+    "name": "Stop Streaming",
+    "category": [
+      "OBS",
+      "Streaming"
+    ],
+    "description": "Stop Streaming in OBS / Streaming."
+  },
+  {
+    "id": "obs.streaming.start-recording",
+    "name": "Start Recording",
+    "category": [
+      "OBS",
+      "Streaming"
+    ],
+    "description": "Start Recording in OBS / Streaming."
+  },
+  {
+    "id": "obs.streaming.stop-recording",
+    "name": "Stop Recording",
+    "category": [
+      "OBS",
+      "Streaming"
+    ],
+    "description": "Stop Recording in OBS / Streaming."
+  },
+  {
+    "id": "obs.replay.save-replay",
+    "name": "Save Replay",
+    "category": [
+      "OBS",
+      "Replay"
+    ],
+    "description": "Save Replay in OBS / Replay."
+  },
+  {
+    "id": "obs.replay.start-replay-buffer",
+    "name": "Start Replay Buffer",
+    "category": [
+      "OBS",
+      "Replay"
+    ],
+    "description": "Start Replay Buffer in OBS / Replay."
+  },
+  {
+    "id": "obs.replay.stop-replay-buffer",
+    "name": "Stop Replay Buffer",
+    "category": [
+      "OBS",
+      "Replay"
+    ],
+    "description": "Stop Replay Buffer in OBS / Replay."
+  },
+  {
+    "id": "obs.studio-mode.enable-studio-mode",
+    "name": "Enable Studio Mode",
+    "category": [
+      "OBS",
+      "Studio Mode"
+    ],
+    "description": "Enable Studio Mode in OBS / Studio Mode."
+  },
+  {
+    "id": "obs.studio-mode.disable-studio-mode",
+    "name": "Disable Studio Mode",
+    "category": [
+      "OBS",
+      "Studio Mode"
+    ],
+    "description": "Disable Studio Mode in OBS / Studio Mode."
+  },
+  {
+    "id": "obs.studio-mode.trigger-transition",
+    "name": "Trigger Transition",
+    "category": [
+      "OBS",
+      "Studio Mode"
+    ],
+    "description": "Trigger Transition in OBS / Studio Mode."
+  },
+  {
+    "id": "streamlabs.scenes.set-current-scene",
+    "name": "Set Current Scene",
+    "category": [
+      "Streamlabs",
+      "Scenes"
+    ],
+    "description": "Set Current Scene in Streamlabs / Scenes."
+  },
+  {
+    "id": "streamlabs.scenes.create-scene",
+    "name": "Create Scene",
+    "category": [
+      "Streamlabs",
+      "Scenes"
+    ],
+    "description": "Create Scene in Streamlabs / Scenes."
+  },
+  {
+    "id": "streamlabs.scenes.remove-scene",
+    "name": "Remove Scene",
+    "category": [
+      "Streamlabs",
+      "Scenes"
+    ],
+    "description": "Remove Scene in Streamlabs / Scenes."
+  },
+  {
+    "id": "streamlabs.scenes.set-preview-scene",
+    "name": "Set Preview Scene",
+    "category": [
+      "Streamlabs",
+      "Scenes"
+    ],
+    "description": "Set Preview Scene in Streamlabs / Scenes."
+  },
+  {
+    "id": "streamlabs.sources.set-source-visibility",
+    "name": "Set Source Visibility",
+    "category": [
+      "Streamlabs",
+      "Sources"
+    ],
+    "description": "Set Source Visibility in Streamlabs / Sources."
+  },
+  {
+    "id": "streamlabs.sources.set-source-mute",
+    "name": "Set Source Mute",
+    "category": [
+      "Streamlabs",
+      "Sources"
+    ],
+    "description": "Set Source Mute in Streamlabs / Sources."
+  },
+  {
+    "id": "streamlabs.sources.set-text-source",
+    "name": "Set Text Source",
+    "category": [
+      "Streamlabs",
+      "Sources"
+    ],
+    "description": "Set Text Source in Streamlabs / Sources."
+  },
+  {
+    "id": "streamlabs.sources.set-source-volume",
+    "name": "Set Source Volume",
+    "category": [
+      "Streamlabs",
+      "Sources"
+    ],
+    "description": "Set Source Volume in Streamlabs / Sources."
+  },
+  {
+    "id": "streamlabs.sources.refresh-browser-source",
+    "name": "Refresh Browser Source",
+    "category": [
+      "Streamlabs",
+      "Sources"
+    ],
+    "description": "Refresh Browser Source in Streamlabs / Sources."
+  },
+  {
+    "id": "streamlabs.streaming.start-streaming",
+    "name": "Start Streaming",
+    "category": [
+      "Streamlabs",
+      "Streaming"
+    ],
+    "description": "Start Streaming in Streamlabs / Streaming."
+  },
+  {
+    "id": "streamlabs.streaming.stop-streaming",
+    "name": "Stop Streaming",
+    "category": [
+      "Streamlabs",
+      "Streaming"
+    ],
+    "description": "Stop Streaming in Streamlabs / Streaming."
+  },
+  {
+    "id": "streamlabs.streaming.start-recording",
+    "name": "Start Recording",
+    "category": [
+      "Streamlabs",
+      "Streaming"
+    ],
+    "description": "Start Recording in Streamlabs / Streaming."
+  }
+]
