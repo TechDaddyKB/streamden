@@ -83,7 +83,7 @@ jobs:
           pacman -Syu --noconfirm --needed \
             git base-devel pkgconf ca-certificates \
             curl wget file openssl \
-            webkit2gtk-4.1 appmenu-gtk-module libappindicator-gtk3 \
+            webkit2gtk-4.1 appmenu-gtk-module libappindicator \
             librsvg xdotool \
             alsa-lib pipewire dbus patchelf
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
