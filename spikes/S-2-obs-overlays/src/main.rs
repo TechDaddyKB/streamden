@@ -190,6 +190,40 @@ fn origin_allowed(origin: &str, st: &Inner) -> bool {
         .is_some()
 }
 
+/// Control endpoints (`/emit`, `/api/chat`) accept only the app's own origins. Widgets are untrusted code on
+/// loopback origins, so LNA does not stop them, and CORS does not stop the side effect of a simple POST.
+fn is_control_origin(origin: &str, port: u16) -> bool {
+    origin
+        .strip_prefix("http://")
+        .and_then(|h| h.rsplit_once(':'))
+        .is_some_and(|(name, p)| {
+            matches!(name, "127.0.0.1" | "localhost") && p.parse::<u16>().ok() == Some(port)
+        })
+}
+
+/// A missing `Origin` means a non-browser client (curl, scripts); Chromium always sends one on POST.
+/// `Sec-Fetch-Site` is a second line of defence for browsers that do send fetch metadata.
+fn control_allowed(headers: &HeaderMap, port: u16) -> bool {
+    let header_str = |name: &str| headers.get(name).map(|v| v.to_str().unwrap_or(""));
+    let origin_ok = header_str("origin").is_none_or(|o| is_control_origin(o, port));
+    let fetch_site_ok =
+        header_str("sec-fetch-site").is_none_or(|s| matches!(s, "same-origin" | "none"));
+    origin_ok && fetch_site_ok
+}
+
+/// Gate for control endpoints: app Host and app (or no) Origin; rejections are logged and get 403.
+fn control_rejected(st: &Inner, site: &Site, host: &str, path: &str, headers: &HeaderMap) -> Option<Response> {
+    if *site == Site::App && control_allowed(headers, st.port) {
+        return None;
+    }
+    st.log(
+        host,
+        "server.control_rejected",
+        json!({ "path": path, "site": format!("{site:?}"), "headers": interesting_headers(headers) }),
+    );
+    Some((StatusCode::FORBIDDEN, "control origin not allowed").into_response())
+}
+
 async fn host_guard(State(st): State<AppState>, mut req: Request, next: Next) -> Response {
     let host = req
         .headers()
@@ -303,10 +337,12 @@ async fn report_post(
 async fn emit(
     State(st): State<AppState>,
     Extension(site): Extension<Site>,
+    Extension(HostName(host)): Extension<HostName>,
+    headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if site != Site::App {
-        return StatusCode::FORBIDDEN.into_response();
+    if let Some(resp) = control_rejected(&st, &site, &host, "/emit", &headers) {
+        return resp;
     }
     let mut ev: Value = serde_json::from_slice(&body).unwrap_or_else(|_| json!({}));
     if !ev.is_object() {
@@ -322,15 +358,12 @@ async fn emit(
 async fn chat(
     State(st): State<AppState>,
     Extension(site): Extension<Site>,
+    Extension(HostName(host)): Extension<HostName>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let same_origin = headers
-        .get(header::ORIGIN)
-        .and_then(|o| o.to_str().ok())
-        .is_none_or(|o| origin_allowed(o, &st));
-    if site != Site::App || !same_origin {
-        return StatusCode::FORBIDDEN.into_response();
+    if let Some(resp) = control_rejected(&st, &site, &host, "/api/chat", &headers) {
+        return resp;
     }
     let msg: Value = serde_json::from_slice(&body).unwrap_or_else(|_| json!({}));
     let ev = json!({
@@ -496,4 +529,45 @@ async fn main() {
         json!({ "port": port, "boot_ms": st.boot_ms, "pid": std::process::id() }),
     );
     axum::serve(listener, app).await.expect("serve");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn headers(pairs: &[(&'static str, &'static str)]) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        for (k, v) in pairs {
+            h.insert(*k, HeaderValue::from_static(v));
+        }
+        h
+    }
+
+    #[test]
+    fn control_accepts_app_origins_and_cli() {
+        assert!(control_allowed(&headers(&[]), 47800));
+        assert!(control_allowed(&headers(&[("origin", "http://127.0.0.1:47800")]), 47800));
+        assert!(control_allowed(
+            &headers(&[("origin", "http://localhost:47800"), ("sec-fetch-site", "same-origin")]),
+            47800
+        ));
+    }
+
+    #[test]
+    fn control_rejects_widget_foreign_and_null_origins() {
+        for origin in [
+            "http://w-a.localhost:47800",
+            "http://127.0.0.1:47861",
+            "http://127.0.0.1:47801",
+            "https://127.0.0.1:47800",
+            "https://evil.invalid",
+            "http://127.0.0.1.evil.invalid:47800",
+            "null",
+            "",
+        ] {
+            assert!(!control_allowed(&headers(&[("origin", origin)]), 47800), "{origin}");
+        }
+        assert!(!control_allowed(&headers(&[("sec-fetch-site", "cross-site")]), 47800));
+        assert!(!control_allowed(&headers(&[("sec-fetch-site", "same-site")]), 47800));
+    }
 }
