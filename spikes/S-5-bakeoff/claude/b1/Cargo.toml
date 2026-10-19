@@ -1,0 +1,18 @@
+[package]
+name = "den-action-queue-b1"
+version = "0.0.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+publish = false
+description = "S-5 bake-off B-1 (Claude): bounded named action queues with blocking/non-blocking modes"
+
+# Standalone throwaway spike crate, not part of any workspace.
+[workspace]
+
+[dependencies]
+tokio = { version = "1.53", features = ["rt", "sync", "macros"] }
+tokio-util = { version = "0.7", default-features = false }
+
+[dev-dependencies]
+tokio = { version = "1.53", features = ["rt", "rt-multi-thread", "sync", "macros", "time", "test-util"] }
+proptest = "1"
