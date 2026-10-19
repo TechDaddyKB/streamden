@@ -20,6 +20,35 @@ env:
   CARGO_INCREMENTAL: '0'
 
 jobs:
+  protocol:
+    name: Protocol (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      # rustup reads the pinned toolchain from rust-toolchain.toml.
+      - name: Install repository Rust toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: protocol-${{ matrix.os }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Generated protocol drift
+        run: cargo xtask codegen --check
+      - name: Protocol tests (including doctests)
+        run: cargo test -p den-protocol --locked
+      - name: Verify checks leave tracked files unchanged
+        run: git diff --exit-code
+
   workspace:
     name: Workspace (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

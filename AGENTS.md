@@ -49,6 +49,7 @@ Toolchain: Rust 1.99.1 (`rust-toolchain.toml`), Node ≥ 22.12 with pnpm 12 (`pa
 | Release build of the desktop UI with `web/ui` embedded | `cargo tauri build` in `apps/desktop` |
 | Lint and format | `cargo clippy --workspace --all-targets -- -D warnings` · `cargo fmt --all --check` · `pnpm -r typecheck` |
 | Tests | `cargo test --workspace` (nextest once Spec 02 tests land) |
+| Check generated protocol artifacts | `cargo xtask codegen --check` |
 
 Module rules: `crates/AGENTS.md`, `apps/AGENTS.md`, `web/AGENTS.md`. Run the commands in your task's `done_when`
 and paste their output as evidence.
