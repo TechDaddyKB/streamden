@@ -2,6 +2,8 @@
   "value": {
     "deaths": 3
   },
+  "persisted": true,
+  "untrusted": false,
   "updatedAt": "2026-10-18T20:15:03.120Z",
   "updatedBy": {
     "kind": "user"

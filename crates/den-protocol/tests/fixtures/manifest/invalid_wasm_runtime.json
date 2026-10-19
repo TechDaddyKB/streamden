@@ -83,7 +83,8 @@
               "lte",
               "between"
             ],
-            "specificity": 2
+            "specificity": 2,
+            "caseInsensitive": false
           },
           {
             "field": "giftName",
@@ -92,7 +93,8 @@
               "in"
             ],
             "optionsFrom": "acme.list_gift_types",
-            "specificity": 3
+            "specificity": 3,
+            "caseInsensitive": false
           }
         ],
         "highVolume": false,

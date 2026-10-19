@@ -70,11 +70,11 @@ fn publish(params: Value, example: Value) -> (Value, String) {
 /// `Catalog::ref_for`, the way a real operation references them).
 fn publish_from(mut catalog: Catalog, params: Value, example: Value) -> (Value, String) {
     catalog
-        .register_operation(op("demo.op", params, example.clone()))
+        .register_operation(op("util.op", params, example.clone()))
         .unwrap();
     let authored = codegen::build_unredacted(catalog).unwrap();
     let validator =
-        jsonschema::validator_for(&authored.schema_at("/operations/demo.op/params")).unwrap();
+        jsonschema::validator_for(&authored.schema_at("/operations/util.op/params")).unwrap();
     assert!(
         validator.is_valid(&example),
         "the authored example must be valid, or the case proves nothing"
@@ -83,7 +83,7 @@ fn publish_from(mut catalog: Catalog, params: Value, example: Value) -> (Value, 
     doc.redact_examples();
     let published = doc.to_json_string();
     (
-        doc.operations["demo.op"].def.examples[0].params.clone(),
+        doc.operations["util.op"].def.examples[0].params.clone(),
         published,
     )
 }
@@ -164,7 +164,7 @@ fn plan_steps_naming_outside_targets_fail_closed() {
     };
     let catalog_with = |step: OperationExample| {
         let mut catalog = Catalog::new();
-        let mut def = op_at_tier("demo.write", 1, params.clone(), json!({ "key": SECRET }));
+        let mut def = op_at_tier("util.write", 1, params.clone(), json!({ "key": SECRET }));
         def.examples.push(step);
         catalog.register_operation(def).unwrap();
         catalog
@@ -172,13 +172,13 @@ fn plan_steps_naming_outside_targets_fail_closed() {
 
     // Lint: a typo'd or external target with values in its params is rejected.
     let err = codegen::build(catalog_with(dry_run(
-        "demo.wrte",
+        "util.wrte",
         json!({ "key": SECRET, "n": 1 }),
     )))
     .unwrap_err()
     .to_string();
     assert!(
-        err.contains("plan step 0 names `demo.wrte` outside this catalog with non-empty params"),
+        err.contains("plan step 0 names `util.wrte` outside this catalog with non-empty params"),
         "the lint rejects it: {err}"
     );
     let err = codegen::build(catalog_with(dry_run(
@@ -198,36 +198,36 @@ fn plan_steps_naming_outside_targets_fail_closed() {
         json!({ "empty": [], "o": {} }),
     )))
     .unwrap();
-    let step = &doc.operations["demo.write"].def.examples[1].result["plan"][0];
+    let step = &doc.operations["util.write"].def.examples[1].result["plan"][0];
     assert_eq!(step["params"], json!({ "empty": [], "o": {} }));
     assert!(!doc.to_json_string().contains(SECRET));
 
     // A known target is redacted against its schema.
     let doc = codegen::build(catalog_with(dry_run(
-        "demo.write",
+        "util.write",
         json!({ "key": SECRET, "n": 1 }),
     )))
     .unwrap();
-    let step = &doc.operations["demo.write"].def.examples[1].result["plan"][0];
+    let step = &doc.operations["util.write"].def.examples[1].result["plan"][0];
     assert_eq!(step["params"], json!({ "key": REDACTED, "n": 1 }));
 
     // Past the lint (a document edited after the build): an outside target with values leaks nothing.
     let mut doc = codegen::build_unredacted(catalog_with(dry_run(
-        "demo.write",
+        "util.write",
         json!({ "key": SECRET, "n": 1 }),
     )))
     .unwrap();
-    doc.operations.get_mut("demo.write").unwrap().def.examples[1].result["plan"][0]["operation"] =
-        json!("demo.wrte");
+    doc.operations.get_mut("util.write").unwrap().def.examples[1].result["plan"][0]["operation"] =
+        json!("util.wrte");
     doc.redact_examples();
     let published = doc.to_json_string();
     assert!(
         !published.contains(SECRET),
         "secret published:\n{published}"
     );
-    let step = &doc.operations["demo.write"].def.examples[1].result["plan"][0];
+    let step = &doc.operations["util.write"].def.examples[1].result["plan"][0];
     assert_eq!(step["params"], json!(REDACTED), "params redacted whole");
-    assert_eq!(step["operation"], json!("demo.wrte"));
+    assert_eq!(step["operation"], json!("util.wrte"));
 }
 
 /// Codex round 2, P1 #2: `if`/`then`/`else` are applicable subschemas; both branches (and the
@@ -841,7 +841,7 @@ fn inlined_references_keep_the_targets_mark() {
     let params = json!({ "type": "object", "properties": { "creds": creds } });
     catalog
         .register_operation(op(
-            "demo.op",
+            "util.op",
             params.clone(),
             json!({ "creds": { "token": SECRET } }),
         ))
@@ -1199,7 +1199,7 @@ fn typed_examples_hold_their_secrets_in_secret_t() {
     ) -> Result<String, String> {
         let mut catalog = Catalog::new();
         let (params, examples) = register(&mut catalog);
-        let mut def = op("demo.op", params.to_value(), json!({}));
+        let mut def = op("util.op", params.to_value(), json!({}));
         def.examples = examples;
         catalog.register_operation(def).unwrap();
         codegen::build_unredacted(catalog)
@@ -1289,7 +1289,7 @@ fn typed_examples_hold_their_secrets_in_secret_t() {
             den_protocol::secret::expose_secrets(|| serde_json::to_value(&typed).unwrap());
         let dry_run = json!({
             "dryRun": true,
-            "plan": [{ "operation": "demo.op", "params": plan_params, "tier": 1, "description": "d" }],
+            "plan": [{ "operation": "util.op", "params": plan_params, "tier": 1, "description": "d" }],
             "warnings": [], "wouldRequireApproval": false, "effectiveTier": 1
         });
         let mut def_examples = vec![OperationExample::typed(
@@ -1318,10 +1318,10 @@ fn typed_examples_hold_their_secrets_in_secret_t() {
         den_protocol::secret::expose_secrets(|| serde_json::to_value(&typed).unwrap());
     let dry_run = json!({
         "dryRun": true,
-        "plan": [{ "operation": "demo.op", "params": plan_params, "tier": 1, "description": "d" }],
+        "plan": [{ "operation": "util.op", "params": plan_params, "tier": 1, "description": "d" }],
         "warnings": [], "wouldRequireApproval": false, "effectiveTier": 1
     });
-    let mut def = op_at_tier("demo.op", 1, params.to_value(), json!({}));
+    let mut def = op_at_tier("util.op", 1, params.to_value(), json!({}));
     def.examples = vec![
         OperationExample::typed("n", &typed, ResultShape::Normal, &json!({})),
         OperationExample::typed("d", &typed, ResultShape::DryRun, &dry_run),
@@ -1344,7 +1344,7 @@ fn typed_examples_hold_their_secrets_in_secret_t() {
             catalog.schema_for::<Typed>()
         };
         let mut def = EventDef {
-            r#type: EventType::new("demo.happened").unwrap(),
+            r#type: EventType::new("util.happened").unwrap(),
             title: "T".into(),
             description: "Test. An event.".into(),
             category: vec!["Test".into()],
@@ -1378,7 +1378,7 @@ fn typed_examples_hold_their_secrets_in_secret_t() {
     };
     let err = event_with(true).expect_err("a hand-marked typed payload fails the build");
     assert!(
-        err.contains("event:demo.happened") && err.contains("typed example 0"),
+        err.contains("event:util.happened") && err.contains("typed example 0"),
         "{err}"
     );
     let doc = event_with(false).expect("Secret<T> payload builds");
@@ -1396,7 +1396,7 @@ fn lint_reports_marks_that_cannot_hold() {
         let mut catalog = Catalog::new();
         catalog.register_type::<Marked>();
         catalog.register_type::<Creds>();
-        let mut def = op("demo.op", params, json!({}));
+        let mut def = op("util.op", params, json!({}));
         def.result = Schema::try_from(result).unwrap();
         catalog.register_operation(def).unwrap();
         codegen::lint(&catalog)
@@ -1464,7 +1464,7 @@ fn lint_reports_marks_that_cannot_hold() {
     assert_eq!(clean, Vec::<String>::new());
     catalog
         .register_operation(op(
-            "demo.op",
+            "util.op",
             json!({ "type": "object", "properties": {
                 "a": { "$ref": "#/types/Alias", "x-secret": false },
                 "w": { "$ref": "#/types/Wrap", "x-secret": false }
@@ -1679,7 +1679,7 @@ fn optional_properties_keep_both_schemas() {
     let mut catalog = Catalog::new();
     catalog
         .register_operation(op(
-            "demo.op",
+            "util.op",
             json!({
                 "type": "object",
                 "properties": {
@@ -1718,7 +1718,7 @@ fn optional_properties_keep_both_schemas() {
     assert_eq!(published, json!({ "creds": REDACTED }));
     assert!(!doc.contains(SECRET), "secret published:\n{doc}");
     let doc: Value = serde_json::from_str(&doc).unwrap();
-    let creds = &doc["operations"]["demo.op"]["params"]["properties"]["creds"];
+    let creds = &doc["operations"]["util.op"]["params"]["properties"]["creds"];
     assert_eq!(
         (creds["x-secret"].clone(), creds["description"].clone()),
         (json!(true), json!("A joined mark.")),
@@ -1749,7 +1749,7 @@ fn optional_properties_keep_both_schemas() {
     );
     assert!(!doc.contains(SECRET), "secret published:\n{doc}");
     let doc: Value = serde_json::from_str(&doc).unwrap();
-    let creds = &doc["operations"]["demo.op"]["params"]["properties"]["creds"];
+    let creds = &doc["operations"]["util.op"]["params"]["properties"]["creds"];
     assert_eq!(
         creds["properties"]["token"]["type"],
         json!("string"),
@@ -1766,7 +1766,7 @@ fn optional_properties_keep_both_schemas() {
     let mut catalog = Catalog::new();
     catalog
         .register_operation(op(
-            "demo.op",
+            "util.op",
             json!({
                 "type": "object",
                 "properties": {
@@ -1784,7 +1784,7 @@ fn optional_properties_keep_both_schemas() {
         .unwrap();
     let doc = codegen::build_unredacted(catalog).unwrap();
     let validator =
-        jsonschema::validator_for(&doc.schema_at("/operations/demo.op/params")).unwrap();
+        jsonschema::validator_for(&doc.schema_at("/operations/util.op/params")).unwrap();
     assert!(validator.is_valid(&json!({ "creds": { "token": "t" } })));
     assert!(
         !validator.is_valid(&json!({ "creds": {} })),
@@ -1882,7 +1882,7 @@ fn optional_properties_keep_both_schemas() {
     );
     catalog
         .register_operation(op(
-            "demo.op",
+            "util.op",
             params,
             json!({ "whole": { "token": SECRET } }),
         ))

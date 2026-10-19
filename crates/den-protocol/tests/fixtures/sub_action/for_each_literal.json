@@ -1,0 +1,23 @@
+{
+  "id": "018f7a8c-0000-7000-8000-000000000015",
+  "enabled": true,
+  "kind": "for_each",
+  "items": [
+    "alice",
+    "bob"
+  ],
+  "itemVar": "name",
+  "indexVar": "i",
+  "maxIterations": 50,
+  "children": [
+    {
+      "id": "018f7a8c-0000-7000-8000-000000000016",
+      "enabled": true,
+      "kind": "op",
+      "type": "chat.send",
+      "params": {
+        "message": "Welcome {name} ({i})"
+      }
+    }
+  ]
+}

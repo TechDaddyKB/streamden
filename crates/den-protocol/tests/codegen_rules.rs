@@ -251,7 +251,7 @@ fn reserved_params_and_result_keys_are_generated_per_tier() {
     let mut catalog = Catalog::new();
     catalog
         .register_operation(op(
-            "t.read",
+            "core.read",
             0,
             json!({ "type": "object", "properties": {} }),
             json!({ "type": "array" }),
@@ -259,14 +259,14 @@ fn reserved_params_and_result_keys_are_generated_per_tier() {
         .unwrap();
     catalog
         .register_operation(with_dry_run(op(
-            "t.write",
+            "core.write",
             1,
             json!({ "type": "object", "properties": {} }),
             json!({ "type": "object", "properties": { "ok": { "type": "boolean" } } }),
         )))
         .unwrap();
     let mut cfg = with_dry_run(op(
-        "t.config",
+        "core.config",
         2,
         json!({ "type": "object", "properties": {} }),
         json!({ "type": "object" }),
@@ -275,13 +275,13 @@ fn reserved_params_and_result_keys_are_generated_per_tier() {
         title: "draft".into(),
         params: json!({}),
         shape: ResultShape::Draft,
-        result: json!({ "draft": { "id": "018f7a8c-0000-7000-8000-000000000001", "kind": "pending_change", "operation": "t.config" }, "plan": [], "warnings": [] }),
+        result: json!({ "draft": { "id": "018f7a8c-0000-7000-8000-000000000001", "kind": "pending_change", "operation": "core.config" }, "plan": [], "warnings": [] }),
         authored: None,
     });
     catalog.register_operation(cfg).unwrap();
     catalog
         .register_operation(with_dry_run(op(
-            "t.external",
+            "core.external",
             3,
             json!({ "type": "object", "properties": {} }),
             json!({ "type": "object" }),
@@ -298,23 +298,23 @@ fn reserved_params_and_result_keys_are_generated_per_tier() {
             .unwrap()
     };
     assert!(
-        props("t.read").get("dryRun").is_none(),
+        props("core.read").get("dryRun").is_none(),
         "tier 0 has no dryRun"
     );
-    assert!(props("t.write").get("dryRun").is_some());
-    assert!(props("t.write").get("approvalId").is_none());
+    assert!(props("core.write").get("dryRun").is_some());
+    assert!(props("core.write").get("approvalId").is_none());
     assert!(
-        props("t.external").get("approvalId").is_some(),
+        props("core.external").get("approvalId").is_some(),
         "tier 3 gets approvalId"
     );
-    assert!(doc.operations["t.read"].dry_run_result.is_none());
-    assert!(doc.operations["t.write"].dry_run_result.is_some());
-    assert!(doc.operations["t.write"].draft_result.is_none());
+    assert!(doc.operations["core.read"].dry_run_result.is_none());
+    assert!(doc.operations["core.write"].dry_run_result.is_some());
+    assert!(doc.operations["core.write"].draft_result.is_none());
     assert!(
-        doc.operations["t.config"].draft_result.is_some(),
+        doc.operations["core.config"].draft_result.is_some(),
         "tier 2 gets draftResult"
     );
-    let result = doc.operations["t.write"].def.result.as_value().clone();
+    let result = doc.operations["core.write"].def.result.as_value().clone();
     assert_eq!(
         result["properties"]["dryRun"],
         json!(false),
@@ -322,13 +322,13 @@ fn reserved_params_and_result_keys_are_generated_per_tier() {
     );
     assert_eq!(result["properties"]["draft"], json!(false));
     assert_eq!(
-        doc.operations["t.read"].def.result.get("properties"),
+        doc.operations["core.read"].def.result.get("properties"),
         None,
         "tier-0 result left untouched"
     );
     assert_eq!(
-        doc.operations["t.external"].mcp_tool_name.as_deref(),
-        Some("t_external")
+        doc.operations["core.external"].mcp_tool_name.as_deref(),
+        Some("core_external")
     );
 }
 
@@ -348,7 +348,7 @@ fn lint_catches_the_spec_rules() {
     );
 
     let mut bad = op(
-        "t.bad",
+        "core.bad",
         1,
         json!({ "type": "object", "properties": { "dryRun": { "type": "boolean" }, "Weird Name!": { "type": "string" } } }),
         json!({ "type": "string" }),
@@ -356,7 +356,7 @@ fn lint_catches_the_spec_rules() {
     bad.examples.clear();
     catalog.register_operation(bad).unwrap();
     let mut dangerous = with_dry_run(op(
-        "t.code",
+        "core.code",
         4,
         json!({ "type": "object" }),
         json!({ "type": "object" }),
@@ -364,17 +364,17 @@ fn lint_catches_the_spec_rules() {
     dangerous.expose.mcp = true;
     catalog.register_operation(dangerous).unwrap();
     let mut union_root = with_dry_run(op(
-        "t.union",
+        "core.union",
         1,
         json!({ "oneOf": [{ "type": "object" }] }),
         json!({ "type": "object", "properties": { "draft": {} } }),
     ));
     union_root.description = "".into();
     catalog.register_operation(union_root).unwrap();
-    catalog.register_operation(with_dry_run(op("t.brace_enum", 1, json!({ "type": "object", "properties": { "scene": { "type": "string", "enum": ["{x}"] }, "mode": { "type": "integer", "x-den-template": "bogus" }, "n": { "type": "number", "x-den-template": "text" } } }), json!({ "type": "object" })))).unwrap();
+    catalog.register_operation(with_dry_run(op("core.brace_enum", 1, json!({ "type": "object", "properties": { "scene": { "type": "string", "enum": ["{x}"] }, "mode": { "type": "integer", "x-den-template": "bogus" }, "n": { "type": "number", "x-den-template": "text" } } }), json!({ "type": "object" })))).unwrap();
     catalog
         .register_operation(op(
-            "t.read_with_dry_run",
+            "core.read_with_dry_run",
             0,
             json!({ "type": "object" }),
             json!({}),
@@ -385,7 +385,7 @@ fn lint_catches_the_spec_rules() {
 
     catalog
         .register_event(EventDef {
-            r#type: EventType::new("t.happened").unwrap(),
+            r#type: EventType::new("core.happened").unwrap(),
             title: "".into(),
             description: "d".into(),
             category: vec![],
@@ -399,6 +399,7 @@ fn lint_catches_the_spec_rules() {
                 ops: vec![],
                 options_from: None,
                 specificity: 0,
+                case_insensitive: false,
             }],
             high_volume: false,
             critical: false,
@@ -430,7 +431,7 @@ fn lint_catches_the_spec_rules() {
     assert!(has("enum member starts with `{`"), "{msgs:?}");
     assert!(has("x-den-template must be false"), "{msgs:?}");
     assert!(has("applies to `type: string` leaves only"), "{msgs:?}");
-    assert!(has("event:t.happened: missing title"), "{msgs:?}");
+    assert!(has("event:core.happened: missing title"), "{msgs:?}");
     assert!(has("payloadVersion starts at 1"), "{msgs:?}");
     assert!(has("reserved run-context root \"event\""), "{msgs:?}");
     assert!(has("filter field \"missing\""), "{msgs:?}");
@@ -446,7 +447,7 @@ fn mcp_tool_names_must_not_collide() {
     let mut catalog = Catalog::new();
     catalog
         .register_operation(with_dry_run(op(
-            "a_b.c",
+            "util.a_b.c",
             1,
             json!({ "type": "object" }),
             json!({ "type": "object" }),
@@ -454,7 +455,7 @@ fn mcp_tool_names_must_not_collide() {
         .unwrap();
     catalog
         .register_operation(with_dry_run(op(
-            "a.b_c",
+            "util.a.b_c",
             1,
             json!({ "type": "object" }),
             json!({ "type": "object" }),
@@ -618,7 +619,7 @@ fn published_examples_redact_marked_secrets() {
     // `properties` or not (round 3; `tests/redaction.rs` covers the overlap).
     params["patternProperties"] = json!({ "^k_": { "type": "string", "x-secret": true } });
     let mut def = op(
-        "demo.read",
+        "util.read",
         0,
         params,
         json!({ "type": "object", "properties": { "token": { "type": "string", "x-secret": true }, "ok": { "type": "boolean" } } }),
@@ -641,20 +642,20 @@ fn published_examples_redact_marked_secrets() {
     }];
     catalog.register_operation(def).unwrap();
     let mut write = with_dry_run(op(
-        "demo.write",
+        "util.write",
         1,
         json!({ "type": "object", "properties": { "key": { "type": "string", "x-secret": true } } }),
         json!({ "type": "object" }),
     ));
     write.examples[1].params = json!({ "dryRun": true, "key": "example-secret-9" });
     write.examples[1].result["plan"] = json!([
-        { "operation": "demo.write", "params": { "key": "example-secret-10" }, "tier": 1, "description": "d" },
-        { "operation": "demo.read", "params": { "password": "example-secret-11" }, "tier": 0, "description": "d" }
+        { "operation": "util.write", "params": { "key": "example-secret-10" }, "tier": 1, "description": "d" },
+        { "operation": "util.read", "params": { "password": "example-secret-11" }, "tier": 0, "description": "d" }
     ]);
     catalog.register_operation(write).unwrap();
     catalog
         .register_event(EventDef {
-            r#type: EventType::new("demo.happened").unwrap(),
+            r#type: EventType::new("util.happened").unwrap(),
             title: "T".into(),
             description: "d".into(),
             category: vec![],
@@ -671,10 +672,10 @@ fn published_examples_redact_marked_secrets() {
     // The authored examples are what xtask validates: a redacted object cannot match an object schema.
     let authored = codegen::build_unredacted(catalog).unwrap();
     let params =
-        jsonschema::validator_for(&authored.schema_at("/operations/demo.read/params")).unwrap();
+        jsonschema::validator_for(&authored.schema_at("/operations/util.read/params")).unwrap();
     let result =
-        jsonschema::validator_for(&authored.schema_at("/operations/demo.read/result")).unwrap();
-    let example = &authored.operations["demo.read"].def.examples[0];
+        jsonschema::validator_for(&authored.schema_at("/operations/util.read/result")).unwrap();
+    let example = &authored.operations["util.read"].def.examples[0];
     assert!(params.is_valid(&example.params), "authored params validate");
     assert!(
         result.is_valid(&example.result),
@@ -693,7 +694,7 @@ fn published_examples_redact_marked_secrets() {
     );
     doc.redact_examples();
     assert_eq!(doc.to_json_string(), published, "redaction is idempotent");
-    let example = &doc.operations["demo.read"].def.examples[0];
+    let example = &doc.operations["util.read"].def.examples[0];
     assert_eq!(example.params["password"], json!("***"));
     assert_eq!(example.params["creds"]["password"], json!("***"));
     assert_eq!(
@@ -718,7 +719,7 @@ fn published_examples_redact_marked_secrets() {
     assert_eq!(example.params["plain"], json!("kept"));
     assert_eq!(example.result["token"], json!("***"));
     assert_eq!(example.result["ok"], json!(true));
-    let dry_run = &doc.operations["demo.write"].def.examples[1];
+    let dry_run = &doc.operations["util.write"].def.examples[1];
     assert_eq!(dry_run.params["key"], json!("***"));
     assert_eq!(dry_run.result["plan"][0]["params"]["key"], json!("***"));
     assert_eq!(
@@ -726,10 +727,10 @@ fn published_examples_redact_marked_secrets() {
         json!("***")
     );
     assert_eq!(
-        doc.events["demo.happened"].def.examples[0]["secret"],
+        doc.events["util.happened"].def.examples[0]["secret"],
         json!("***")
     );
-    assert_eq!(doc.events["demo.happened"].def.examples[0]["n"], json!(1));
+    assert_eq!(doc.events["util.happened"].def.examples[0]["n"], json!(1));
     assert!(
         !params.is_valid(&example.params),
         "an object-valued secret is published as \"***\" and no longer matches its schema, which is why xtask validates the authored form"
@@ -775,7 +776,7 @@ fn template_derivation_descends_into_tagged_unions() {
     let params = catalog.schema_for::<Params>();
     catalog
         .register_operation(op(
-            "t.union",
+            "core.union",
             0,
             params.to_value(),
             json!({ "type": "object" }),
@@ -783,11 +784,12 @@ fn template_derivation_descends_into_tagged_unions() {
         .unwrap();
     let doc = codegen::build(catalog).unwrap();
     let authoring =
-        jsonschema::validator_for(&doc.schema_at("/operations/t.union/paramsAuthoring")).unwrap();
+        jsonschema::validator_for(&doc.schema_at("/operations/core.union/paramsAuthoring"))
+            .unwrap();
     let invocation =
-        jsonschema::validator_for(&doc.schema_at("/operations/t.union/params")).unwrap();
+        jsonschema::validator_for(&doc.schema_at("/operations/core.union/params")).unwrap();
     let base = json!({ "target": { "kind": "name", "name": "x" }, "list": [], "inline": true, "delay": "{wait}" });
-    let delay = &doc.operations["t.union"].params_authoring.as_value()["properties"]["delay"];
+    let delay = &doc.operations["core.union"].params_authoring.as_value()["properties"]["delay"];
     assert_eq!(delay["x-den-template"], json!("value"));
     assert_eq!(
         delay["anyOf"].as_array().map(Vec::len),
@@ -823,7 +825,7 @@ fn template_derivation_descends_into_tagged_unions() {
         authoring.is_valid(&v),
         "arrays of unions and inline compositions are derived too"
     );
-    let entry = &doc.operations["t.union"];
+    let entry = &doc.operations["core.union"];
     let aut = entry.params_authoring.as_value();
     let target = &aut["properties"]["target"]["oneOf"];
     assert_eq!(
@@ -938,4 +940,534 @@ fn redaction_follows_reference_chains() {
         "past the depth bound the remainder is redacted whole: {}",
         value["deep"]
     );
+}
+
+/// Spec 02 r6 §4: every namespace a core `register(&mut Catalog)` uses must be reserved, and the
+/// generated `ContributionRef` clause follows the list.
+#[test]
+fn core_registrations_need_a_reserved_prefix() {
+    let mut catalog = Catalog::new();
+    catalog
+        .register_operation(op("acme.read", 0, json!({ "type": "object" }), json!({})))
+        .unwrap();
+    catalog
+        .register_event(EventDef {
+            r#type: EventType::new("acme.happened").unwrap(),
+            title: "T".into(),
+            description: "d".into(),
+            category: vec![],
+            payload_version: 1,
+            payload: Schema::try_from(
+                json!({ "type": "object", "properties": { "n": { "type": "integer" } } }),
+            )
+            .unwrap(),
+            filters: vec![],
+            high_volume: false,
+            critical: false,
+            examples: vec![json!({ "n": 1 })],
+            authored_examples: vec![],
+        })
+        .unwrap();
+    let msgs = lint_messages(&catalog);
+    assert!(
+        msgs.iter().any(|m| m
+            .contains("operation:acme.read: core operation under the unreserved prefix \"acme\"")),
+        "{msgs:?}"
+    );
+    assert!(
+        msgs.iter()
+            .any(|m| m
+                .contains("event:acme.happened: core event under the unreserved prefix \"acme\"")),
+        "{msgs:?}"
+    );
+    for slug in [
+        "runs", "signals", "commands", "timers", "schedule", "settings", "catalog", "http",
+    ] {
+        assert!(den_protocol::version::is_reserved_slug(slug), "{slug}");
+    }
+    let pattern = den_protocol::schema::ContributionRefRule::core_type_pattern();
+    assert!(
+        pattern.contains("|runs|") && pattern.contains("|http)"),
+        "{pattern}"
+    );
+}
+
+/// §6.2, A12: `platform` is a reserved filter path that resolves against the envelope, so a payload
+/// never declares it at the top level.
+#[test]
+fn event_payloads_must_not_declare_platform() {
+    let mut catalog = Catalog::new();
+    catalog
+        .register_event(EventDef {
+            r#type: EventType::new("core.happened").unwrap(),
+            title: "T".into(),
+            description: "d".into(),
+            category: vec![],
+            payload_version: 1,
+            payload: Schema::try_from(
+                json!({ "type": "object", "properties": { "platform": { "type": "string" } } }),
+            )
+            .unwrap(),
+            filters: vec![],
+            high_volume: false,
+            critical: false,
+            examples: vec![json!({ "platform": "twitch" })],
+            authored_examples: vec![],
+        })
+        .unwrap();
+    let msgs = lint_messages(&catalog);
+    assert!(
+        msgs.iter()
+            .any(|m| m.contains("payload declares a top-level \"platform\" field")),
+        "{msgs:?}"
+    );
+}
+
+/// §3, §9.7 (A10): `x-den-untrusted: "conditional"` names a sibling boolean (or required-nullable
+/// boolean) that gates it; anything else is a lint failure.
+#[test]
+fn conditional_untrusted_marks_name_a_boolean_sibling() {
+    fn lint_result(result: Value) -> Vec<String> {
+        let mut catalog = Catalog::new();
+        catalog
+            .register_operation(op("core.read", 0, json!({ "type": "object" }), result))
+            .unwrap();
+        lint_messages(&catalog)
+            .into_iter()
+            .filter(|m| m.to_lowercase().contains("untrusted"))
+            .collect()
+    }
+    let good = json!({
+        "type": "object",
+        "properties": {
+            "value": { "x-den-untrusted": "conditional" },
+            "untrusted": { "type": "boolean" },
+            "old": { "x-den-untrusted": "conditional", "x-den-untrusted-flag": "oldUntrusted" },
+            "oldUntrusted": { "anyOf": [{ "type": "boolean" }, { "type": "null" }], "x-den-nullable": true },
+            "new": { "x-den-untrusted": "conditional", "x-den-untrusted-flag": "fresh" },
+            "fresh": { "type": ["boolean", "null"] },
+            "text": { "type": "string", "x-den-untrusted": true }
+        }
+    });
+    assert_eq!(lint_result(good), Vec::<String>::new());
+
+    let msgs = lint_result(json!({
+        "type": "object",
+        "properties": {
+            "value": { "x-den-untrusted": "conditional" },
+            "old": { "x-den-untrusted": "conditional", "x-den-untrusted-flag": "oldUntrusted" },
+            "oldUntrusted": { "type": "string" },
+            "odd": { "x-den-untrusted": "conditional", "x-den-untrusted-flag": 3 },
+            "stray": { "type": "string", "x-den-untrusted-flag": "untrusted" },
+            "bogus": { "type": "string", "x-den-untrusted": "yes" }
+        }
+    }));
+    let has = |needle: &str| msgs.iter().any(|m| m.contains(needle));
+    assert!(
+        has(
+            "result/properties/value: conditional field names the sibling flag \"untrusted\", which the object does not declare"
+        ),
+        "{msgs:?}"
+    );
+    assert!(
+        has("result/properties/old: the sibling flag \"oldUntrusted\" must be a boolean"),
+        "{msgs:?}"
+    );
+    assert!(
+        has("result/properties/odd: `x-den-untrusted-flag` must be a string"),
+        "{msgs:?}"
+    );
+    assert!(
+        has("result/properties/stray: `x-den-untrusted-flag` only goes with"),
+        "{msgs:?}"
+    );
+    assert!(
+        has("result/properties/bogus: x-den-untrusted must be `true` or \"conditional\""),
+        "{msgs:?}"
+    );
+    // A conditional mark at a root (no sibling possible) is refused too.
+    let msgs = lint_result(json!({ "type": "object", "x-den-untrusted": "conditional" }));
+    assert!(
+        msgs.iter().any(|m| m.contains("must sit on a property")),
+        "{msgs:?}"
+    );
+    // The core catalog carries the mark on `VariableRecord.value`, gated on `untrusted`.
+    let doc = codegen::build(Catalog::core()).unwrap();
+    let record = &doc.types["VariableRecord"]["properties"];
+    assert_eq!(record["value"]["x-den-untrusted"], json!("conditional"));
+    assert_eq!(record["untrusted"]["type"], json!("boolean"));
+    assert_eq!(
+        den_protocol::codegen::untrusted_flag_of(record["value"].as_object().unwrap()),
+        Some("untrusted")
+    );
+}
+
+/// §5.2, §9.7 (A13): a step in an event's `payloadVersions` table needs both its upgrade and its
+/// downgrade function; the newest served `rpcVersion` delivers the current payload version.
+#[test]
+fn payload_version_steps_need_both_functions() {
+    use den_protocol::catalog::{CatalogError, PayloadVersions};
+    fn bump(v: Value) -> Result<Value, String> {
+        Ok(v)
+    }
+    let ty = EventType::new("core.evolved").unwrap();
+    let mut catalog = Catalog::new();
+    assert!(matches!(
+        catalog.register_payload_upgrade(ty.clone(), 2, 1, bump),
+        Err(CatalogError::InvalidPayloadStep { from: 2, to: 1, .. })
+    ));
+    catalog.register_payload_version(ty.clone(), 1, 1);
+    catalog.register_payload_version(ty.clone(), 2, 2);
+    catalog.register_payload_version(ty.clone(), 3, 2);
+    let versions: PayloadVersions = catalog.payload_versions(&ty);
+    assert_eq!(
+        versions.table_for(1..=3, 2),
+        [(1, 1), (2, 2), (3, 2)].into_iter().collect()
+    );
+    assert_eq!(
+        PayloadVersions::delivered(&versions.table_for(1..=3, 2)),
+        vec![1, 2]
+    );
+    assert_eq!(
+        versions.table_for(1..=4, 3),
+        [(1, 1), (2, 2), (3, 2), (4, 3)].into_iter().collect(),
+        "an unregistered rpcVersion delivers the current payload version"
+    );
+
+    let msgs = codegen::lint_payload_versions(&versions, 2, 1..=3);
+    assert!(
+        msgs.iter()
+            .any(|m| m.contains("step 1 → 2 has no upgrade function")),
+        "{msgs:?}"
+    );
+    assert!(
+        msgs.iter()
+            .any(|m| m.contains("step 1 → 2 has no downgrade function")),
+        "{msgs:?}"
+    );
+    catalog
+        .register_payload_upgrade(ty.clone(), 1, 2, bump)
+        .unwrap();
+    let msgs = codegen::lint_payload_versions(&catalog.payload_versions(&ty), 2, 1..=3);
+    assert!(!msgs.iter().any(|m| m.contains("no upgrade")), "{msgs:?}");
+    assert!(msgs.iter().any(|m| m.contains("no downgrade")), "{msgs:?}");
+    catalog
+        .register_payload_downgrade(ty.clone(), 1, 2, bump)
+        .unwrap();
+    assert_eq!(
+        codegen::lint_payload_versions(&catalog.payload_versions(&ty), 2, 1..=3),
+        Vec::<String>::new()
+    );
+    // The newest served rpcVersion must deliver the event's current payloadVersion.
+    let msgs = codegen::lint_payload_versions(&catalog.payload_versions(&ty), 3, 1..=3);
+    assert!(
+        msgs.iter().any(|m| m.contains("maps the current rpcVersion 3 to payload version Some(2), not the event's payloadVersion 3")),
+        "{msgs:?}"
+    );
+    // A table entry above the current version is refused.
+    let msgs = codegen::lint_payload_versions(&catalog.payload_versions(&ty), 1, 1..=3);
+    assert!(
+        msgs.iter()
+            .any(|m| m.contains("above the event's payloadVersion 1")),
+        "{msgs:?}"
+    );
+    // A registration for an rpcVersion the build does not serve, or a payload version 0, never vanishes
+    // silently.
+    let msgs = codegen::lint_payload_versions(&catalog.payload_versions(&ty), 2, 1..=1);
+    assert!(
+        msgs.iter()
+            .any(|m| m.contains("registers rpcVersion 2, which this build does not serve (1..=1)"))
+            && msgs
+                .iter()
+                .any(|m| m.contains("registers rpcVersion 3, which this build does not serve")),
+        "{msgs:?}"
+    );
+    let mut zero = PayloadVersions::default();
+    zero.by_rpc_version.insert(1, 0);
+    let msgs = codegen::lint_payload_versions(&zero, 1, 1..=1);
+    assert!(
+        msgs.iter()
+            .any(|m| m.contains("payload version 0; payload versions start at 1")),
+        "{msgs:?}"
+    );
+
+    // Through the catalog lint, with the build's served range (one rpcVersion today): functions for an
+    // unregistered event are flagged, and the registered table is published.
+    let mut catalog = Catalog::new();
+    catalog.register_payload_version(ty.clone(), 1, 1);
+    let msgs = lint_messages(&catalog);
+    assert!(
+        msgs.iter().any(|m| m.contains("event:core.evolved: payload version functions registered for an event type that is not registered")),
+        "{msgs:?}"
+    );
+    catalog
+        .register_event(EventDef {
+            r#type: ty.clone(),
+            title: "T".into(),
+            description: "d".into(),
+            category: vec![],
+            payload_version: 2,
+            payload: Schema::try_from(
+                json!({ "type": "object", "properties": { "n": { "type": "integer" } } }),
+            )
+            .unwrap(),
+            filters: vec![],
+            high_volume: false,
+            critical: false,
+            examples: vec![json!({ "n": 1 })],
+            authored_examples: vec![],
+        })
+        .unwrap();
+    let msgs = lint_messages(&catalog);
+    assert!(
+        msgs.iter().any(|m| m.contains("event:core.evolved: payloadVersions maps the current rpcVersion 1 to payload version Some(1), not the event's payloadVersion 2")),
+        "{msgs:?}"
+    );
+    catalog.register_payload_version(ty.clone(), 1, 2);
+    assert_eq!(lint_messages(&catalog), Vec::<String>::new());
+    let doc = codegen::build(catalog).unwrap();
+    assert_eq!(
+        doc.events["core.evolved"].payload_versions,
+        [("1".to_owned(), 2)].into_iter().collect()
+    );
+}
+
+/// §7.2, §9.7: the receiving-only fallback is published for receivers, but an example (a producer) whose
+/// `kind` is not a known kind fails validation.
+#[test]
+fn examples_with_unknown_kinds_are_rejected() {
+    use den_protocol::domain::SubAction;
+    #[derive(schemars::JsonSchema)]
+    #[allow(dead_code)]
+    struct Params {
+        /// A node.
+        node: SubAction,
+    }
+    let known = json!({ "node": { "id": "018f7a8c-0000-7000-8000-000000000001", "enabled": true, "kind": "stop" } });
+    let unknown = json!({ "node": { "id": "018f7a8c-0000-7000-8000-000000000001", "enabled": true, "kind": "future_node", "future": 1 } });
+    for (example, ok) in [(known, true), (unknown, false)] {
+        let mut catalog = Catalog::new();
+        let params = catalog.schema_for::<Params>();
+        let mut def = op("core.nodes", 0, params.to_value(), json!({}));
+        def.examples = vec![OperationExample::json(
+            "n",
+            example.clone(),
+            ResultShape::Normal,
+            json!({}),
+        )];
+        catalog.register_operation(def).unwrap();
+        let doc = codegen::build_unredacted(catalog).unwrap();
+        let receiver =
+            jsonschema::validator_for(&doc.schema_at("/operations/core.nodes/params")).unwrap();
+        let producer =
+            jsonschema::validator_for(&doc.producer_schema_at("/operations/core.nodes/params"))
+                .unwrap();
+        assert!(
+            receiver.is_valid(&example),
+            "receivers accept the fallback (§7.2)"
+        );
+        assert_eq!(producer.is_valid(&example), ok);
+        let result = codegen::validate_examples(&doc);
+        if ok {
+            assert_eq!(result, Ok(()));
+        } else {
+            let failures = result.expect_err("an unknown kind is not a valid example");
+            assert!(
+                failures
+                    .iter()
+                    .any(|f| f.contains("operation core.nodes, example \"n\": params invalid")),
+                "{failures:?}"
+            );
+        }
+    }
+    let doc = codegen::build(Catalog::core()).unwrap();
+    let producer = doc.producer_schema_at("/types/Fragment");
+    assert!(
+        !serde_json::to_string(&producer["types"]["Fragment"])
+            .unwrap()
+            .contains("UnknownFragment"),
+        "the fallback branch is stripped from the producer view"
+    );
+    assert!(
+        serde_json::to_string(&doc.schema_at("/types/Fragment")["types"]["Fragment"])
+            .unwrap()
+            .contains("UnknownFragment"),
+        "and kept in the receiver view"
+    );
+    let v = jsonschema::validator_for(&producer).unwrap();
+    assert!(v.is_valid(&json!({ "kind": "text", "text": "hi" })));
+    assert!(!v.is_valid(&json!({ "kind": "sticker", "text": "hi" })));
+}
+
+/// DEN-53 (§3): a validation failure is described without the instance. The validator's `Display` and
+/// the `Debug` of an `anyOf`/`oneOf` error kind carry the authored instance (every branch's error with
+/// its instance), which for a typed example is a `Secret<T>` value exposed for validation; the shared
+/// describer names the keyword and its schema location only, and masks authored map keys.
+#[test]
+fn validation_diagnostics_never_carry_the_authored_instance() {
+    use den_protocol::secret::{Secret, expose_secrets};
+    use std::collections::BTreeMap;
+    #[derive(serde::Serialize)]
+    struct Authored {
+        token: Secret<String>,
+        pick: Secret<String>,
+        extra: BTreeMap<Secret<String>, u32>,
+        plain: u32,
+    }
+    let sentinel = "sdt_den53_synthetic_sentinel_value";
+    let key_sentinel = "den53_synthetic_sentinel_key";
+    let authored = expose_secrets(|| {
+        serde_json::to_value(Authored {
+            token: Secret::new(sentinel.into()),
+            pick: Secret::new(sentinel.into()),
+            extra: [(Secret::new(key_sentinel.into()), 1)]
+                .into_iter()
+                .collect(),
+            plain: 1,
+        })
+        .unwrap()
+    });
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "token": { "anyOf": [{ "type": "integer" }, { "type": "boolean" }], "x-secret": true },
+            "pick": { "oneOf": [{ "type": "integer" }, { "type": "boolean" }], "x-secret": true },
+            "extra": { "type": "object", "additionalProperties": { "type": "string" } },
+            "plain": { "type": "string" }
+        }
+    });
+    let validator = jsonschema::validator_for(&schema).unwrap();
+    let errors: Vec<_> = validator.iter_errors(&authored).collect();
+    assert_eq!(errors.len(), 4, "{errors:?}");
+    let mut saw_any_of = false;
+    let mut saw_one_of = false;
+    let mut saw_key = false;
+    for e in &errors {
+        let unsafe_form = format!("{e} {:?}", e.kind());
+        let safe = codegen::describe_validation_error(e);
+        assert!(
+            !safe.contains(sentinel) && !safe.contains(key_sentinel),
+            "the diagnostic leaks the authored value: {safe}"
+        );
+        match e.kind().keyword() {
+            "anyOf" => {
+                saw_any_of = true;
+                assert!(
+                    unsafe_form.contains(sentinel),
+                    "the reproduction is real: {unsafe_form}"
+                );
+                assert!(
+                    safe.contains("`anyOf` failed") && safe.contains("instance path \"/token\""),
+                    "{safe}"
+                );
+            }
+            "oneOf" => {
+                saw_one_of = true;
+                assert!(
+                    unsafe_form.contains(sentinel),
+                    "the reproduction is real: {unsafe_form}"
+                );
+                assert!(
+                    safe.contains("`oneOf` failed") && safe.contains("instance path \"/pick\""),
+                    "{safe}"
+                );
+            }
+            "type" if e.instance_path().as_str().starts_with("/extra") => {
+                saw_key = true;
+                assert!(
+                    e.instance_path().as_str().contains(key_sentinel),
+                    "the raw path carries the authored key: {}",
+                    e.instance_path().as_str()
+                );
+                assert!(safe.contains("instance path \"/extra/<key>\""), "{safe}");
+            }
+            _ => assert!(safe.contains("instance path \"/plain\""), "{safe}"),
+        }
+    }
+    assert!(saw_any_of && saw_one_of && saw_key, "{errors:?}");
+
+    // Codex-style follow-up on the fallback: a keyword that fails without descending (here
+    // `additionalProperties: false` on the nested object) leaves the evaluation path one step longer than
+    // the instance path, so the two do not line up; every segment is masked then, a digits-only authored
+    // key included.
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "extra": { "type": "object", "additionalProperties": { "type": "object", "additionalProperties": false } }
+        }
+    });
+    let digits_key = "483921";
+    let instance = json!({ "extra": { digits_key: { "pin": 1 } } });
+    let validator = jsonschema::validator_for(&schema).unwrap();
+    let errors: Vec<_> = validator.iter_errors(&instance).collect();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].instance_path().as_str().contains(digits_key));
+    let safe = codegen::describe_validation_error(&errors[0]);
+    assert!(
+        !safe.contains(digits_key) && safe.contains("instance path \"/<key>/<key>\""),
+        "{safe}"
+    );
+
+    // End to end: a typed example whose authored secret fails a union is reported without it.
+    #[derive(serde::Serialize)]
+    struct Params {
+        token: Secret<String>,
+    }
+    let mut catalog = Catalog::new();
+    let mut def = op(
+        "core.union_secret",
+        0,
+        json!({ "type": "object", "properties": { "token": { "anyOf": [{ "type": "integer" }, { "type": "boolean" }], "x-secret": true } } }),
+        json!({}),
+    );
+    def.examples = vec![OperationExample::typed(
+        "typed",
+        &Params {
+            token: Secret::new(sentinel.into()),
+        },
+        ResultShape::Normal,
+        &json!({}),
+    )];
+    catalog.register_operation(def).unwrap();
+    let doc = codegen::build_unredacted(catalog).unwrap();
+    let failures =
+        codegen::validate_examples(&doc).expect_err("the authored string fails the union");
+    let joined = failures.join("\n");
+    assert!(
+        joined.contains(
+            "operation core.union_secret, example \"typed\": params invalid: `anyOf` failed"
+        ),
+        "{joined}"
+    );
+    assert!(
+        !joined.contains(sentinel),
+        "the diagnostic leaks the authored secret: {joined}"
+    );
+}
+
+/// A5: `FilterableField.specificity` defaults to 1, `caseInsensitive` to false, and `optionsFrom` is an
+/// operation name.
+#[test]
+fn filterable_field_defaults() {
+    use den_protocol::catalog::FilterableField;
+    let f: FilterableField =
+        serde_json::from_value(json!({ "field": "tier", "ops": ["eq"] })).unwrap();
+    assert_eq!(f.specificity, 1);
+    assert!(!f.case_insensitive);
+    assert_eq!(
+        f,
+        FilterableField::new("tier", vec![den_protocol::domain::FilterOp::Eq])
+    );
+    assert!(
+        serde_json::from_value::<FilterableField>(
+            json!({ "field": "tier", "ops": [], "optionsFrom": "nodot" })
+        )
+        .is_err(),
+        "optionsFrom is an OperationName (§6.2)"
+    );
+    let doc = codegen::build(Catalog::core()).unwrap();
+    let props = &doc.types["FilterableField"]["properties"];
+    assert_eq!(props["specificity"]["default"], json!(1));
+    assert_eq!(props["caseInsensitive"]["default"], json!(false));
+    assert_eq!(props["optionsFrom"]["$ref"], json!("#/types/OperationName"));
 }

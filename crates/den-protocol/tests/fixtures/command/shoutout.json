@@ -1,0 +1,57 @@
+{
+  "id": "018f7a8c-9999-7000-8000-000000000001",
+  "revision": 2,
+  "name": "Shoutout",
+  "group": "Moderation",
+  "enabled": true,
+  "listed": true,
+  "aliases": [
+    "!so",
+    "!shoutout"
+  ],
+  "mode": {
+    "kind": "basic",
+    "location": "start"
+  },
+  "caseSensitive": false,
+  "sources": [
+    "chat.message"
+  ],
+  "platforms": [
+    "twitch",
+    "youtube"
+  ],
+  "ignoreBotAccount": true,
+  "ignoreInternal": true,
+  "cooldown": {
+    "globalMs": 30000,
+    "userMs": 120000,
+    "exemptRoles": [
+      "broadcaster",
+      "moderator"
+    ]
+  },
+  "permissions": {
+    "mode": "allow",
+    "users": [
+      {
+        "platform": "twitch",
+        "userId": "44322889"
+      }
+    ],
+    "roles": [
+      "moderator",
+      "vip"
+    ],
+    "groups": [
+      "018f7a8c-aaaa-7000-8000-000000000001"
+    ]
+  },
+  "counters": {
+    "persistGlobal": true,
+    "persistUser": false
+  },
+  "origin": {
+    "kind": "user"
+  }
+}

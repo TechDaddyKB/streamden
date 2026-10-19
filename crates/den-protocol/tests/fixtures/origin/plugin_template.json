@@ -1,3 +1,5 @@
 {
-  "kind": "plugin_template"
+  "kind": "plugin_template",
+  "plugin": "io.github.alice.acmelive",
+  "template": "cheer_alert"
 }

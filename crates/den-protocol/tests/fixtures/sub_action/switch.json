@@ -6,7 +6,10 @@
   "autoType": false,
   "cases": [
     {
-      "value": "1000",
+      "values": [
+        "1000",
+        "2000"
+      ],
       "children": [
         {
           "id": "018f7a8c-0000-7000-8000-000000000001",
@@ -20,7 +23,9 @@
       ]
     },
     {
-      "value": "prime",
+      "values": [
+        "prime"
+      ],
       "children": []
     }
   ],

@@ -65,6 +65,12 @@ reservedSlugs: Array<string>,
  */
 reservedRunContextRoots: Array<string>, 
 /**
+ * Operations whose effective tier is only known at call time (§8.1, §8.8 rule 2, A8): codegen adds
+ * `approvalId` to them and MCP annotates them like tier 3. A constant of this crate, never a plugin
+ * declaration.
+ */
+dynamicTierOperations: Array<string>, 
+/**
  * Deprecated items (§7.4), as `<kind>:<name>` keys.
  */
 deprecations: { [key in string]: Deprecation }, };

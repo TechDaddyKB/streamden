@@ -1,0 +1,20 @@
+{
+  "id": "018f7a8c-4444-7000-8000-000000000004",
+  "action": "018f7a8c-3e6b-7c1d-9a2b-5f4e3d2c1b0a",
+  "actionName": "Cheer alert",
+  "actionRevision": 3,
+  "queue": "018f7a8c-2222-7000-8000-000000000001",
+  "state": "cancelled",
+  "cancelReason": "timeout",
+  "queuedAt": "2026-10-18T20:17:00.000Z",
+  "startedAt": "2026-10-18T20:17:00.010Z",
+  "completedAt": "2026-10-18T20:18:00.010Z",
+  "durationMs": 60000,
+  "principalKind": "token",
+  "surface": "rpc",
+  "inline": false,
+  "test": true,
+  "untrustedArgsQueued": [],
+  "untrustedArgsAfter": [],
+  "warnings": []
+}

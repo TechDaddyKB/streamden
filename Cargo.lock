@@ -4615,7 +4615,6 @@ name = "xtask"
 version = "0.0.0"
 dependencies = [
  "den-protocol",
- "jsonschema",
  "serde_json",
 ]
 

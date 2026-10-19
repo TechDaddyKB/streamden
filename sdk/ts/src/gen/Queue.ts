@@ -30,4 +30,9 @@ maxPending?: number,
 /**
  * What happens when `maxPending` is reached.
  */
-overflow: Overflow, };
+overflow: Overflow, 
+/**
+ * A run exceeding it is cancelled (`cancelReason: timeout`, spec 03 §9.11); absent means no limit.
+ * Capped by `engine.queue.maxRunCeilingMs` (A9).
+ */
+maxRunMs?: number, };

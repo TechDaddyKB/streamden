@@ -1,0 +1,11 @@
+{
+  "id": "018f7a8c-1111-7000-8000-000000000004",
+  "type": "schedule.timer_fired",
+  "enabled": true,
+  "unresolved": false,
+  "alwaysRun": false,
+  "filters": [],
+  "config": {
+    "timer": "018f7a8c-8888-7000-8000-000000000001"
+  }
+}
