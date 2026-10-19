@@ -1,6 +1,6 @@
 captured 2026-10-18T23:52:03-05:00
 7.2.8-9-omarchy
-NVRM version: NVIDIA UNIX Open Kernel Module for x86_64  615.78.08  Release Build  (root@DailyDriver)  
+NVRM version: NVIDIA UNIX Open Kernel Module for x86_64  615.78.08  Release Build  (root@<host>)  
 hyprland 0.56.2-4
 webkit2gtk-4.1 2.54.1-1
 nvidia-utils 615.78.08-1
@@ -17,6 +17,6 @@ boots:
   0 5abda2ea99f241a894d2ea3b1d498780 Sun 2026-10-18 23:12:55 CDT Sun 2026-10-18 23:52:03 CDT
 
 previous boot, kernel module vs userspace:
-Oct 16 20:23:52 archlinux kernel: NVRM: loading NVIDIA UNIX Open Kernel Module for x86_64  610.57.04  Release Build  (root@DailyDriver)  
-Oct 18 21:10:51 DailyDriver kernel: NVRM: API mismatch: the client 'quickshell' (pid 1030670)
-Oct 18 21:10:51 DailyDriver kernel: NVRM: API mismatch: the client 'nvidia-smi' (pid 1031096)
+Oct 16 20:23:52 archlinux kernel: NVRM: loading NVIDIA UNIX Open Kernel Module for x86_64  610.57.04  Release Build  (root@<host>)  
+Oct 18 21:10:51 <host> kernel: NVRM: API mismatch: the client 'quickshell' (pid 1030670)
+Oct 18 21:10:51 <host> kernel: NVRM: API mismatch: the client 'nvidia-smi' (pid 1031096)
