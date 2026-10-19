@@ -34,6 +34,24 @@ start it.
 - `bakeoff`: S-5 cards that every vendor runs on its own branch
 - `parked`: deliberately deferred by the owner (sits in Blocked with a `blocked_reason`). Don't touch until un-parked.
 
+## Selecting a review worktree
+
+`scripts/dispatch.sh DEN-<n> <reviewer-vendor> review` reviews the existing `../den-wt/DEN-<n>` worktree.
+For a vendor-suffixed bake-off worktree, set `DEN_REVIEW_AUTHOR=claude|codex|grok`:
+
+```bash
+# Grok reviews the Codex implementation in ../den-wt/DEN-8-codex.
+DEN_REVIEW_AUTHOR=codex scripts/dispatch.sh DEN-8 grok review
+# Grok reviews the default worktree ../den-wt/DEN-8.
+scripts/dispatch.sh DEN-8 grok review
+```
+
+The positional vendor selects the **reviewer** and its wrapper/model; `DEN_REVIEW_AUTHOR` selects only the
+**author's worktree suffix**. Unset or empty preserves the default target. Use a reviewer from a different
+vendor than the author. The selected worktree must already exist; a missing suffixed target fails rather
+than falling back to the default. The selector is rejected in `work` mode. `DEN_DRY_RUN=1` previews the
+selected path, branch and prompt without launching a reviewer.
+
 ## Agent protocol (MCP calls)
 1. **Orient:** `project_summary {slug:"streamden"}` (cheap; shows open cards and what you hold), then
    `project_card_get {slug, card:<n>}` for your card's full detail and history.
