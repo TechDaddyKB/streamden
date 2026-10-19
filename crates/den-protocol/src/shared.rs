@@ -194,8 +194,9 @@ pub struct ChatText {
     pub fragments: Vec<Fragment>,
 }
 
-/// One fragment of a chat message, tagged by `kind` (§5.3). The union is extensible: a client renders
-/// an unknown fragment as its `text` (§7.2).
+/// One fragment of a chat message, tagged by `kind` (§5.3). The union is extensible: a `kind` this build
+/// does not know decodes as [`Fragment::Unknown`], which keeps the raw object and exposes its `text`, so
+/// a newer server never breaks an older client's chat rendering (§7.2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(
     tag = "kind",
@@ -254,6 +255,67 @@ pub enum Fragment {
         /// The cheermote tier the amount falls into.
         tier: u32,
     },
+    /// Receiving fallback for a `kind` this build does not know (§7.2): rendered as its `text`. Never
+    /// produced by this build's connectors; serialises back to the raw object it was decoded from.
+    #[serde(untagged)]
+    #[ts(untagged)]
+    Unknown(UnknownFragment),
+}
+
+impl Fragment {
+    /// The `kind` tags this build knows. The schema of [`Fragment::Unknown`] excludes them.
+    pub const KNOWN_KINDS: &'static [&'static str] =
+        &["text", "emote", "mention", "link", "cheermote"];
+
+    /// The `kind` tag of this fragment on the wire.
+    pub fn kind(&self) -> &str {
+        match self {
+            Self::Text { .. } => "text",
+            Self::Emote { .. } => "emote",
+            Self::Mention { .. } => "mention",
+            Self::Link { .. } => "link",
+            Self::Cheermote { .. } => "cheermote",
+            Self::Unknown(u) => &u.kind,
+        }
+    }
+
+    /// The fragment's plain text, which every kind carries (untrusted).
+    pub fn text(&self) -> &UntrustedString {
+        match self {
+            Self::Text { text }
+            | Self::Emote { text, .. }
+            | Self::Mention { text, .. }
+            | Self::Link { text, .. }
+            | Self::Cheermote { text, .. } => text,
+            Self::Unknown(u) => &u.text,
+        }
+    }
+}
+
+/// A fragment whose `kind` this build does not know (§7.2). Every fragment kind carries `text`, so a
+/// client can always render it; the other members are kept verbatim.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UnknownFragment {
+    /// The unknown `kind` tag. Never one of the kinds this build knows: decoding refuses a known kind
+    /// here, so a malformed known fragment is an error and never falls through to this variant.
+    #[serde(deserialize_with = "unknown_fragment_kind")]
+    #[schemars(schema_with = "unknown_fragment_kind_schema")]
+    pub kind: String,
+    /// The plain text (untrusted).
+    pub text: UntrustedString,
+    /// The remaining members, untouched.
+    #[serde(flatten)]
+    #[ts(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+fn unknown_fragment_kind_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    crate::schema::unknown_tag_schema(Fragment::KNOWN_KINDS)
+}
+
+fn unknown_fragment_kind<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    crate::schema::deserialize_unknown_tag(d, Fragment::KNOWN_KINDS)
 }
 
 /// An amount of money or a platform unit (§3). Floats are never used for money.

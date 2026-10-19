@@ -208,7 +208,8 @@ fn enums_emitted_as_one_of_consts_are_value_mode() {
     );
     assert_eq!(
         resolve_template_mode(&json!({ "type": "string", "const": "x" }), &types),
-        TemplateMode::Value
+        TemplateMode::Literal,
+        "a const is a discriminator or fixed value, never a template"
     );
     let params = json!({
         "type": "object",
@@ -467,4 +468,353 @@ fn mcp_tool_names_must_not_collide() {
 #[test]
 fn core_catalog_passes_lint() {
     assert!(codegen::lint(&Catalog::core()).is_empty());
+}
+
+/// Codex review round 1, P1: a `$ref` property's siblings (security annotations and constraints) must
+/// survive inlining in both generated schemas.
+#[test]
+fn reference_expansion_keeps_siblings() {
+    let mut types = std::collections::BTreeMap::new();
+    types.insert(
+        "Settings".to_owned(),
+        json!({ "type": "object", "properties": { "n": { "type": "integer" }, "m": { "type": "integer" } }, "required": ["n"], "maxProperties": 5, "description": "Shared" }),
+    );
+    let params = json!({
+        "type": "object",
+        "properties": {
+            "secret": { "$ref": "#/types/Settings", "x-secret": true, "maxProperties": 1, "description": "Local", "x-ui": { "widget": "json" } }
+        }
+    });
+    let (invocation, authoring) =
+        codegen::derive_param_schemas(&Schema::try_from(params).unwrap(), &types);
+    for (label, schema) in [("params", invocation), ("paramsAuthoring", authoring)] {
+        let v = schema.to_value();
+        let prop = &v["properties"]["secret"];
+        assert_eq!(prop["x-secret"], json!(true), "{label}: x-secret kept");
+        assert_eq!(prop["x-ui"]["widget"], json!("json"), "{label}: x-ui kept");
+        assert_eq!(
+            prop["description"],
+            json!("Local"),
+            "{label}: the property's annotation wins"
+        );
+        assert_eq!(
+            prop["maxProperties"],
+            json!(5),
+            "{label}: the target's constraint stays"
+        );
+        assert_eq!(
+            prop["allOf"],
+            json!([{ "maxProperties": 1 }]),
+            "{label}: the colliding local constraint is applied in conjunction"
+        );
+        assert_eq!(prop["properties"]["n"]["x-den-template"], json!("value"));
+        let validator = jsonschema::validator_for(&v).unwrap();
+        assert!(
+            validator.is_valid(&json!({ "secret": { "n": 1 } })),
+            "{label}"
+        );
+        assert!(
+            !validator.is_valid(&json!({ "secret": { "n": 1, "m": 2 } })),
+            "{label}: maxProperties 1 from the reference still applies"
+        );
+    }
+}
+
+/// Codex review round 1, P1: marked secrets never reach `protocol.json` examples (§3).
+#[test]
+fn published_examples_redact_marked_secrets() {
+    let mut catalog = Catalog::new();
+    #[derive(schemars::JsonSchema)]
+    #[allow(dead_code)]
+    struct Creds {
+        /// The user.
+        user: String,
+        /// The password.
+        #[schemars(extend("x-secret" = true))]
+        password: String,
+    }
+    #[derive(schemars::JsonSchema)]
+    #[serde(tag = "kind", rename_all = "snake_case")]
+    #[allow(dead_code)]
+    enum Auth {
+        /// A token.
+        Token {
+            /// The token.
+            #[schemars(extend("x-secret" = true))]
+            token: String,
+        },
+        /// Nothing.
+        None,
+    }
+    #[derive(schemars::JsonSchema)]
+    #[allow(dead_code)]
+    struct Params {
+        /// Plain.
+        password: String,
+        /// Nested.
+        creds: Creds,
+        /// Via a reference marked on the field.
+        #[schemars(extend("x-secret" = true))]
+        whole: Creds,
+        /// A list of secrets.
+        keys: Vec<Creds>,
+        /// In a tagged union.
+        auth: Auth,
+        /// Marked on a map value.
+        extra: std::collections::BTreeMap<String, Creds>,
+    }
+    let mut params = catalog.schema_for::<Params>().to_value();
+    params["properties"]["password"]["x-secret"] = json!(true);
+    let mut def = op(
+        "demo.read",
+        0,
+        params,
+        json!({ "type": "object", "properties": { "token": { "type": "string", "x-secret": true }, "ok": { "type": "boolean" } } }),
+    );
+    def.examples = vec![OperationExample {
+        title: "normal".into(),
+        params: json!({
+            "password": "example-secret-1",
+            "creds": { "user": "u", "password": "example-secret-2" },
+            "whole": { "user": "example-secret-3", "password": "example-secret-4" },
+            "keys": [{ "user": "u", "password": "example-secret-5" }],
+            "auth": { "kind": "token", "token": "example-secret-6" },
+            "extra": { "a": { "user": "u", "password": "example-secret-7" } }
+        }),
+        shape: ResultShape::Normal,
+        result: json!({ "token": "example-secret-8", "ok": true }),
+    }];
+    catalog.register_operation(def).unwrap();
+    let mut write = with_dry_run(op(
+        "demo.write",
+        1,
+        json!({ "type": "object", "properties": { "key": { "type": "string", "x-secret": true } } }),
+        json!({ "type": "object" }),
+    ));
+    write.examples[1].params = json!({ "dryRun": true, "key": "example-secret-9" });
+    write.examples[1].result["plan"] = json!([
+        { "operation": "demo.write", "params": { "key": "example-secret-10" }, "tier": 1, "description": "d" },
+        { "operation": "demo.read", "params": { "password": "example-secret-11" }, "tier": 0, "description": "d" }
+    ]);
+    catalog.register_operation(write).unwrap();
+    catalog
+        .register_event(EventDef {
+            r#type: EventType::new("demo.happened").unwrap(),
+            title: "T".into(),
+            description: "d".into(),
+            category: vec![],
+            payload_version: 1,
+            payload: Schema::try_from(json!({ "type": "object", "properties": { "secret": { "type": "string", "x-secret": true }, "n": { "type": "integer" } } })).unwrap(),
+            filters: vec![],
+            high_volume: false,
+            critical: false,
+            examples: vec![json!({ "secret": "example-secret-12", "n": 1 })],
+        })
+        .unwrap();
+
+    // The authored examples are what xtask validates: a redacted object cannot match an object schema.
+    let authored = codegen::build_unredacted(catalog).unwrap();
+    let params =
+        jsonschema::validator_for(&authored.schema_at("/operations/demo.read/params")).unwrap();
+    let result =
+        jsonschema::validator_for(&authored.schema_at("/operations/demo.read/result")).unwrap();
+    let example = &authored.operations["demo.read"].def.examples[0];
+    assert!(params.is_valid(&example.params), "authored params validate");
+    assert!(
+        result.is_valid(&example.result),
+        "authored result validates"
+    );
+    assert!(
+        authored.to_json_string().contains("example-secret-1"),
+        "the unredacted form keeps the authored values"
+    );
+    let mut doc = authored.clone();
+    doc.redact_examples();
+    let published = doc.to_json_string();
+    assert!(
+        !published.contains("example-secret"),
+        "a marked secret leaked into protocol.json:\n{published}"
+    );
+    doc.redact_examples();
+    assert_eq!(doc.to_json_string(), published, "redaction is idempotent");
+    let example = &doc.operations["demo.read"].def.examples[0];
+    assert_eq!(example.params["password"], json!("***"));
+    assert_eq!(example.params["creds"]["password"], json!("***"));
+    assert_eq!(
+        example.params["creds"]["user"],
+        json!("u"),
+        "non-secrets stay"
+    );
+    assert_eq!(
+        example.params["whole"],
+        json!("***"),
+        "a reference marked secret redacts the whole value"
+    );
+    assert_eq!(example.params["keys"][0]["password"], json!("***"));
+    assert_eq!(example.params["auth"]["token"], json!("***"));
+    assert_eq!(example.params["auth"]["kind"], json!("token"));
+    assert_eq!(example.params["extra"]["a"]["password"], json!("***"));
+    assert_eq!(example.result["token"], json!("***"));
+    assert_eq!(example.result["ok"], json!(true));
+    let dry_run = &doc.operations["demo.write"].def.examples[1];
+    assert_eq!(dry_run.params["key"], json!("***"));
+    assert_eq!(dry_run.result["plan"][0]["params"]["key"], json!("***"));
+    assert_eq!(
+        dry_run.result["plan"][1]["params"]["password"],
+        json!("***")
+    );
+    assert_eq!(
+        doc.events["demo.happened"].def.examples[0]["secret"],
+        json!("***")
+    );
+    assert_eq!(doc.events["demo.happened"].def.examples[0]["n"], json!(1));
+    assert!(
+        !params.is_valid(&example.params),
+        "an object-valued secret is published as \"***\" and no longer matches its schema, which is why xtask validates the authored form"
+    );
+}
+
+/// Codex review round 1, P2: leaves inside tagged unions (schemars `oneOf` of object variants) get
+/// their modes and authoring widening; discriminators stay literal.
+#[test]
+fn template_derivation_descends_into_tagged_unions() {
+    #[derive(schemars::JsonSchema)]
+    #[serde(tag = "kind", rename_all = "snake_case")]
+    #[allow(dead_code)]
+    enum Choice {
+        /// Wait.
+        Delay {
+            /// Milliseconds.
+            ms: u64,
+        },
+        /// Stop.
+        Stop,
+    }
+    #[derive(schemars::JsonSchema)]
+    #[allow(dead_code)]
+    struct Params {
+        /// Shared type reference to a tagged union.
+        choice: Choice,
+        /// A real domain union, by reference.
+        target: den_protocol::domain::ActionRef,
+        /// A list of unions.
+        list: Vec<Choice>,
+        /// An inline union.
+        #[schemars(schema_with = "inline_union")]
+        inline: (),
+    }
+    fn inline_union(_: &mut schemars::SchemaGenerator) -> Schema {
+        schemars::json_schema!({ "anyOf": [{ "type": "object", "properties": { "n": { "type": "number" } } }, { "type": "boolean" }] })
+    }
+    let mut catalog = Catalog::new();
+    let params = catalog.schema_for::<Params>();
+    catalog
+        .register_operation(op(
+            "t.union",
+            0,
+            params.to_value(),
+            json!({ "type": "object" }),
+        ))
+        .unwrap();
+    let doc = codegen::build(catalog).unwrap();
+    let authoring =
+        jsonschema::validator_for(&doc.schema_at("/operations/t.union/paramsAuthoring")).unwrap();
+    let invocation =
+        jsonschema::validator_for(&doc.schema_at("/operations/t.union/params")).unwrap();
+    let base = json!({ "target": { "kind": "name", "name": "x" }, "list": [], "inline": true });
+    let with = |choice: Value| {
+        let mut v = base.clone();
+        v["choice"] = choice;
+        v
+    };
+    assert!(
+        authoring.is_valid(&with(json!({ "kind": "delay", "ms": "{delay}" }))),
+        "a value leaf inside a variant takes a template"
+    );
+    assert!(authoring.is_valid(&with(json!({ "kind": "delay", "ms": 5 }))));
+    assert!(authoring.is_valid(&with(json!({ "kind": "stop" }))));
+    assert!(
+        !authoring.is_valid(&with(json!({ "kind": "{k}", "ms": 5 }))),
+        "the discriminator stays literal"
+    );
+    assert!(!authoring.is_valid(&with(json!({ "kind": "delay", "ms": "5" }))));
+    assert!(
+        !invocation.is_valid(&with(json!({ "kind": "delay", "ms": "{delay}" }))),
+        "invocation stays concrete"
+    );
+    assert!(invocation.is_valid(&with(json!({ "kind": "delay", "ms": 5 }))));
+    let mut v = with(json!({ "kind": "stop" }));
+    v["list"] = json!([{ "kind": "delay", "ms": "{x}" }]);
+    v["inline"] = json!({ "n": "{= 1 + 1}" });
+    assert!(
+        authoring.is_valid(&v),
+        "arrays of unions and inline compositions are derived too"
+    );
+    let entry = &doc.operations["t.union"];
+    let aut = entry.params_authoring.as_value();
+    let target = &aut["properties"]["target"]["oneOf"];
+    assert_eq!(
+        target[0]["properties"]["id"]["x-den-template"],
+        json!(false),
+        "an ID reference stays a literal leaf"
+    );
+    assert_eq!(
+        target[0]["properties"]["id"]["$ref"],
+        json!("#/types/ActionId")
+    );
+    assert_eq!(
+        target[2]["properties"]["template"]["x-den-template"],
+        json!("text"),
+        "the Template newtype's own mode is kept through the reference"
+    );
+    let delay = &aut["properties"]["choice"]["oneOf"][0];
+    assert_eq!(delay["properties"]["kind"]["x-den-template"], json!(false));
+    assert_eq!(delay["properties"]["ms"]["x-den-template"], json!("value"));
+    assert!(delay["properties"]["ms"]["anyOf"].is_array());
+    let inv = entry.def.params.as_value();
+    assert_eq!(
+        inv["properties"]["choice"]["oneOf"][0]["properties"]["ms"]["x-den-template"],
+        json!("value")
+    );
+    assert!(
+        inv["properties"]["choice"]["oneOf"][0]["properties"]["ms"]
+            .get("anyOf")
+            .is_none()
+    );
+}
+
+/// Codex review round 1, P2: a `$ref` to a string newtype keeps the field's own `x-ui.variables` hint.
+#[test]
+fn referenced_strings_honour_local_variable_hints() {
+    let mut types = std::collections::BTreeMap::new();
+    types.insert("Text".to_owned(), json!({ "type": "string" }));
+    types.insert("Count".to_owned(), json!({ "type": "integer" }));
+    let leaf = json!({ "$ref": "#/types/Text", "x-ui": { "variables": true } });
+    assert_eq!(resolve_template_mode(&leaf, &types), TemplateMode::Text);
+    assert_eq!(
+        resolve_template_mode(&json!({ "$ref": "#/types/Text" }), &types),
+        TemplateMode::Literal
+    );
+    assert_eq!(
+        resolve_template_mode(
+            &json!({ "$ref": "#/types/Count", "x-den-template": false }),
+            &types
+        ),
+        TemplateMode::Literal,
+        "an explicit local override still wins"
+    );
+    let params = json!({ "type": "object", "properties": { "message": leaf, "count": { "$ref": "#/types/Count" } } });
+    let (invocation, authoring) =
+        codegen::derive_param_schemas(&Schema::try_from(params).unwrap(), &types);
+    for schema in [invocation, authoring] {
+        let v = schema.to_value();
+        assert_eq!(v["properties"]["message"]["x-den-template"], json!("text"));
+        assert_eq!(
+            v["properties"]["message"]["$ref"],
+            json!("#/types/Text"),
+            "a leaf reference is kept"
+        );
+        assert_eq!(v["properties"]["message"]["x-ui"]["variables"], json!(true));
+        assert_eq!(v["properties"]["count"]["x-den-template"], json!("value"));
+    }
 }

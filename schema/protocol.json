@@ -1302,7 +1302,7 @@
         },
         "examples": {
           "default": [],
-          "description": "At least one example payload; the first is also the \"Test trigger\" fixture.",
+          "description": "At least one example payload; the first is also the \"Test trigger\" fixture. Published with every\n`x-secret` position redacted to `\"***\"` (§3).",
           "items": true,
           "type": "array"
         },
@@ -1620,8 +1620,7 @@
       "type": "object"
     },
     "Fragment": {
-      "description": "One fragment of a chat message, tagged by `kind` (§5.3). The union is extensible: a client renders\nan unknown fragment as its `text` (§7.2).",
-      "oneOf": [
+      "anyOf": [
         {
           "description": "Plain text.",
           "properties": {
@@ -1756,8 +1755,13 @@
             "tier"
           ],
           "type": "object"
+        },
+        {
+          "$ref": "#/types/UnknownFragment",
+          "description": "Receiving fallback for a `kind` this build does not know (§7.2): rendered as its `text`. Never\nproduced by this build's connectors; serialises back to the raw object it was decoded from."
         }
-      ]
+      ],
+      "description": "One fragment of a chat message, tagged by `kind` (§5.3). The union is extensible: a `kind` this build\ndoes not know decodes as [`Fragment::Unknown`], which keeps the raw object and exposes its `text`, so\na newer server never breaks an older client's chat rendering (§7.2)."
     },
     "Hello": {
       "description": "The `hello` notification the server sends on connect (§8.3).",
@@ -1894,8 +1898,7 @@
       "type": "object"
     },
     "Node": {
-      "description": "The node kinds of the sub-action tree (§6.4). Extensible with a fallback: a client renders an unknown\n`kind` as a read-only placeholder (§7.2).",
-      "oneOf": [
+      "anyOf": [
         {
           "description": "Any sub-action-exposed operation (§8.1). Wire: `{ \"kind\": \"op\", \"type\": \"acme.send_chat\",\n\"plugin\": \"io.github…\", \"params\": {…} }`.",
           "else": {
@@ -2264,8 +2267,13 @@
             "original"
           ],
           "type": "object"
+        },
+        {
+          "$ref": "#/types/UnknownNode",
+          "description": "Receiving fallback for a `kind` this build does not know (§7.2): shown read-only, never run.\nSerialises back to the raw node it was decoded from."
         }
-      ]
+      ],
+      "description": "The node kinds of the sub-action tree (§6.4). Extensible with a fallback: a `kind` this build does not\nknow decodes as [`Node::Unknown`], which a client renders as a read-only placeholder and which keeps\nthe raw node so a later save does not lose it (§7.2). [`Node::Placeholder`] is different: it is the\nexplicit node an importer writes for a type it could not convert."
     },
     "NodeId": {
       "description": "Identifies a sub-action node in the tree (§6.4).",
@@ -2385,7 +2393,7 @@
         },
         "examples": {
           "default": [],
-          "description": "At least one example; CI validates every example against the schemas. Tier ≥ 1 operations need a\nnormal and a dry-run example, tier-2 configuration operations also a draft example (§8.1).",
+          "description": "At least one example; CI validates every example against the schemas. Tier ≥ 1 operations need a\nnormal and a dry-run example, tier-2 configuration operations also a draft example (§8.1). In\n`protocol.json` every `x-secret` position of an example is published as `\"***\"` (§3), whatever\nits schema says; validation happens on the authored values before that.",
           "items": {
             "$ref": "#/types/OperationExample"
           },
@@ -3155,7 +3163,29 @@
       "type": "object"
     },
     "RpcResponse": {
-      "description": "A JSON-RPC response (§8.2). Exactly one of `result` and `error` is set.",
+      "description": "A JSON-RPC response (§8.2). Exactly one of `result` and `error` is present; a success with no value sends `result: null`.",
+      "oneOf": [
+        {
+          "not": {
+            "required": [
+              "error"
+            ]
+          },
+          "required": [
+            "result"
+          ]
+        },
+        {
+          "not": {
+            "required": [
+              "result"
+            ]
+          },
+          "required": [
+            "error"
+          ]
+        }
+      ],
       "properties": {
         "error": {
           "$ref": "#/types/RpcError",
@@ -3170,7 +3200,7 @@
               "type": "null"
             }
           ],
-          "description": "The request ID, or `null` when the request could not be parsed. One of the few places where `null`\nis a valid value (§3).",
+          "description": "The request ID, or `null` when the request could not be parsed. One of the few places where `null` is a valid value (§3).",
           "x-den-nullable": true
         },
         "jsonrpc": {
@@ -3179,7 +3209,8 @@
           "type": "string"
         },
         "result": {
-          "description": "The result, on success."
+          "description": "The result, on success. `null` is a valid result (a tier-0 operation may return nothing).",
+          "x-den-nullable": true
         }
       },
       "required": [
@@ -3476,8 +3507,7 @@
       "type": "object"
     },
     "SubAction": {
-      "description": "A node of the sub-action tree with its common fields; the node itself is flattened by `kind` (§6.4).",
-      "oneOf": [
+      "anyOf": [
         {
           "description": "Any sub-action-exposed operation (§8.1). Wire: `{ \"kind\": \"op\", \"type\": \"acme.send_chat\",\n\"plugin\": \"io.github…\", \"params\": {…} }`.",
           "else": {
@@ -3846,8 +3876,13 @@
             "original"
           ],
           "type": "object"
+        },
+        {
+          "$ref": "#/types/UnknownNode",
+          "description": "Receiving fallback for a `kind` this build does not know (§7.2): shown read-only, never run.\nSerialises back to the raw node it was decoded from."
         }
       ],
+      "description": "A node of the sub-action tree with its common fields; the node itself is flattened by `kind` (§6.4).",
       "properties": {
         "enabled": {
           "description": "Disabled nodes are skipped and count as tier 0 (§8.8 rule 2).",
@@ -4051,6 +4086,65 @@
       "required": [
         "upstreamType",
         "data"
+      ],
+      "type": "object"
+    },
+    "UnknownFragment": {
+      "additionalProperties": true,
+      "description": "A fragment whose `kind` this build does not know (§7.2). Every fragment kind carries `text`, so a\nclient can always render it; the other members are kept verbatim.",
+      "properties": {
+        "kind": {
+          "description": "The unknown `kind` tag. Never one of the kinds this build knows: decoding refuses a known kind\nhere, so a malformed known fragment is an error and never falls through to this variant.",
+          "not": {
+            "enum": [
+              "text",
+              "emote",
+              "mention",
+              "link",
+              "cheermote"
+            ]
+          },
+          "type": "string"
+        },
+        "text": {
+          "$ref": "#/types/UntrustedString",
+          "description": "The plain text (untrusted)."
+        }
+      },
+      "required": [
+        "kind",
+        "text"
+      ],
+      "type": "object"
+    },
+    "UnknownNode": {
+      "additionalProperties": true,
+      "description": "A node whose `kind` this build does not know (§7.2). The node-specific members are kept verbatim so\nthe node survives a round trip through an older client.",
+      "properties": {
+        "kind": {
+          "description": "The unknown `kind` tag. Never one of the kinds this build knows: decoding refuses a known kind\nhere, so a malformed known node is an error and never falls through to this variant.",
+          "not": {
+            "enum": [
+              "op",
+              "group",
+              "if",
+              "switch",
+              "while",
+              "break_loop",
+              "continue_loop",
+              "stop",
+              "parallel",
+              "delay",
+              "run_action",
+              "code",
+              "placeholder"
+            ]
+          },
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind"
       ],
       "type": "object"
     },

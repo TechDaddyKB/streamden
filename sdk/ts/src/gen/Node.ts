@@ -10,11 +10,14 @@ import type { RunMode } from "./RunMode";
 import type { SubAction } from "./SubAction";
 import type { Template } from "./Template";
 import type { TemplateOr } from "./TemplateOr";
+import type { UnknownNode } from "./UnknownNode";
 import type { JsonValue } from "./serde_json/JsonValue";
 
 /**
- * The node kinds of the sub-action tree (§6.4). Extensible with a fallback: a client renders an unknown
- * `kind` as a read-only placeholder (§7.2).
+ * The node kinds of the sub-action tree (§6.4). Extensible with a fallback: a `kind` this build does not
+ * know decodes as [`Node::Unknown`], which a client renders as a read-only placeholder and which keeps
+ * the raw node so a later save does not lose it (§7.2). [`Node::Placeholder`] is different: it is the
+ * explicit node an importer writes for a type it could not convert.
  */
 export type Node = { "kind": "op", 
 /**
@@ -129,4 +132,4 @@ origin: string,
 /**
  * The original node JSON, untouched.
  */
-original: JsonValue, };
+original: JsonValue, } | UnknownNode;

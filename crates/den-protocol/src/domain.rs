@@ -238,8 +238,10 @@ pub struct SubAction {
     pub node: Node,
 }
 
-/// The node kinds of the sub-action tree (§6.4). Extensible with a fallback: a client renders an unknown
-/// `kind` as a read-only placeholder (§7.2).
+/// The node kinds of the sub-action tree (§6.4). Extensible with a fallback: a `kind` this build does not
+/// know decodes as [`Node::Unknown`], which a client renders as a read-only placeholder and which keeps
+/// the raw node so a later save does not lose it (§7.2). [`Node::Placeholder`] is different: it is the
+/// explicit node an importer writes for a type it could not convert.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(
     tag = "kind",
@@ -362,6 +364,35 @@ pub enum Node {
         #[ts(as = "serde_json::Value")]
         original: serde_json::Value,
     },
+    /// Receiving fallback for a `kind` this build does not know (§7.2): shown read-only, never run.
+    /// Serialises back to the raw node it was decoded from.
+    #[serde(untagged)]
+    #[ts(untagged)]
+    Unknown(UnknownNode),
+}
+
+/// A node whose `kind` this build does not know (§7.2). The node-specific members are kept verbatim so
+/// the node survives a round trip through an older client.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UnknownNode {
+    /// The unknown `kind` tag. Never one of the kinds this build knows: decoding refuses a known kind
+    /// here, so a malformed known node is an error and never falls through to this variant.
+    #[serde(deserialize_with = "unknown_node_kind")]
+    #[schemars(schema_with = "unknown_node_kind_schema")]
+    pub kind: String,
+    /// The node-specific members, untouched.
+    #[serde(flatten)]
+    #[ts(flatten)]
+    pub fields: serde_json::Map<String, serde_json::Value>,
+}
+
+fn unknown_node_kind_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    crate::schema::unknown_tag_schema(Node::KNOWN_KINDS)
+}
+
+fn unknown_node_kind<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    crate::schema::deserialize_unknown_tag(d, Node::KNOWN_KINDS)
 }
 
 /// One case of a [`Node::Switch`] (§6.4).
@@ -549,8 +580,25 @@ impl StoredDocument {
 }
 
 impl Node {
+    /// The `kind` tags this build knows. The schema of [`Node::Unknown`] excludes them.
+    pub const KNOWN_KINDS: &'static [&'static str] = &[
+        "op",
+        "group",
+        "if",
+        "switch",
+        "while",
+        "break_loop",
+        "continue_loop",
+        "stop",
+        "parallel",
+        "delay",
+        "run_action",
+        "code",
+        "placeholder",
+    ];
+
     /// The `kind` tag of this node on the wire.
-    pub fn kind(&self) -> &'static str {
+    pub fn kind(&self) -> &str {
         match self {
             Self::Op { .. } => "op",
             Self::Group { .. } => "group",
@@ -565,6 +613,7 @@ impl Node {
             Self::RunAction { .. } => "run_action",
             Self::Code { .. } => "code",
             Self::Placeholder { .. } => "placeholder",
+            Self::Unknown(u) => &u.kind,
         }
     }
 }

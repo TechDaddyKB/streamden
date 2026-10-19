@@ -8,6 +8,7 @@ use std::collections::BTreeSet;
 use schemars::generate::SchemaSettings;
 use schemars::transform::{Transform, transform_subschemas};
 use schemars::{JsonSchema, Schema, SchemaGenerator};
+use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::version::RESERVED_SLUGS;
@@ -55,6 +56,32 @@ pub fn strict_root_schema_for<T: JsonSchema + ?Sized>() -> Schema {
     strict_settings()
         .into_generator()
         .into_root_schema_for::<T>()
+}
+
+/// The schema of the `kind` tag of an unknown-kind fallback variant (§7.2): any string except the tags
+/// the build knows, so the fallback branch of the union never overlaps a known branch and a malformed
+/// known-kind value is still rejected.
+pub fn unknown_tag_schema(known: &[&str]) -> Schema {
+    schemars::json_schema!({
+        "type": "string",
+        "not": { "enum": known }
+    })
+}
+
+/// Deserializes the `kind` tag of an unknown-kind fallback variant, refusing the tags the build knows
+/// (the serde counterpart of [`unknown_tag_schema`]): serde tries an `untagged` fallback variant
+/// whenever the tagged variant fails, so without this a malformed known kind would decode as unknown.
+pub fn deserialize_unknown_tag<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+    known: &[&str],
+) -> Result<String, D::Error> {
+    let kind = String::deserialize(deserializer)?;
+    if known.contains(&kind.as_str()) {
+        return Err(serde::de::Error::custom(format!(
+            "`{kind}` is a known kind; its members are invalid"
+        )));
+    }
+    Ok(kind)
 }
 
 /// Removes `null` from the schema of optional (non-required) properties (§3): absent means "not

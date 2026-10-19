@@ -6,7 +6,10 @@ import type { RpcError } from "./RpcError";
 import type { JsonValue } from "./serde_json/JsonValue";
 
 /**
- * A JSON-RPC response (§8.2). Exactly one of `result` and `error` is set.
+ * A JSON-RPC response (§8.2). Exactly one of `result` and `error` is present: a success carries
+ * `result` (which may be the JSON `null`, a valid tier-0 result) and never `error`; a failure carries
+ * `error` and never `result`. The hand-written serde impl enforces this on both directions, and the
+ * schema expresses it with a `oneOf` over `required`, so generated clients see the same rule.
  */
 export type RpcResponse = { 
 /**
@@ -17,12 +20,12 @@ jsonrpc: JsonRpcVersion,
  * The request ID, or `null` when the request could not be parsed. One of the few places where `null`
  * is a valid value (§3).
  */
-id: RequestId | null, 
+id: RequestId | null, } & ({ 
 /**
- * The result, on success.
+ * The result. `null` is a valid result (a tier-0 operation may return nothing).
  */
-result?: JsonValue, 
+result: JsonValue, } | { 
 /**
- * The error, on failure.
+ * The error.
  */
-error?: RpcError, };
+error: RpcError, });

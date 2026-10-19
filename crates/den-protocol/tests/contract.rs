@@ -101,8 +101,8 @@ fn every_node_kind_round_trips() {
     let files = fixture_files("sub_action");
     assert_eq!(
         files.len(),
-        18,
-        "one fixture per Node kind plus the TemplateOr/ActionRef/CodeSource forms"
+        19,
+        "one fixture per Node kind plus the TemplateOr/ActionRef/CodeSource forms and the unknown-kind fallback"
     );
     check_dir::<SubAction>("sub_action", true);
     let kinds: Vec<String> = files
@@ -142,7 +142,11 @@ fn every_tagged_union_variant_round_trips() {
         "all five Principal variants (§17.1)"
     );
     check_dir::<Fragment>("fragment", false);
-    assert_eq!(fixture_files("fragment").len(), 5);
+    assert_eq!(
+        fixture_files("fragment").len(),
+        6,
+        "five kinds plus the unknown-kind fallback"
+    );
     check_dir::<Filter>("filter", true);
     assert_eq!(fixture_files("filter").len(), 10, "every FilterOp");
     check_dir::<ActionRef>("action_ref", true);
@@ -169,6 +173,7 @@ fn wire_types_round_trip() {
     check_file::<RpcResponse>("rpc/response_error.json");
     check_file::<RpcResponse>("rpc/response_parse_error.json");
     check_file::<RpcResponse>("rpc/response_invalid_params.json");
+    check_file::<RpcResponse>("rpc/response_null_result.json");
     check_file::<RpcNotification>("rpc/notification_event.json");
     check_file::<Hello>("rpc/hello.json");
     check_file::<SessionIdentifyParams>("rpc/identify_params.json");
@@ -189,6 +194,121 @@ fn wire_types_round_trip() {
         serde_json::from_value(load("rpc/notification_event.json")["params"].clone())
             .expect("event notification");
     assert_eq!(notification.event.r#type.as_str(), "twitch.subscription");
+}
+
+#[test]
+fn rpc_response_carries_exactly_one_outcome() {
+    // A successful `null` result is a value, not an absence (§8.2): it survives a round trip and the
+    // batch form.
+    let ok: RpcResponse = serde_json::from_value(load("rpc/response_null_result.json")).unwrap();
+    assert_eq!(ok.result(), Some(&Value::Null));
+    assert!(ok.error().is_none());
+    assert_eq!(
+        serde_json::to_value(&ok).unwrap(),
+        load("rpc/response_null_result.json")
+    );
+    let batch: BatchExecuteResult = serde_json::from_value(serde_json::json!({
+        "results": [{ "jsonrpc": "2.0", "id": 1, "result": null }]
+    }))
+    .unwrap();
+    assert_eq!(batch.results[0].result(), Some(&Value::Null));
+    assert_eq!(
+        serde_json::to_value(&batch).unwrap()["results"][0],
+        serde_json::json!({ "jsonrpc": "2.0", "id": 1, "result": null })
+    );
+    // Neither or both members are malformed envelopes, for serde and for the schema alike.
+    let schema = validator(root_schema_for::<RpcResponse>().to_value());
+    for rel in [
+        "invalid/rpc_response_neither.json",
+        "invalid/rpc_response_both.json",
+    ] {
+        let fixture = load(rel);
+        assert!(
+            serde_json::from_value::<RpcResponse>(fixture.clone()).is_err(),
+            "{rel}: serde must reject it"
+        );
+        assert!(
+            !schema.is_valid(&fixture),
+            "{rel}: the schema must reject it"
+        );
+    }
+    assert!(
+        serde_json::from_value::<RpcResponse>(serde_json::json!({ "jsonrpc": "2.0", "result": 1 }))
+            .is_err(),
+        "id is required (null when unknown)"
+    );
+    let published = codegen::build(Catalog::core()).unwrap();
+    assert!(
+        published.types["RpcResponse"]["oneOf"].is_array(),
+        "protocol.json expresses the exactly-one rule"
+    );
+}
+
+#[test]
+fn unknown_kinds_decode_to_the_documented_fallbacks() {
+    // Fragment: an unknown kind is kept whole and renders as its text (§7.2).
+    let fixture = load("fragment/unknown_sticker.json");
+    let fragment: Fragment = serde_json::from_value(fixture.clone()).expect("fallback");
+    match &fragment {
+        Fragment::Unknown(u) => {
+            assert_eq!(u.kind, "sticker");
+            assert_eq!(u.text.as_str(), "hi");
+            assert_eq!(u.extra["image"], "x");
+        }
+        other => panic!("expected the unknown fallback, got {}", other.kind()),
+    }
+    assert_eq!(fragment.kind(), "sticker");
+    assert_eq!(fragment.text().as_str(), "hi");
+    assert_eq!(serde_json::to_value(&fragment).unwrap(), fixture);
+    let chat: den_protocol::shared::ChatText = serde_json::from_value(serde_json::json!({
+        "text": "hi there",
+        "fragments": [fixture, { "kind": "text", "text": " there" }]
+    }))
+    .expect("a chat message with an unknown fragment still decodes");
+    assert_eq!(chat.fragments.len(), 2);
+
+    // Node: an unknown kind inside a SubAction decodes as a read-only placeholder that keeps its fields.
+    let fixture = load("sub_action/unknown_kind.json");
+    let sub_action: SubAction = serde_json::from_value(fixture.clone()).expect("fallback");
+    match &sub_action.node {
+        den_protocol::domain::Node::Unknown(u) => {
+            assert_eq!(u.kind, "future_node");
+            assert_eq!(u.fields["future"]["setting"], 1);
+            assert!(
+                !u.fields.contains_key("id") && !u.fields.contains_key("note"),
+                "the SubAction envelope fields are not part of the node"
+            );
+        }
+        other => panic!("expected the unknown fallback, got {}", other.kind()),
+    }
+    assert_eq!(sub_action.node.kind(), "future_node");
+    assert_eq!(serde_json::to_value(&sub_action).unwrap(), fixture);
+    let action: Action = serde_json::from_value(serde_json::json!({
+        "id": "018f7a8c-0000-7000-8000-0000000000aa",
+        "name": "x",
+        "enabled": true,
+        "nodes": [fixture]
+    }))
+    .expect("an action containing an unknown node still decodes");
+    assert_eq!(action.nodes.len(), 1);
+
+    // The fallback never swallows a malformed known kind: schema and serde both reject it.
+    let strict = validator(strict_root_schema_for::<SubAction>().to_value());
+    let wire = validator(root_schema_for::<SubAction>().to_value());
+    let bad = load("invalid/sub_action_delay_without_ms.json");
+    assert!(serde_json::from_value::<SubAction>(bad.clone()).is_err());
+    assert!(!wire.is_valid(&bad));
+    assert!(!strict.is_valid(&bad));
+    let bad = serde_json::json!({ "kind": "emote", "text": "x" });
+    assert!(serde_json::from_value::<Fragment>(bad.clone()).is_err());
+    assert!(!validator(root_schema_for::<Fragment>().to_value()).is_valid(&bad));
+    for kind in den_protocol::domain::Node::KNOWN_KINDS {
+        assert!(
+            !strict.is_valid(&serde_json::json!({ "id": "018f7a8c-0000-7000-8000-000000000020", "enabled": true, "kind": kind, "bogus": 1 }))
+                || *kind == "op",
+            "known kind {kind} must not fall through to the open fallback branch"
+        );
+    }
 }
 
 #[test]
@@ -473,5 +593,18 @@ fn typescript_bindings_on_disk_are_current() {
     assert!(
         sub_action.contains("plugin?: PluginId"),
         "flattened ContributionRef reaches TS (§17.1)"
+    );
+    assert!(
+        sub_action.contains("UnknownNode"),
+        "the unknown-kind fallback reaches TS (§7.2)"
+    );
+    assert!(
+        files[Path::new("Fragment.ts")].contains("UnknownFragment"),
+        "the unknown-kind fallback reaches TS (§7.2)"
+    );
+    let response = &files[Path::new("RpcResponse.ts")];
+    assert!(
+        response.contains("result: JsonValue") && response.contains("error: RpcError"),
+        "RpcResponse is a union of the two outcomes (§8.2): {response}"
     );
 }
