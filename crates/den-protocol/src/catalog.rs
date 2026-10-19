@@ -382,6 +382,11 @@ impl Catalog {
         }
     }
 
+    /// The shared definitions table as generated so far, without transforms (for lint lookups).
+    pub fn peek_definitions(&self) -> serde_json::Map<String, serde_json::Value> {
+        self.generator.definitions().clone()
+    }
+
     /// Takes the shared definitions table, transforms applied. The catalog's generator is left empty, so
     /// call this last.
     pub fn take_definitions(&mut self) -> serde_json::Map<String, serde_json::Value> {

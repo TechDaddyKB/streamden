@@ -580,10 +580,11 @@
           "description": "Execution mode; only `serial` in v1."
         },
         "requests": {
-          "description": "The requests, executed in order under the caller's context.",
+          "description": "The requests, executed in order under the caller's context. At most 64 entries (§8.2).",
           "items": {
             "$ref": "#/types/RpcRequest"
           },
+          "maxItems": 64,
           "type": "array"
         }
       },
@@ -2746,6 +2747,7 @@
       "type": "string"
     },
     "PluginId": {
+      "maxLength": 128,
       "pattern": "^[a-z0-9]+(\\.[a-z0-9-]+)+$",
       "type": "string"
     },
@@ -3307,7 +3309,7 @@
       ]
     },
     "Scope": {
-      "pattern": "^[a-z][a-z0-9_]*:[a-z][a-z0-9_]*(:[^\\s]+)?$",
+      "pattern": "^[a-z][a-z0-9_]*(:[a-z][a-z0-9_]*(:[^\\s]+)?)?$",
       "type": "string"
     },
     "SessionId": {
@@ -3315,7 +3317,7 @@
       "type": "string"
     },
     "SessionIdentifyParams": {
-      "description": "Params of `session.identify` (§8.3).",
+      "description": "Params of `session.identify` (§8.3). `Debug` redacts the token (AGENTS.md: secrets never reach logs).",
       "properties": {
         "client": {
           "$ref": "#/types/ClientInfo",
@@ -4263,6 +4265,21 @@
     "system.deprecation_used",
     "catalog.changed",
     "batch.execute"
+  ],
+  "scopes": [
+    "actions:read",
+    "actions:run[:<actionId|tag>]",
+    "actions:write",
+    "variables:read",
+    "variables:write[:<namespace>]",
+    "events:read[:<glob>]",
+    "chat:send",
+    "chat:moderate",
+    "obs:control",
+    "tts:speak",
+    "plugins:call[:<pluginId>]",
+    "plugins:manage",
+    "admin"
   ],
   "reservedSlugs": [
     "core",

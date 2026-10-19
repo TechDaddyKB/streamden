@@ -458,6 +458,7 @@
       ]
     },
     "PluginId": {
+      "maxLength": 128,
       "pattern": "^[a-z0-9]+(\\.[a-z0-9-]+)+$",
       "type": "string"
     },
@@ -578,7 +579,7 @@
       ]
     },
     "Scope": {
-      "pattern": "^[a-z][a-z0-9_]*:[a-z][a-z0-9_]*(:[^\\s]+)?$",
+      "pattern": "^[a-z][a-z0-9_]*(:[a-z][a-z0-9_]*(:[^\\s]+)?)?$",
       "type": "string"
     },
     "Slug": {

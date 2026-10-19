@@ -443,8 +443,8 @@ pub struct RpcVersionRange {
     pub max: u32,
 }
 
-/// Params of `session.identify` (§8.3).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+/// Params of `session.identify` (§8.3). `Debug` redacts the token (AGENTS.md: secrets never reach logs).
+#[derive(Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionIdentifyParams {
     /// The `rpcVersion` the client speaks.
@@ -468,6 +468,19 @@ pub struct SessionIdentifyParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub since: Option<EventId>,
+}
+
+impl fmt::Debug for SessionIdentifyParams {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SessionIdentifyParams")
+            .field("rpc_version", &self.rpc_version)
+            .field("token", &self.token.as_ref().map(|_| "***"))
+            .field("client", &self.client)
+            .field("subscribe", &self.subscribe)
+            .field("high_volume", &self.high_volume)
+            .field("since", &self.since)
+            .finish()
+    }
 }
 
 /// Result of `session.identify` (§8.3).
@@ -563,7 +576,8 @@ pub struct BatchExecuteParams {
     /// Stop at the first failing entry.
     #[serde(default)]
     pub halt_on_failure: bool,
-    /// The requests, executed in order under the caller's context.
+    /// The requests, executed in order under the caller's context. At most 64 entries (§8.2).
+    #[schemars(length(max = 64))]
     pub requests: Vec<RpcRequest>,
 }
 
@@ -605,6 +619,23 @@ mod tests {
     fn jsonrpc_version_literal() {
         assert!(serde_json::from_str::<JsonRpcVersion>("\"1.0\"").is_err());
         assert_eq!(serde_json::to_string(&JsonRpcVersion).unwrap(), "\"2.0\"");
+    }
+
+    #[test]
+    fn identify_debug_redacts_the_token() {
+        let params = SessionIdentifyParams {
+            rpc_version: 1,
+            token: Some("sdt_secret".into()),
+            client: ClientInfo {
+                name: "t".into(),
+                version: "1".into(),
+            },
+            subscribe: None,
+            high_volume: None,
+            since: None,
+        };
+        let dbg = format!("{params:?}");
+        assert!(dbg.contains("***") && !dbg.contains("sdt_secret"), "{dbg}");
     }
 
     #[test]

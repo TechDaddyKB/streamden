@@ -61,7 +61,8 @@ pub fn is_template_string(s: &str) -> bool {
     let Some(first) = inner.chars().next() else {
         return false;
     };
-    (first == '=' || first.is_ascii_alphabetic() || first == '_') && !inner.contains('\n')
+    (first == '=' || first.is_ascii_alphabetic() || first == '_')
+        && !inner.contains(['\n', '\r', '\u{2028}', '\u{2029}'])
 }
 
 /// The `TemplateString` schema that `paramsAuthoring` admits at value-mode leaves (§10.1).

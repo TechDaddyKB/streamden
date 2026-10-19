@@ -6,7 +6,7 @@ import type { EventType } from "./EventType";
 import type { TopicGlob } from "./TopicGlob";
 
 /**
- * Params of `session.identify` (§8.3).
+ * Params of `session.identify` (§8.3). `Debug` redacts the token (AGENTS.md: secrets never reach logs).
  */
 export type SessionIdentifyParams = { 
 /**

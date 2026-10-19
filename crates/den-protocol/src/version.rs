@@ -94,6 +94,24 @@ pub const RESERVED_RUN_CONTEXT_ROOTS: &[&str] = &[
     "event", "user", "trigger", "action", "run", "globals", "plugins", "match", "args", "now",
 ];
 
+/// Scope patterns defined by Spec 02 §8.7, published under `scopes` in `protocol.json`. `<…>` marks
+/// an optional qualifier.
+pub const KNOWN_SCOPES: &[&str] = &[
+    "actions:read",
+    "actions:run[:<actionId|tag>]",
+    "actions:write",
+    "variables:read",
+    "variables:write[:<namespace>]",
+    "events:read[:<glob>]",
+    "chat:send",
+    "chat:moderate",
+    "obs:control",
+    "tts:speak",
+    "plugins:call[:<pluginId>]",
+    "plugins:manage",
+    "admin",
+];
+
 /// Operations whose effective tier is only known at call time (§8.1, §8.8 rule 2). Codegen adds the
 /// reserved `approvalId` param to them, and MCP annotates them like tier 3.
 pub const DYNAMIC_TIER_OPERATIONS: &[&str] = &["actions.run", "plugins.call"];

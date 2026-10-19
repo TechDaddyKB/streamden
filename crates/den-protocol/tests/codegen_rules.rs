@@ -198,6 +198,52 @@ fn authoring_schema_widens_value_leaves_only() {
 }
 
 #[test]
+fn enums_emitted_as_one_of_consts_are_value_mode() {
+    let mut types = std::collections::BTreeMap::new();
+    types.insert("Os".to_owned(), json!({ "oneOf": [{ "type": "string", "const": "windows" }, { "type": "string", "const": "linux" }] }));
+    types.insert("Tree".to_owned(), json!({ "type": "object", "properties": { "child": { "$ref": "#/types/Tree" }, "n": { "type": "integer" } } }));
+    assert_eq!(
+        resolve_template_mode(&json!({ "$ref": "#/types/Os" }), &types),
+        TemplateMode::Value
+    );
+    assert_eq!(
+        resolve_template_mode(&json!({ "type": "string", "const": "x" }), &types),
+        TemplateMode::Value
+    );
+    let params = json!({
+        "type": "object",
+        "properties": {
+            "os": { "$ref": "#/types/Os" },
+            "tree": { "$ref": "#/types/Tree" },
+            "blob": { "type": "object", "properties": { "a": { "type": "integer" } }, "x-den-template": "value" }
+        }
+    });
+    let (_, authoring) = codegen::derive_param_schemas(&Schema::try_from(params).unwrap(), &types);
+    let aut = authoring.to_value();
+    assert!(
+        aut["properties"]["os"]["anyOf"].is_array(),
+        "a $ref to a oneOf-const enum is widened"
+    );
+    assert!(
+        aut["properties"]["blob"]["anyOf"].is_array(),
+        "an explicit value-mode object is widened"
+    );
+    assert_eq!(
+        aut["properties"]["tree"]["properties"]["n"]["x-den-template"],
+        json!("value"),
+        "one level inlined"
+    );
+    assert_eq!(
+        aut["properties"]["tree"]["properties"]["child"]["$ref"],
+        json!("#/types/Tree"),
+        "the recursive edge keeps its $ref"
+    );
+    let root = json!({ "$ref": "#/params", "params": aut, "types": types });
+    let v = jsonschema::validator_for(&root).unwrap();
+    assert!(v.is_valid(&json!({ "os": "{globals.os}", "blob": "{args.blob}" })));
+}
+
+#[test]
 fn reserved_params_and_result_keys_are_generated_per_tier() {
     let mut catalog = Catalog::new();
     catalog
@@ -321,7 +367,7 @@ fn lint_catches_the_spec_rules() {
     ));
     union_root.description = "".into();
     catalog.register_operation(union_root).unwrap();
-    catalog.register_operation(with_dry_run(op("t.brace_enum", 1, json!({ "type": "object", "properties": { "scene": { "type": "string", "enum": ["{x}"] } } }), json!({ "type": "object" })))).unwrap();
+    catalog.register_operation(with_dry_run(op("t.brace_enum", 1, json!({ "type": "object", "properties": { "scene": { "type": "string", "enum": ["{x}"] }, "mode": { "type": "integer", "x-den-template": "bogus" }, "n": { "type": "number", "x-den-template": "text" } } }), json!({ "type": "object" })))).unwrap();
     catalog
         .register_operation(op(
             "t.read_with_dry_run",
@@ -377,6 +423,8 @@ fn lint_catches_the_spec_rules() {
     assert!(has("reserved result key `draft`"), "{msgs:?}");
     assert!(has("missing description"), "{msgs:?}");
     assert!(has("enum member starts with `{`"), "{msgs:?}");
+    assert!(has("x-den-template must be false"), "{msgs:?}");
+    assert!(has("applies to `type: string` leaves only"), "{msgs:?}");
     assert!(has("event:t.happened: missing title"), "{msgs:?}");
     assert!(has("payloadVersion starts at 1"), "{msgs:?}");
     assert!(has("reserved run-context root \"event\""), "{msgs:?}");

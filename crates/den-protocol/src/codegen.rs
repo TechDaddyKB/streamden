@@ -17,8 +17,9 @@ use crate::rpc::{ErrorCode, close_code};
 use crate::shared::RiskTier;
 use crate::template::template_string_schema;
 use crate::version::{
-    DYNAMIC_TIER_OPERATIONS, PROTOCOL_METHODS, PROTOCOL_VERSION, RESERVED_RUN_CONTEXT_ROOTS,
-    RESERVED_SLUGS, RPC_VERSION, RPC_VERSION_MIN, is_protocol_method, is_reserved_run_context_root,
+    DYNAMIC_TIER_OPERATIONS, KNOWN_SCOPES, PROTOCOL_METHODS, PROTOCOL_VERSION,
+    RESERVED_RUN_CONTEXT_ROOTS, RESERVED_SLUGS, RPC_VERSION, RPC_VERSION_MIN, is_protocol_method,
+    is_reserved_run_context_root,
 };
 
 /// Marker written into every generated file.
@@ -52,6 +53,8 @@ pub struct ProtocolDocument {
     pub close_codes: BTreeMap<String, CloseCodeEntry>,
     /// Protocol methods and notifications (§12); never catalog operations.
     pub protocol_methods: Vec<String>,
+    /// Scope patterns (§8.7); `<…>` marks an optional qualifier.
+    pub scopes: Vec<String>,
     /// Slugs reserved for core (§4).
     pub reserved_slugs: Vec<String>,
     /// Reserved run-context roots (§6.3).
@@ -179,6 +182,7 @@ pub const MCP_DESCRIPTION_MAX: usize = 4096;
 /// happens in `xtask` and in the crate's tests, where a JSON Schema validator is available.
 pub fn lint(catalog: &Catalog) -> Vec<LintError> {
     let mut errors = Vec::new();
+    let types: BTreeMap<String, Value> = catalog.peek_definitions().into_iter().collect();
     for (name, def) in catalog.operations() {
         let subject = format!("operation:{name}");
         let mut err = |message: String| {
@@ -269,7 +273,7 @@ pub fn lint(catalog: &Catalog) -> Vec<LintError> {
                 ));
             }
         }
-        lint_value_mode_enums(def.params.as_value(), "params", &mut err);
+        lint_value_mode_enums(def.params.as_value(), "params", &types, &mut err);
     }
     let mut tool_names: BTreeMap<String, &OperationName> = BTreeMap::new();
     for (name, def) in catalog.operations() {
@@ -346,26 +350,77 @@ fn lint_object_root(schema: &Value, what: &str, err: &mut impl FnMut(String)) {
     }
 }
 
-fn lint_value_mode_enums(schema: &Value, path: &str, err: &mut impl FnMut(String)) {
+/// The string members of a closed enum schema, whichever form it takes: `enum: [...]`, `const`, or a
+/// `oneOf`/`anyOf` whose branches are all `const` strings (what schemars emits for documented unit
+/// variants).
+fn enum_members(obj: &Map<String, Value>) -> Option<Vec<String>> {
+    if let Some(Value::Array(members)) = obj.get("enum") {
+        return Some(
+            members
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect(),
+        );
+    }
+    if let Some(Value::String(c)) = obj.get("const") {
+        return Some(vec![c.clone()]);
+    }
+    for key in ["oneOf", "anyOf"] {
+        if let Some(Value::Array(branches)) = obj.get(key)
+            && !branches.is_empty()
+        {
+            let consts: Vec<String> = branches
+                .iter()
+                .filter_map(|b| b.get("const").and_then(Value::as_str).map(str::to_owned))
+                .collect();
+            if consts.len() == branches.len() {
+                return Some(consts);
+            }
+        }
+    }
+    None
+}
+
+fn lint_value_mode_enums(
+    schema: &Value,
+    path: &str,
+    types: &BTreeMap<String, Value>,
+    err: &mut impl FnMut(String),
+) {
     let Some(obj) = schema.as_object() else {
         return;
     };
-    if let Some(Value::Array(members)) = obj.get("enum")
-        && members
-            .iter()
-            .any(|m| m.as_str().is_some_and(|s| s.starts_with('{')))
-    {
+    if let Some(mode) = obj.get("x-den-template") {
+        match TemplateMode::from_json(mode) {
+            None => err(format!(
+                "{path}: x-den-template must be false, \"text\" or \"value\", got {mode}"
+            )),
+            Some(TemplateMode::Text)
+                if obj.get("type").and_then(Value::as_str) != Some("string") =>
+            {
+                err(format!(
+                    "{path}: x-den-template \"text\" applies to `type: string` leaves only (§10.1)"
+                ))
+            }
+            _ => {}
+        }
+    }
+    let target = resolve_ref(obj, types)
+        .and_then(Value::as_object)
+        .unwrap_or(obj);
+    if enum_members(target).is_some_and(|members| members.iter().any(|m| m.starts_with('{'))) {
         err(format!(
             "{path}: enum member starts with `{{`, which a value-mode field treats as a template (§10.1)"
         ));
     }
     if let Some(props) = properties_of(schema) {
         for (name, prop) in props {
-            lint_value_mode_enums(prop, &format!("{path}/{name}"), err);
+            lint_value_mode_enums(prop, &format!("{path}/{name}"), types, err);
         }
     }
     if let Some(items) = obj.get("items") {
-        lint_value_mode_enums(items, &format!("{path}/items"), err);
+        lint_value_mode_enums(items, &format!("{path}/items"), types, err);
     }
 }
 
@@ -412,12 +467,12 @@ pub fn resolve_template_mode(leaf: &Value, types: &BTreeMap<String, Value>) -> T
     if let Some(target) = resolve_ref(obj, types) {
         return resolve_template_mode(target, types);
     }
+    if enum_members(obj).is_some() {
+        return TemplateMode::Value;
+    }
     let ty = obj.get("type").and_then(Value::as_str);
     match ty {
         Some("number" | "integer" | "boolean") => TemplateMode::Value,
-        Some("string") if obj.contains_key("enum") || obj.contains_key("const") => {
-            TemplateMode::Value
-        }
         Some("string") => {
             let variables = obj
                 .get("x-ui")
@@ -451,31 +506,48 @@ fn resolve_ref<'a>(
 pub fn derive_param_schemas(params: &Schema, types: &BTreeMap<String, Value>) -> (Schema, Schema) {
     let mut invocation = params.clone().to_value();
     let mut authoring = params.clone().to_value();
-    annotate_leaves(&mut invocation, types, false);
-    annotate_leaves(&mut authoring, types, true);
+    annotate_leaves(&mut invocation, types, false, &mut Vec::new());
+    annotate_leaves(&mut authoring, types, true, &mut Vec::new());
     (
         Schema::try_from(invocation).expect("object"),
         Schema::try_from(authoring).expect("object"),
     )
 }
 
-fn annotate_leaves(schema: &mut Value, types: &BTreeMap<String, Value>, authoring: bool) {
+/// `visiting` holds the names of shared object types currently being inlined, so a recursive type
+/// keeps its `$ref` instead of recursing forever.
+fn annotate_leaves(
+    schema: &mut Value,
+    types: &BTreeMap<String, Value>,
+    authoring: bool,
+    visiting: &mut Vec<String>,
+) {
     let Some(obj) = schema.as_object_mut() else {
         return;
     };
+    let explicit = obj.get("x-den-template").and_then(TemplateMode::from_json);
     let is_object =
         obj.get("type").and_then(Value::as_str) == Some("object") || obj.contains_key("properties");
     if is_object {
-        obj.entry("x-den-template").or_insert(Value::Bool(false));
+        obj.insert(
+            "x-den-template".into(),
+            explicit.unwrap_or(TemplateMode::Literal).to_json(),
+        );
+        if explicit == Some(TemplateMode::Value) {
+            if authoring {
+                widen_to_template(schema);
+            }
+            return;
+        }
         if let Some(Value::Object(props)) = obj.get_mut("properties") {
             for prop in props.values_mut() {
-                annotate_leaves(prop, types, authoring);
+                annotate_leaves(prop, types, authoring, visiting);
             }
         }
         if let Some(additional) = obj.get_mut("additionalProperties")
             && additional.is_object()
         {
-            annotate_leaves(additional, types, authoring);
+            annotate_leaves(additional, types, authoring, visiting);
         }
         return;
     }
@@ -488,24 +560,40 @@ fn annotate_leaves(schema: &mut Value, types: &BTreeMap<String, Value>, authorin
         if explicit != Some(TemplateMode::Value)
             && let Some(items) = obj.get_mut("items")
         {
-            annotate_leaves(items, types, authoring);
+            annotate_leaves(items, types, authoring, visiting);
         }
         if explicit == Some(TemplateMode::Value) && authoring {
             widen_to_template(schema);
         }
         return;
     }
-    // A `$ref` to a shared object type: authoring needs the leaves, so inline a copy.
+    // A `$ref` to a shared object type: authoring needs the leaves, so inline a copy, unless the type is
+    // already being inlined higher up (a recursive type keeps its `$ref` and stays literal).
+    let ref_name = obj
+        .get("$ref")
+        .and_then(Value::as_str)
+        .and_then(|r| r.rsplit('/').next())
+        .map(str::to_owned);
     if let Some(target) = resolve_ref(obj, types)
         && target.get("type").and_then(Value::as_str) == Some("object")
+        && let Some(name) = ref_name
     {
-        let mut inlined = target.clone();
-        if let Some(desc) = obj.get("description").cloned()
-            && let Some(inl) = inlined.as_object_mut()
-        {
-            inl.insert("description".into(), desc);
+        if visiting.contains(&name) {
+            obj.insert("x-den-template".into(), Value::Bool(false));
+            return;
         }
-        annotate_leaves(&mut inlined, types, authoring);
+        let mut inlined = target.clone();
+        if let Some(inl) = inlined.as_object_mut() {
+            if let Some(desc) = obj.get("description").cloned() {
+                inl.insert("description".into(), desc);
+            }
+            if let Some(mode) = obj.get("x-den-template").cloned() {
+                inl.insert("x-den-template".into(), mode);
+            }
+        }
+        visiting.push(name);
+        annotate_leaves(&mut inlined, types, authoring, visiting);
+        visiting.pop();
         *schema = inlined;
         return;
     }
@@ -684,6 +772,7 @@ pub fn build(mut catalog: Catalog) -> Result<ProtocolDocument, BuildError> {
             })
             .collect(),
         protocol_methods: PROTOCOL_METHODS.iter().map(|s| (*s).to_owned()).collect(),
+        scopes: KNOWN_SCOPES.iter().map(|s| (*s).to_owned()).collect(),
         reserved_slugs: RESERVED_SLUGS.iter().map(|s| (*s).to_owned()).collect(),
         reserved_run_context_roots: RESERVED_RUN_CONTEXT_ROOTS
             .iter()

@@ -30,7 +30,7 @@ pub use auth::{
     Surface, TokenKind,
 };
 pub use catalog::{
-    ArgWrites, Catalog, CatalogError, Deprecation, EventDef, Exposure, FilterableField,
+    ArgWrites, Catalog, CatalogError, Deprecation, EventDef, Exposure, FilterableField, L10nString,
     OperationDef, OperationExample, ResultShape,
 };
 pub use domain::{
