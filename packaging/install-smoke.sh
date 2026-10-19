@@ -70,4 +70,5 @@ fi
 if ! id probe >/dev/null 2>&1; then
   useradd -m probe
 fi
+runuser -u probe -- bash /work/packaging/test-smoke-launch.sh
 runuser -u probe -- bash /work/packaging/smoke-launch.sh

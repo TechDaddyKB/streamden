@@ -58,7 +58,13 @@ libraries or an ldd error. If `/usr/bin/streamdend` is present it runs
 The jobs create an unprivileged user, then run
 [`smoke-launch.sh`](../packaging/smoke-launch.sh) under an isolated Xvfb
 and D-Bus session. X11/software-rendering settings apply only to this probe. Success means
-the process survived 15 seconds without selected startup-error diagnostics; it does not
+the actual StreamDen PID survived 15 seconds. The probe fails on any earlier desktop
+exit (including exit 0) or infrastructure failure; a 30-second outer timeout also fails.
+Session logs are printed for diagnosis, but portal FUSE, D-Bus and Gtk helper warnings
+do not determine success. Each install job first runs
+[`test-smoke-launch.sh`](../packaging/test-smoke-launch.sh): a surviving fixture with
+portal/display noise must pass, while a SIGSEGV fixture and an early clean exit must fail.
+Run those controls locally with `bash packaging/test-smoke-launch.sh`. The launch check does not
 assert rendered pixels, Wayland/NVIDIA behaviour, or Windows runtime compatibility.
 
 Exact install-and-launch commands attempted on DailyDriver (2026-10-19), from the repo root:
@@ -156,5 +162,13 @@ entry and all three icons. This local probe skipped dependency checks and did no
 install the package; CI checks dependencies and installs it with pacman. Native package
 names are read from artifact metadata (the generated deb is named `stream-den`).
 Hosted container execution remains pending because local Docker access is unavailable.
+
+Round 3 replaces the session-log grep with direct desktop PID survival. The coordinator
+reports hosted run `39212543221` on PR #17 installed successfully on all three distros:
+Arch passed; Debian/Fedora failed the former diagnostic check on container portal noise.
+Local regression controls now pass for noisy survival and reject SIGSEGV (status 139)
+and early clean exit (status 0). They run in every install-smoke container before the
+installed desktop probe. The updated hosted run is still required; local Arch startup
+does not establish Debian/Fedora runtime success.
 
 Rollback: revert the DEN-35 commits; no host package, service or release was installed.
