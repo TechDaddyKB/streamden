@@ -1,0 +1,75 @@
+# Local reproduction: pnpm dlx markdownlint-cli2@0.18.1 'docs/**/*.md'
+# and lychee --config .lychee.toml 'docs/**/*.md' (lychee 0.24.2).
+name: Docs
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+        with:
+          run_install: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: pnpm
+      - name: Markdown lint
+        run: pnpm dlx markdownlint-cli2@0.18.1 'docs/**/*.md'
+      - name: Install lychee 0.24.2 (verified release archive)
+        run: |
+          curl --fail --location --retry 3 \
+            https://github.com/lycheeverse/lychee/releases/download/lychee-v0.24.2/lychee-x86_64-unknown-linux-gnu.tar.gz \
+            --output "$RUNNER_TEMP/lychee.tar.gz"
+          echo "1f4e0ef7f6554a6ed33dd7ac144fb2e1bbed98598e7af973042fc5cd43951c9a  $RUNNER_TEMP/lychee.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/lychee.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/lychee-x86_64-unknown-linux-gnu" >> "$GITHUB_PATH"
+      - name: Relative links across docs
+        run: lychee --config .lychee.toml 'docs/**/*.md'
+
+  commits:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      # Check the PR head, rather than the synthetic merge commit. The config uses
+      # the local branch to apply the vendor-specific D-037 trailer policy.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+        with:
+          run_install: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Validate every PR commit
+        env:
+          PR_BRANCH: ${{ github.head_ref }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          GIT_EDITOR: ':'
+        run: |
+          node scripts/check-branch-name.cjs "$PR_BRANCH"
+          git switch --create "$PR_BRANCH" "$PR_HEAD"
+          pnpm exec commitlint --from "$PR_BASE" --to "$PR_HEAD" --verbose
