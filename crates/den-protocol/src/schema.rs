@@ -11,6 +11,7 @@ use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
+use crate::codegen::{is_annotation_key, merged_secret_mark};
 use crate::version::RESERVED_SLUGS;
 
 /// JSON pointer (without `#`) under which `protocol.json` keeps its shared types (§9.1).
@@ -85,7 +86,10 @@ pub fn deserialize_unknown_tag<'de, D: serde::Deserializer<'de>>(
 }
 
 /// Removes `null` from the schema of optional (non-required) properties (§3): absent means "not
-/// provided", and `null` is only valid where a schema says so explicitly.
+/// provided", and `null` is only valid where a schema says so explicitly. An `Option<T>` property arrives
+/// as `anyOf: [T, { "type": "null" }]` beside the property's own keys (its description, `x-secret`,
+/// `x-ui`, …); the surviving branch and those keys applied in conjunction before the null branch went
+/// and still do after it, so neither side may lose a key to the other (see [`absorb_branch`]).
 #[derive(Debug, Clone, Default)]
 pub struct DenyNullForOptional;
 
@@ -132,10 +136,50 @@ fn strip_null(prop: &mut Value) {
             _ => unreachable!("checked above"),
         };
         any_of.remove(idx);
-        if let Value::Object(inner) = any_of.remove(0) {
-            for (k, v) in inner {
-                obj.entry(k).or_insert(v);
-            }
+        absorb_branch(obj, any_of.remove(0));
+    }
+}
+
+/// Joins the surviving branch of an optional property's `anyOf` with the property's own keys without
+/// losing either. When the property holds nothing but annotations ([`is_annotation_key`]: the common
+/// schemars output, a description and `x-` hints beside the `anyOf`) the branch is lifted into it; an
+/// annotation the property also carries stays the property's, the way a `$ref` sibling wins over its
+/// target, except `x-secret`, which is joined monotonically ([`merged_secret_mark`], §3): `true` on
+/// either side wins, and a malformed mark is kept so publication fails closed on it. When the property
+/// carries a constraint of its own the branch is kept whole as an `allOf` member instead: keywords of one
+/// schema object interact (`additionalProperties` with `properties`, `items` with `prefixItems`, …), so
+/// lifting the branch's keys beside the property's could change what the schema accepts, and taking only
+/// the keys the property lacks would silently drop the rest, secret marks included.
+fn absorb_branch(obj: &mut Map<String, Value>, branch: Value) {
+    let Value::Object(mut branch) = branch else {
+        // A boolean (or malformed) branch has no keys to lift; keep it as it was.
+        keep_in_conjunction(obj, branch);
+        return;
+    };
+    if let Some(mark) = merged_secret_mark(obj.get("x-secret"), branch.get("x-secret")) {
+        obj.insert("x-secret".into(), mark);
+    }
+    if obj.keys().all(|key| is_annotation_key(key)) {
+        branch.remove("x-secret");
+        for (key, value) in branch {
+            obj.entry(key).or_insert(value);
+        }
+    } else {
+        keep_in_conjunction(obj, Value::Object(branch));
+    }
+}
+
+/// Adds `branch` to the property's `allOf`. The property's `anyOf` was just taken out, so when `allOf`
+/// is present but not an array (not a schema this crate would ever generate) the free `anyOf` slot
+/// holds the branch instead of dropping it.
+fn keep_in_conjunction(obj: &mut Map<String, Value>, branch: Value) {
+    match obj.get_mut("allOf") {
+        Some(Value::Array(all_of)) => all_of.push(branch),
+        Some(_) => {
+            obj.insert("anyOf".into(), json!([branch]));
+        }
+        None => {
+            obj.insert("allOf".into(), json!([branch]));
         }
     }
 }
@@ -279,5 +323,122 @@ mod tests {
             json!({ "anyOf": [{ "$ref": "#/types/X" }, { "type": "null" }], "description": "d" });
         strip_null(&mut v);
         assert_eq!(v, json!({ "$ref": "#/types/X", "description": "d" }));
+        // Only a two-branch `anyOf` with a null branch is an optional; anything else is left alone.
+        let other = json!({ "anyOf": [{ "type": "string" }, { "type": "integer" }] });
+        let mut v = other.clone();
+        strip_null(&mut v);
+        assert_eq!(v, other);
+    }
+
+    /// Codex round-4 P1: keys the property shares with the surviving branch used to be dropped.
+    #[test]
+    fn strip_null_keeps_both_schemas() {
+        // Repro A: the property's `x-secret: false` sat on the branch's `x-secret: true`; the join is
+        // `true` (§3, monotonic) and the branch is lifted, the property holding only annotations.
+        let mut v = json!({
+            "x-secret": false,
+            "description": "d",
+            "anyOf": [
+                { "type": "object", "x-secret": true, "properties": { "token": { "type": "string" } } },
+                { "type": "null" }
+            ]
+        });
+        strip_null(&mut v);
+        assert_eq!(
+            v,
+            json!({
+                "x-secret": true,
+                "description": "d",
+                "type": "object",
+                "properties": { "token": { "type": "string" } }
+            })
+        );
+
+        // Repro B: no false mark anywhere; the property's own `properties` would have shadowed the
+        // branch's, which held the mark. A property with a constraint keeps the branch whole.
+        let mut v = json!({
+            "properties": { "token": { "type": "string" } },
+            "anyOf": [
+                { "type": "object", "properties": { "token": { "type": "string", "x-secret": true } } },
+                { "type": "null" }
+            ]
+        });
+        strip_null(&mut v);
+        assert_eq!(
+            v,
+            json!({
+                "properties": { "token": { "type": "string" } },
+                "allOf": [
+                    { "type": "object", "properties": { "token": { "type": "string", "x-secret": true } } }
+                ]
+            })
+        );
+
+        // A malformed mark on either side survives the join, so publication can still fail closed.
+        for (outer, inner, joined) in [
+            (json!("yes"), json!(true), json!("yes")),
+            (json!(false), json!("yes"), json!("yes")),
+            (json!(true), json!(false), json!(true)),
+            (json!(false), json!(true), json!(true)),
+        ] {
+            let mut v = json!({
+                "x-secret": outer,
+                "anyOf": [{ "$ref": "#/types/X", "x-secret": inner }, { "type": "null" }]
+            });
+            strip_null(&mut v);
+            assert_eq!(v, json!({ "x-secret": joined, "$ref": "#/types/X" }));
+        }
+
+        // Lifting: the property's annotation wins over the branch's, the branch's other annotations and
+        // every constraint come along.
+        let mut v = json!({
+            "description": "property",
+            "x-ui": { "variables": true },
+            "anyOf": [
+                { "description": "branch", "default": "x", "type": "string", "minLength": 1 },
+                { "type": "null" }
+            ]
+        });
+        strip_null(&mut v);
+        assert_eq!(
+            v,
+            json!({
+                "description": "property",
+                "x-ui": { "variables": true },
+                "default": "x",
+                "type": "string",
+                "minLength": 1
+            })
+        );
+
+        // Conjunction: an existing `allOf` array takes the branch; a non-array `allOf` is not touched and
+        // the freed `anyOf` slot holds it; a boolean branch is kept too.
+        let mut v = json!({
+            "maxProperties": 1,
+            "allOf": [{ "required": ["a"] }],
+            "anyOf": [{ "type": "object", "x-secret": true }, { "type": "null" }]
+        });
+        strip_null(&mut v);
+        assert_eq!(
+            v,
+            json!({
+                "maxProperties": 1,
+                "x-secret": true,
+                "allOf": [{ "required": ["a"] }, { "type": "object", "x-secret": true }]
+            })
+        );
+        let mut v = json!({
+            "maxProperties": 1,
+            "allOf": "garbage",
+            "anyOf": [{ "type": "object" }, { "type": "null" }]
+        });
+        strip_null(&mut v);
+        assert_eq!(
+            v,
+            json!({ "maxProperties": 1, "allOf": "garbage", "anyOf": [{ "type": "object" }] })
+        );
+        let mut v = json!({ "description": "d", "anyOf": [true, { "type": "null" }] });
+        strip_null(&mut v);
+        assert_eq!(v, json!({ "description": "d", "allOf": [true] }));
     }
 }

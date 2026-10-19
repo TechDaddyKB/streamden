@@ -2,8 +2,9 @@
 //! `codegen::redact_secrets` is structurally fail-closed. Regressions for the Codex round-2 review of
 //! DEN-34 (overlapping named and pattern properties, conditional schemas), round 3 (a `$ref` sibling
 //! erasing the target's mark during inlining; pattern dialect drift between redactor and validator) and
-//! DEN-47 (long reference chains), plus an exhaustive keyword-combination generator and a differential
-//! test of pattern applicability against the validator. Every value here is synthetic.
+//! DEN-47 (long reference chains), round 4 (optional-null normalisation dropping the keys an optional
+//! property shares with its surviving branch), plus an exhaustive keyword-combination generator and a
+//! differential test of pattern applicability against the validator. Every value here is synthetic.
 
 use std::collections::BTreeMap;
 
@@ -900,12 +901,12 @@ fn inlined_references_keep_the_targets_mark() {
         assert_eq!(published, json!({ "creds": REDACTED, "other": "kept" }));
     }
 
-    // 3. The shapes the lint accepts publish correctly through the whole pipeline: a false sibling on
-    // a reference to an unmarked type whose field is marked (the field stays marked after inlining),
-    // and a plain annotation sibling on a reference to a type marked as a whole.
+    // 3. The shapes the lint accepts publish correctly through the whole pipeline: an annotation
+    // sibling on a reference to an unmarked type whose field is marked (the field stays marked after
+    // inlining), and a plain annotation sibling on a reference to a type marked as a whole.
     let mut catalog = Catalog::new();
     let mut creds = catalog.ref_for::<Creds>().to_value();
-    creds["x-secret"] = json!(false);
+    creds["x-ui"] = json!({ "variables": false });
     let (published, doc) = publish_from(
         catalog,
         json!({ "type": "object", "properties": { "creds": creds } }),
@@ -929,9 +930,11 @@ fn inlined_references_keep_the_targets_mark() {
     assert!(!doc.contains(SECRET), "secret published:\n{doc}");
 }
 
-/// The lint on `x-secret` marks: a non-boolean mark anywhere, and `x-secret: false` beside a `$ref`
-/// whose target chain is marked (directly or through aliases), are reported with their position; a
-/// `false` beside a reference to an unmarked type is a harmless no-op and passes.
+/// The lint on `x-secret` marks: a non-boolean mark anywhere and every `x-secret: false` are reported
+/// with their position; beside a `$ref` whose target chain is marked (directly or through aliases) the
+/// finding names the type. A `false` is never a no-op worth keeping: §3 marks with `true` only, and
+/// (round 5) a field-level `#[schemars(extend("x-secret" = false))]` replaces the mark an inline type
+/// carries before this crate sees the schema, so the only safe rule is to reject it everywhere.
 #[test]
 fn lint_reports_marks_that_cannot_hold() {
     let lint_of = |params: Value, result: Value| -> Vec<String> {
@@ -967,11 +970,8 @@ fn lint_reports_marks_that_cannot_hold() {
     expect("params/properties/c: x-secret must be a boolean, got \"yes\"");
     expect("params/properties/d/items/anyOf/0: `x-secret: false` beside a $ref to `Marked`");
     expect("result/properties/r: `x-secret: false` beside a $ref to `Marked`");
-    assert!(
-        !findings.iter().any(|f| f.contains("properties/b")),
-        "a false sibling on an unmarked type is a no-op, not a finding: {findings:#?}"
-    );
-    assert_eq!(findings.len(), 4, "{findings:#?}");
+    expect("params/properties/b: `x-secret: false` has no effect");
+    assert_eq!(findings.len(), 5, "{findings:#?}");
 
     // Through an alias chain or a composition that applies to the same value, and a malformed mark
     // on the target counts as marked.
@@ -1206,5 +1206,237 @@ fn pattern_applicability_agrees_with_the_validator() {
     assert_eq!(
         applied + skipped + uncompilable,
         KEYS.len() * PATTERNS.len()
+    );
+}
+
+/// Codex round 4, P1: an optional property arrives as `anyOf: [T, null]` beside its own keys; the
+/// `DenyNullForOptional` transform lifted `T` into the property with `entry().or_insert()`, so every
+/// key the property already had shadowed the branch's, secret marks and all, before the publication
+/// redactor ever saw the schema. Both repros go through the real pipeline (`register_operation →
+/// build_unredacted → validate → redact_examples → to_json_string`).
+#[test]
+fn optional_properties_keep_both_schemas() {
+    // Repro A: the property's `x-secret: false` sat on the branch's `x-secret: true`. The pipeline
+    // now fails closed at the lint (an explicit `false` is never accepted, see
+    // `lint_reports_marks_that_cannot_hold`); should one ever get through, the normalisation joins the
+    // two marks to `true` (`schema::tests::strip_null_keeps_both_schemas`) and the published example
+    // is redacted whole.
+    let mut catalog = Catalog::new();
+    catalog
+        .register_operation(op(
+            "demo.op",
+            json!({
+                "type": "object",
+                "properties": {
+                    "creds": {
+                        "x-secret": false,
+                        "anyOf": [
+                            { "type": "object", "x-secret": true, "properties": { "token": { "type": "string" } } },
+                            { "type": "null" }
+                        ]
+                    }
+                }
+            }),
+            json!({ "creds": { "token": SECRET } }),
+        ))
+        .unwrap();
+    let err = codegen::build_unredacted(catalog)
+        .expect_err("an explicit `x-secret: false` fails the lint")
+        .to_string();
+    assert!(
+        err.contains("params/properties/creds") && err.contains("`x-secret: false` has no effect"),
+        "{err}"
+    );
+    let params = json!({
+        "type": "object",
+        "properties": {
+            "creds": {
+                "description": "A joined mark.",
+                "anyOf": [
+                    { "type": "object", "x-secret": true, "properties": { "token": { "type": "string" } } },
+                    { "type": "null" }
+                ]
+            }
+        }
+    });
+    let (published, doc) = publish(params, json!({ "creds": { "token": SECRET } }));
+    assert_eq!(published, json!({ "creds": REDACTED }));
+    assert!(!doc.contains(SECRET), "secret published:\n{doc}");
+    let doc: Value = serde_json::from_str(&doc).unwrap();
+    let creds = &doc["operations"]["demo.op"]["params"]["properties"]["creds"];
+    assert_eq!(
+        (creds["x-secret"].clone(), creds["description"].clone()),
+        (json!(true), json!("A joined mark.")),
+        "the branch is lifted into the property, mark included"
+    );
+
+    // Repro B: no false mark anywhere; the property's own `properties` shadowed the branch's, which
+    // held the mark.
+    let params = json!({
+        "type": "object",
+        "properties": {
+            "creds": {
+                "properties": { "token": { "type": "string" } },
+                "anyOf": [
+                    { "type": "object", "properties": { "token": { "type": "string", "x-secret": true } } },
+                    { "type": "null" }
+                ]
+            }
+        }
+    });
+    let (published, doc) = publish(
+        params,
+        json!({ "creds": { "token": SECRET, "user": "kept" } }),
+    );
+    assert_eq!(
+        published,
+        json!({ "creds": { "token": REDACTED, "user": "kept" } })
+    );
+    assert!(!doc.contains(SECRET), "secret published:\n{doc}");
+    let doc: Value = serde_json::from_str(&doc).unwrap();
+    let creds = &doc["operations"]["demo.op"]["params"]["properties"]["creds"];
+    assert_eq!(
+        creds["properties"]["token"]["type"],
+        json!("string"),
+        "the property's own constraint is still there"
+    );
+    assert_eq!(
+        creds["allOf"][0]["properties"]["token"]["x-secret"],
+        json!(true),
+        "and so is the branch, whole, in conjunction"
+    );
+
+    // Both sides still constrain after normalisation: the property's `required` and the branch's
+    // member type each reject on their own.
+    let mut catalog = Catalog::new();
+    catalog
+        .register_operation(op(
+            "demo.op",
+            json!({
+                "type": "object",
+                "properties": {
+                    "creds": {
+                        "required": ["token"],
+                        "anyOf": [
+                            { "type": "object", "properties": { "token": { "type": "string", "x-secret": true } } },
+                            { "type": "null" }
+                        ]
+                    }
+                }
+            }),
+            json!({ "creds": { "token": SECRET } }),
+        ))
+        .unwrap();
+    let doc = codegen::build_unredacted(catalog).unwrap();
+    let validator =
+        jsonschema::validator_for(&doc.schema_at("/operations/demo.op/params")).unwrap();
+    assert!(validator.is_valid(&json!({ "creds": { "token": "t" } })));
+    assert!(
+        !validator.is_valid(&json!({ "creds": {} })),
+        "the property's `required` still applies"
+    );
+    assert!(
+        !validator.is_valid(&json!({ "creds": { "token": 1 } })),
+        "the branch's member type still applies"
+    );
+    assert!(
+        !validator.is_valid(&json!({ "creds": null })),
+        "null is still gone (§3)"
+    );
+    let mut doc = doc;
+    doc.redact_examples();
+    assert!(!doc.to_json_string().contains(SECRET));
+
+    // What the real generator does with an optional field, pinned: a referenced type keeps the
+    // `anyOf: [$ref, null]` form the normalisation lifts; an `#[schemars(inline)]` type is merged into
+    // the field by schemars itself (`type: ["object", "null"]`, keys beside the field's own) before any
+    // transform of this crate runs, and a field-level `#[schemars(extend(...))]` then *replaces* the
+    // keys the inline type brought. That is why the lint rejects every `x-secret: false` and why
+    // `crates/den-protocol/AGENTS.md` allows `extend` for `x-` annotations only.
+    #[derive(schemars::JsonSchema)]
+    #[schemars(inline)]
+    struct InlineCreds {
+        #[allow(dead_code)]
+        user: String,
+        #[allow(dead_code)]
+        #[schemars(extend("x-secret" = true))]
+        token: String,
+    }
+    #[derive(schemars::JsonSchema)]
+    #[schemars(inline, extend("x-secret" = true))]
+    struct InlineWhole {
+        #[allow(dead_code)]
+        token: String,
+    }
+    #[derive(schemars::JsonSchema)]
+    struct Params {
+        #[allow(dead_code)]
+        creds: Option<Creds>,
+        #[allow(dead_code)]
+        inline_creds: Option<InlineCreds>,
+        #[allow(dead_code)]
+        inline_whole: Option<InlineWhole>,
+    }
+    let mut catalog = Catalog::new();
+    let params = catalog.schema_for::<Params>().to_value();
+    assert!(
+        params["properties"]["creds"]["anyOf"].is_array(),
+        "a referenced optional is anyOf [$ref, null]: {params}"
+    );
+    assert_eq!(
+        params["properties"]["inline_creds"]["type"],
+        json!(["object", "null"]),
+        "an inline optional is merged by schemars: {params}"
+    );
+    assert_eq!(
+        params["properties"]["inline_whole"]["x-secret"],
+        json!(true)
+    );
+    let (published, doc) = publish_from(
+        catalog,
+        params,
+        json!({
+            "creds": { "user": "kept", "token": SECRET },
+            "inline_creds": { "user": "kept", "token": SECRET },
+            "inline_whole": { "token": SECRET }
+        }),
+    );
+    assert_eq!(
+        published,
+        json!({
+            "creds": { "user": "kept", "token": REDACTED },
+            "inline_creds": { "user": "kept", "token": REDACTED },
+            "inline_whole": REDACTED
+        })
+    );
+    assert!(!doc.contains(SECRET), "secret published:\n{doc}");
+
+    #[derive(schemars::JsonSchema)]
+    struct Overridden {
+        /// A field-level `false` replaces the inline type's `true` inside schemars.
+        #[allow(dead_code)]
+        #[schemars(extend("x-secret" = false))]
+        whole: Option<InlineWhole>,
+    }
+    let mut catalog = Catalog::new();
+    let params = catalog.schema_for::<Overridden>().to_value();
+    assert_eq!(
+        params["properties"]["whole"]["x-secret"],
+        json!(false),
+        "schemars `extend` overrides, it does not join: {params}"
+    );
+    catalog
+        .register_operation(op(
+            "demo.op",
+            params,
+            json!({ "whole": { "token": SECRET } }),
+        ))
+        .unwrap();
+    let err = codegen::build_unredacted(catalog)
+        .expect_err("the lint is the only place left to catch it")
+        .to_string();
+    assert!(
+        err.contains("params/properties/whole") && err.contains("`x-secret: false` has no effect"),
+        "{err}"
     );
 }
