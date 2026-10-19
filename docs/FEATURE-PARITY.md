@@ -322,7 +322,7 @@ Conventions: v1.0 = all P0 and P1 rows complete (phases run through P6). Where a
 | 8.35 | Streamer Mode (hide user content while live) | — | — | — | CT | P3 | P2-Chat+TTS |  |
 | 8.36 | Chat relay between platforms | — | — | — | SSN | P3 | P2-Chat+TTS |  |
 | 8.37 | Settings sync from app to docks; per-split filters | ✓ | — | — | CT | P2 | P2-Chat+TTS | SB sync is one-way. |
-| 8.38 | Local chat history with retention limits | ◐ | — | — | — | P2 | P2-Chat+TTS | Twitch 24 h caching rule, YouTube 30 d (see 20.14). |
+| 8.38 | Local chat history with retention limits | ◐ | — | — | — | P2 | P2-Chat+TTS | Twitch 24 h caching rule, YouTube 30 d (see 20.14). D-054: default rolling 24 h; user sets length/size up to 120 streams / 120 days. |
 | 8.39 | Composer send targets: chips per platform × channel × identity; "send to all" fan-out with a per-target result (sent / dropped with reason / failed / skipped); manual "retry failed" (recommended: no auto-retry, pending Q-U6) | ◐ | — | — | RS | P1 ★ | P2-Chat+TTS | Owner request 2026-10-19: send to every platform with chat. SB ◐ = send-to-all exists (Shift+Enter, 8.30); per-target result reporting in SB/RS (inferred), unverified. Whether unofficial targets (Rumble 1.79) join "send to all" is Q-U6 (recommended: only when ticked). platform-apis §14.2. |
 | 8.40 | Read-only and unavailable targets stay visible, disabled with a reason (no official send API, unofficial sending off, signed out, session expired, rate-limited, quota low, not live), driven by connector-advertised send capabilities | — | — | — | — | P1 ★ | P2-Chat+TTS | Capability shape goes into den-protocol via ADR + contract card, not ad hoc. Plugins (e.g. a community TikTok plugin) use the same states. |
 | 8.41 | Per-target send pre-flight: length in the platform's unit (chars/graphemes/bytes; 140 X, 200 YouTube/Rumble, 500 Twitch/Kick, 2000 Discord), shared outbound rate limiter, YouTube quota warning, native reply vs `@name` fallback, dedupe of our own sends echoed back on the read path | — | — | — | — | P1 | P2-Chat+TTS | Never truncate silently. Echo dedupe uses the platform message ID returned by the send. |
@@ -483,7 +483,7 @@ Conventions: v1.0 = all P0 and P1 rows complete (phases run through P6). Where a
 | 13.12 | vMix (HTTP 8088 / TCP 8099) | — | — | — | — | P3 | P4-Integrations+SDK |  |
 | 13.13 | PRISM Live Studio (unofficial remote protocol) | — | — | — | — | P3 | P4-Integrations+SDK | Subscription shift. |
 | 13.14 | XSplit | — | — | — | — | P3 | P4-Integrations+SDK | No documented public remote API. |
-| 13.15 | PolyPop (WS plugin 9652; Trigger Alert) | ✓ | — | — | — | P3 | P4-Integrations+SDK | Status unverified. |
+| 13.15 | PolyPop (WS plugin 9652; Trigger Alert) | ✓ | — | — | — | P2 | P4-Integrations+SDK | Still used by the owner's community (D-051), so promoted from P3. Verify current protocol before work starts. |
 | 13.16 | NDI publish (overlay renderer) / tally triggers | — | — | — | — | P3 | P4-Integrations+SDK | NDI runtime licensing check. |
 | 13.17 | Twitch Studio | — | — | — | — | ✗ | — | Discontinued 2024-05-30. |
 
@@ -496,7 +496,7 @@ Conventions: v1.0 = all P0 and P1 rows complete (phases run through P6). Where a
 | 14.03 | VTS items (load/unload/animate/move/pin) and physics/post-processing/NDI config | — | — | ◐ | — | P2 | P4-Integrations+SDK | NDI needs `ControlNDISettings`. |
 | 14.04 | VTS parameter injection and custom parameter creation (heart rate, audio level, sentiment) | — | — | — | vts-heartrate | P1 | P4-Integrations+SDK |  |
 | 14.05 | VTS Event API triggers (model loaded, tracking status, hotkey triggered, item events, model clicked, animation event, etc.) | ✓ | — | ◐ | — | P1 | P4-Integrations+SDK | SB has 11 triggers; `ModelOutlineEvent` high-rate, throttle. |
-| 14.06 | Warudo: companion plugin mod (channel `streamden` on ws://localhost:19190; nodes On Action / Send Event / Variables) | ◐ | — | — | community SB plugin | P1 ★ | P4-Integrations+SDK | Plugin is C#/Unity (Q1 vs owner C# dislike). Without it: VMC only. HTTP callbacks 19052. |
+| 14.06 | Warudo: companion plugin mod (channel `streamden` on ws://localhost:19190; nodes On Action / Send Event / Variables) | ◐ | — | — | community SB plugin | P1 ★ | P4-Integrations+SDK | Plugin is C#/Unity; owner accepted a small C# companion plugin (Q-I1, D-050). Without it: VMC only. HTTP callbacks 19052. |
 | 14.07 | VNyan: WS receiver (ws://localhost:8000/vnyan), send command text/JSON; VNyan calls our API | — | — | — | — | P1 ★ | P4-Integrations+SDK | Windows; VNyan 1.5.3 broke older plugin WS; version-detect. REST 8069 is third-party report. |
 | 14.08 | VSeeFace: VMC Assistant expression injection + global hotkeys; receive VMC status | — | — | — | — | P1 ★ | P4-Integrations+SDK | No API; send/receive ports must differ (wizard check). |
 | 14.09 | OpenSeeFace tracker source in routing graph (UDP 11573 inferred) and tracking-lost trigger | — | — | — | — | P1 ★ | P4-Integrations+SDK | Tracker, not a control target; works on Linux. |
@@ -520,6 +520,7 @@ Conventions: v1.0 = all P0 and P1 rows complete (phases run through P6). Where a
 | 14.27 | VTuber rig health dashboard | — | — | — | — | P2 | P4-Integrations+SDK |  |
 | 14.28 | Every connector accepts a remote host (split Windows avatar PC / Linux bot PC) | ✓ | — | ✓ | — | P1 | P4-Integrations+SDK | OBS and Speaker.bot already LAN-capable in SB. |
 | 14.29 | Unofficial APIs behind an "experimental" flag with version detection | — | — | — | — | P1 | P4-Integrations+SDK | Wave Link, Sonar, PRISM, VNyan REST. Q6. |
+| 14.30 | Karasubonk (kbonk, https://typeou.itch.io/karasubonk): trigger throws/hits from actions and redeems; integration must work alongside VTS | — | — | — | — | P2 | P4-Integrations+SDK | Owner-requested (Q-I7, D-051). The research had misread it as "Karasubot". Protocol not yet researched: needs a research card before work starts. |
 
 ## 15. Audio & music
 
@@ -644,7 +645,7 @@ Conventions: v1.0 = all P0 and P1 rows complete (phases run through P6). Where a
 | 20.11 | Credits service (record events, present users, top cheer/points users; auto-reset; API) | ✓ | — | — | MIU | P2 | P3-Designer | Feeds End Credits element. |
 | 20.12 | Session stats store (latest follower, top donor, largest tip, counters) | ◐ | — | — | SE | P1 | P3-Designer | Labels/goals bind here. |
 | 20.13 | Single embedded database with human-readable export | ◐ | ◐ | ◐ | — | P0 | P0-Foundations | SB mixes JSON + LiteDB; SQLite recommended (engine Q8). Atomic saves. |
-| 20.14 | Data retention + revocation handling (Twitch 24 h caching, YouTube 30 d refresh/delete), privacy policy | — | — | — | — | P1 | P2-Chat+TTS | Required by platform terms. |
+| 20.14 | Data retention + revocation handling (Twitch 24 h caching, YouTube 30 d refresh/delete), privacy policy | — | — | — | — | P1 | P2-Chat+TTS | Required by platform terms. D-054: user-configurable chat-history window up to 120 streams / 120 days (opt-in beyond the 24 h default, with a notice about Twitch/YouTube cache rules). |
 
 ## 21. Import & compatibility
 
@@ -768,10 +769,10 @@ Conflicts between the research files (resolve before implementing the affected r
 Items I could not classify confidently (priority is a judgement call):
 
 - 1.54 YouTube InnerTube scraping (P3 plugin-only vs ✗: policy violation), 1.64 TikTok connector (P3 vs ✗: ToS), 1.62 Kick Pusher fallback (staff discourage).
-- 14.11 VMC router (P1 as research Tier 1 vs P2 differentiator), 14.06 Warudo C# shim (owner dislikes C#).
+- 14.11 VMC router (P1 as research Tier 1 vs P2 differentiator). (14.06 Warudo C# shim resolved: acceptable, Q-I1/D-050.)
 - 9.39 StreamElements widget shim (P2 vs P1 ecosystem wedge), 6.12 C# execute-code (P3 vs ✗), 12.18 Twitch Extension viewer buttons (P3).
 - 21.03 SB WS-API compat shim (P2 pending owner Q1), 23.05 macOS scope ("maybe" in research).
-- Not in matrix: "Karasubot" (no public source found), Velora/VPZone platforms (MIU lists, unresearched), Firebot/MIU import (not researched).
+- Not in matrix: Velora/VPZone platforms (MIU lists, unresearched), Firebot/MIU import (not researched).
 - Rows marked "(inferred)" or "to verify" need confirmation before work starts.
 
 ## Coverage summary
@@ -792,8 +793,8 @@ Row counts by priority per section (`★` = owner must-have rows, already includ
 | 10. TTS | 0 | 26 | 10 | 4 | 0 | 40 | 0 |
 | 11. STT & voice commands | 0 | 2 | 3 | 3 | 0 | 8 | 0 |
 | 12. Decks & remote control | 0 | 8 | 3 | 8 | 0 | 19 | 0 |
-| 13. Broadcast app integrations | 3 | 4 | 2 | 7 | 1 | 17 | 0 |
-| 14. VTuber integrations | 0 | 15 | 9 | 5 | 0 | 29 | 7 |
+| 13. Broadcast app integrations | 3 | 4 | 3 | 6 | 1 | 17 | 0 |
+| 14. VTuber integrations | 0 | 15 | 10 | 5 | 0 | 30 | 7 |
 | 15. Audio & music | 0 | 5 | 11 | 4 | 0 | 20 | 0 |
 | 16. Hardware, lighting & smart home | 0 | 2 | 5 | 5 | 0 | 12 | 0 |
 | 17. Donation & commerce services | 0 | 4 | 6 | 5 | 0 | 15 | 0 |
@@ -804,4 +805,4 @@ Row counts by priority per section (`★` = owner must-have rows, already includ
 | 22. Plugin SDK & ecosystem | 2 | 18 | 5 | 3 | 0 | 28 | 10 |
 | 23. App UX & ops | 8 | 14 | 9 | 3 | 0 | 34 | 4 |
 | 24. AI & MCP | 0 | 4 | 2 | 2 | 0 | 8 | 0 |
-| **Total** | **65** | **272** | **167** | **84** | **11** | **599** | **69** |
+| **Total** | **65** | **272** | **169** | **83** | **11** | **600** | **69** |

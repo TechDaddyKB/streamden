@@ -20,7 +20,7 @@ It is a dumb pipe: the **desktop verifies signatures**, so vendor secrets (Kick 
 ## Prerequisites
 
 - [ ] **Q-C1** answered (self-host guide only, or an official hosted relay).
-- [ ] A Cloudflare account using the project email, with 2FA.
+- [x] A Cloudflare account using the project email, with 2FA. The owner already has one (Q-G3, 2026-10-19, D-055); confirm 2FA and which email it uses.
 - [ ] Node.js and `pnpm` or `npm` on your machine (for `wrangler`).
 - [ ] Optional: a domain on Cloudflare (Q-B1, [distribution-and-signing.md](distribution-and-signing.md) section 7) for a custom hostname. Without it you get a free `*.workers.dev` address.
 - [ ] For Kick through the relay: the Kick dev app from [kick.md](kick.md).

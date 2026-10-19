@@ -7,7 +7,7 @@
 #                    on branch agent/<vendor>/DEN-<n>-<slug>, then start the agent.
 # review           — reuse the existing ../den-wt/DEN-<n> worktree (the author's branch) and start a reviewer.
 #
-# Codex runs GPT-6.1 Sol at medium reasoning effort by default (D-044); override with DEN_EFFORT=<low|medium|high>.
+# Codex runs GPT-6.1 Sol at medium reasoning effort by default (D-056); override with DEN_EFFORT=<low|medium|high>.
 # DEN_DRY_RUN=1 prints the launch command (and the prompt) instead of starting the agent.
 #
 # The agent follows AGENTS.md + docs/agents/board.md: it claims the card itself, works only in this worktree,
