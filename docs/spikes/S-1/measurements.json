@@ -1,0 +1,469 @@
+{
+  "note": "S-1 raw measurements on E-1 (2026-10-18). CPU = % of one core summed over the app process tree; memory in MB (RSS double-counts shared pages, PSS is proportional). anim = 20 s with the CSS animation running in a 1000x700 window; idle = 60 s (30 s for X- rows) with the animation paused.",
+  "matrix": [
+    {
+      "tag": "L0-defaults",
+      "status": "ok",
+      "first_paint_process_ms": [
+        253,
+        253,
+        242
+      ],
+      "first_paint_exec_ms": [
+        303,
+        302,
+        291
+      ],
+      "screenshot_stats": "1000x700 colors=1430 stddev=0.0926164",
+      "quirk": "not registered",
+      "env": [],
+      "anim": {
+        "cpu_pct_one_core": 8.3,
+        "cpu_pct_by_process": {
+          "s1-tauri-shell": 2.55,
+          "WebKitWebProces": 5.7,
+          "WebKitNetworkPr": 0.05
+        }
+      },
+      "idle": {
+        "cpu_pct_one_core": 0.6,
+        "cpu_pct_by_process": {
+          "s1-tauri-shell": 0.12,
+          "WebKitWebProces": 0.48,
+          "WebKitNetworkPr": 0.0
+        },
+        "rss_mb_avg": 606.5,
+        "pss_mb_avg": 351.6,
+        "pss_mb_by_process_last": {
+          "s1-tauri-shell": 121.3,
+          "WebKitWebProces": 170.2,
+          "WebKitNetworkPr": 51.0
+        }
+      },
+      "stderr": [
+        "     9 MESA-EGL: warning: egl: failed to create dri2 screen",
+        "     6 MESA-EGL: warning: pci id for fd N: 10de:xxxx, driver (null)",
+        "     3 MESA-EGL: warning: DRI2: failed to create screen",
+        "     3 (app): libayatana-appindicator-WARNING **: : libayatana-appindicator is deprecated. Please use libayatana-appindicator-glib in newly written code."
+      ]
+    },
+    {
+      "tag": "L1-quirk",
+      "status": "ok",
+      "first_paint_process_ms": [
+        266,
+        263,
+        247
+      ],
+      "first_paint_exec_ms": [
+        318,
+        313,
+        297
+      ],
+      "screenshot_stats": "1000x700 colors=1431 stddev=0.0952002",
+      "quirk": "Applied { gpu: \"0x10de\", driver: \"nvidia\", session: Wayland }",
+      "env": [],
+      "anim": {
+        "cpu_pct_one_core": 39.75,
+        "cpu_pct_by_process": {
+          "s1-tauri-shell": 33.85,
+          "WebKitWebProces": 5.9,
+          "WebKitNetworkPr": 0.0
+        }
+      },
+      "idle": {
+        "cpu_pct_one_core": 1.15,
+        "cpu_pct_by_process": {
+          "s1-tauri-shell": 0.65,
+          "WebKitWebProces": 0.5,
+          "WebKitNetworkPr": 0.0
+        },
+        "rss_mb_avg": 651.8,
+        "pss_mb_avg": 384.0,
+        "pss_mb_by_process_last": {
+          "s1-tauri-shell": 156.7,
+          "WebKitWebProces": 176.2,
+          "WebKitNetworkPr": 51.3
+        }
+      },
+      "stderr": [
+        "     9 MESA-EGL: warning: egl: failed to create dri2 screen",
+        "     6 MESA-EGL: warning: pci id for fd N: 10de:xxxx, driver (null)",
+        "     3 MESA-EGL: warning: DRI2: failed to create screen",
+        "     3 (app): libayatana-appindicator-WARNING **: : libayatana-appindicator is deprecated. Please use libayatana-appindicator-glib in newly written code."
+      ]
+    },
+    {
+      "tag": "L2-no-dmabuf",
+      "status": "ok",
+      "first_paint_process_ms": [
+        154,
+        151,
+        164
+      ],
+      "first_paint_exec_ms": [
+        204,
+        201,
+        214
+      ],
+      "screenshot_stats": "1000x700 colors=1634 stddev=0.0978455",
+      "quirk": "Overridden { by: \"WEBKIT_DISABLE_DMABUF_RENDERER=1\" }",
+      "env": [
+        [
+          "WEBKIT_DISABLE_DMABUF_RENDERER",
+          "1"
+        ]
+      ],
+      "anim": {
+        "cpu_pct_one_core": 6.3,
+        "cpu_pct_by_process": {
+          "s1-tauri-shell": 2.8,
+          "WebKitWebProces": 3.5,
+          "WebKitNetworkPr": 0.0
+        }
+      },
+      "idle": {
+        "cpu_pct_one_core": 0.42,
+        "cpu_pct_by_process": {
+          "s1-tauri-shell": 0.15,
+          "WebKitWebProces": 0.27,
+          "WebKitNetworkPr": 0.0
+        },
+        "rss_mb_avg": 516.0,
+        "pss_mb_avg": 297.5,
+        "pss_mb_by_process_last": {
+          "s1-tauri-shell": 127.0,
+          "WebKitWebProces": 121.3,
+          "WebKitNetworkPr": 50.9
+        }
+      },
+      "stderr": [
+        "     6 MESA-EGL: warning: egl: failed to create dri2 screen",
+        "     3 MESA-EGL: warning: pci id for fd N: 10de:xxxx, driver (null)",
+        "     3 (app): libayatana-appindicator-WARNING **: : libayatana-appindicator is deprecated. Please use libayatana-appindicator-glib in newly written code."
+      ]
+    },
+    {
+      "tag": "L3-no-dmabuf-no-compositing",
+      "status": "ok",
+      "first_paint_process_ms": [
+        170,
+        168,
+        165
+      ],
+      "first_paint_exec_ms": [
+        220,
+        220,
+        217
+      ],
+      "screenshot_stats": "1000x700 colors=1627 stddev=0.101463",
+      "quirk": "Overridden { by: \"WEBKIT_DISABLE_DMABUF_RENDERER=1\" }",
+      "env": [
+        [
+          "WEBKIT_DISABLE_DMABUF_RENDERER",
+          "1"
+        ],
+        [
+          "WEBKIT_DISABLE_COMPOSITING_MODE",
+          "1"
+        ]
+      ],
+      "anim": {
+        "cpu_pct_one_core": 6.25,
+        "cpu_pct_by_process": {
+          "s1-tauri-shell": 2.75,
+          "WebKitWebProces": 3.5,
+          "WebKitNetworkPr": 0.0
+        }
+      },
+      "idle": {
+        "cpu_pct_one_core": 0.4,
+        "cpu_pct_by_process": {
+          "s1-tauri-shell": 0.13,
+          "WebKitWebProces": 0.27,
+          "WebKitNetworkPr": 0.0
+        },
+        "rss_mb_avg": 520.9,
+        "pss_mb_avg": 299.3,
+        "pss_mb_by_process_last": {
+          "s1-tauri-shell": 126.9,
+          "WebKitWebProces": 121.3,
+          "WebKitNetworkPr": 51.2
+        }
+      },
+      "stderr": [
+        "     6 MESA-EGL: warning: egl: failed to create dri2 screen",
+        "     3 MESA-EGL: warning: pci id for fd N: 10de:xxxx, driver (null)",
+        "     3 (app): libayatana-appindicator-WARNING **: : libayatana-appindicator is deprecated. Please use libayatana-appindicator-glib in newly written code."
+      ]
+    },
+    {
+      "tag": "L4-x11",
+      "status": "ok",
+      "first_paint_process_ms": [
+        226,
+        217,
+        209
+      ],
+      "first_paint_exec_ms": [
+        276,
+        266,
+        258
+      ],
+      "screenshot_stats": "1000x720 colors=2082 stddev=0.150168",
+      "quirk": "NotAffected { reason: NotWayland }",
+      "env": [
+        [
+          "GDK_BACKEND",
+          "x11"
+        ]
+      ],
+      "anim": {
+        "cpu_pct_one_core": 6.9,
+        "cpu_pct_by_process": {
+          "s1-tauri-shell": 1.9,
+          "WebKitWebProces": 5.0,
+          "WebKitNetworkPr": 0.0
+        }
+      },
+      "idle": {
+        "cpu_pct_one_core": 0.52,
+        "cpu_pct_by_process": {
+          "s1-tauri-shell": 0.12,
+          "WebKitWebProces": 0.4,
+          "WebKitNetworkPr": 0.0
+        },
+        "rss_mb_avg": 494.3,
+        "pss_mb_avg": 276.7,
+        "pss_mb_by_process_last": {
+          "s1-tauri-shell": 102.8,
+          "WebKitWebProces": 123.5,
+          "WebKitNetworkPr": 51.4
+        }
+      },
+      "stderr": [
+        "     6 MESA-EGL: warning: egl: failed to create dri2 screen",
+        "     3 MESA-EGL: warning: pci id for fd N: 10de:xxxx, driver (null)",
+        "     3 ** (app): WARNING **: : Disabled hardware acceleration because GTK failed to initialize GL: Unable to create a GL context.",
+        "     3 (app): libayatana-appindicator-WARNING **: : libayatana-appindicator is deprecated. Please use libayatana-appindicator-glib in newly written code."
+      ]
+    },
+    {
+      "tag": "X-L0+nv-explicit-sync-off",
+      "status": "ok",
+      "first_paint_process_ms": [
+        239,
+        250
+      ],
+      "first_paint_exec_ms": [
+        289,
+        302
+      ],
+      "screenshot_stats": "1000x700 colors=1429 stddev=0.0925768",
+      "quirk": "not registered",
+      "env": [],
+      "anim": {
+        "cpu_pct_one_core": 8.25,
+        "cpu_pct_by_process": {
+          "s1-tauri-shell": 2.55,
+          "WebKitWebProces": 5.7,
+          "WebKitNetworkPr": 0.0
+        }
+      },
+      "idle": {
+        "cpu_pct_one_core": 0.5,
+        "cpu_pct_by_process": {
+          "s1-tauri-shell": 0.13,
+          "WebKitWebProces": 0.37,
+          "WebKitNetworkPr": 0.0
+        },
+        "rss_mb_avg": 606.4,
+        "pss_mb_avg": 352.6,
+        "pss_mb_by_process_last": {
+          "s1-tauri-shell": 125.4,
+          "WebKitWebProces": 176.0,
+          "WebKitNetworkPr": 51.2
+        }
+      },
+      "stderr": [
+        "     6 MESA-EGL: warning: egl: failed to create dri2 screen",
+        "     4 MESA-EGL: warning: pci id for fd N: 10de:xxxx, driver (null)",
+        "     2 MESA-EGL: warning: DRI2: failed to create screen",
+        "     2 (app): libayatana-appindicator-WARNING **: : libayatana-appindicator is deprecated. Please use libayatana-appindicator-glib in newly written code."
+      ]
+    },
+    {
+      "tag": "X-L0+GDK_GL-always",
+      "status": "ok",
+      "first_paint_process_ms": [
+        274,
+        253
+      ],
+      "first_paint_exec_ms": [
+        324,
+        302
+      ],
+      "screenshot_stats": "1000x700 colors=1415 stddev=0.0926139",
+      "quirk": "not registered",
+      "env": [],
+      "anim": {
+        "cpu_pct_one_core": 40.05,
+        "cpu_pct_by_process": {
+          "s1-tauri-shell": 34.1,
+          "WebKitWebProces": 5.95,
+          "WebKitNetworkPr": 0.0
+        }
+      },
+      "idle": {
+        "cpu_pct_one_core": 1.0,
+        "cpu_pct_by_process": {
+          "s1-tauri-shell": 0.63,
+          "WebKitWebProces": 0.37,
+          "WebKitNetworkPr": 0.0
+        },
+        "rss_mb_avg": 665.9,
+        "pss_mb_avg": 398.1,
+        "pss_mb_by_process_last": {
+          "s1-tauri-shell": 169.6,
+          "WebKitWebProces": 175.1,
+          "WebKitNetworkPr": 53.3
+        }
+      },
+      "stderr": [
+        "     6 MESA-EGL: warning: egl: failed to create dri2 screen",
+        "     4 MESA-EGL: warning: pci id for fd N: 10de:xxxx, driver (null)",
+        "     2 MESA-EGL: warning: DRI2: failed to create screen",
+        "     2 (app): libayatana-appindicator-WARNING **: : libayatana-appindicator is deprecated. Please use libayatana-appindicator-glib in newly written code."
+      ]
+    }
+  ],
+  "closed_to_tray": {
+    "L0_terminate_web_process_after_3_cycles": {
+      "root": 1579618,
+      "seconds": 60.0,
+      "cpu_pct_one_core": 0.03,
+      "cpu_pct_by_process": {
+        "s1-tauri-shell": 0.03,
+        "WebKitNetworkPr": 0.0
+      },
+      "rss_mb_avg": 322.5,
+      "rss_mb_max": 325.1,
+      "pss_mb_avg": 195.7,
+      "pss_mb_max": 198.5,
+      "pss_mb_by_process_last": {
+        "s1-tauri-shell": 137.8,
+        "WebKitNetworkPr": 56.7
+      },
+      "processes": {
+        "s1-tauri-shell": 1,
+        "WebKitNetworkPr": 1
+      }
+    },
+    "L0_plain_destroy_after_3_cycles_LEAK": {
+      "root": 1588646,
+      "seconds": 60.0,
+      "cpu_pct_one_core": 0.07,
+      "cpu_pct_by_process": {
+        "s1-tauri-shell": 0.02,
+        "WebKitWebProces": 0.05,
+        "WebKitNetworkPr": 0.0
+      },
+      "rss_mb_avg": 1388.0,
+      "rss_mb_max": 1419.2,
+      "pss_mb_avg": 572.6,
+      "pss_mb_max": 603.7,
+      "pss_mb_by_process_last": {
+        "s1-tauri-shell": 104.1,
+        "WebKitWebProces": 420.1,
+        "WebKitNetworkPr": 43.9
+      },
+      "processes": {
+        "s1-tauri-shell": 1,
+        "WebKitWebProces": 4,
+        "WebKitNetworkPr": 1
+      }
+    },
+    "engine_only_browser_fallback_no_webview_ever": {
+      "root": 1561585,
+      "seconds": 60.0,
+      "cpu_pct_one_core": 0.0,
+      "cpu_pct_by_process": {
+        "s1-tauri-shell": 0.0
+      },
+      "rss_mb_avg": 92.5,
+      "rss_mb_max": 92.5,
+      "pss_mb_avg": 51.7,
+      "pss_mb_max": 51.8,
+      "pss_mb_by_process_last": {
+        "s1-tauri-shell": 51.8
+      },
+      "processes": {
+        "s1-tauri-shell": 1
+      }
+    },
+    "L1_open_animating_60s": {
+      "root": 1458137,
+      "seconds": 60.0,
+      "cpu_pct_one_core": 37.43,
+      "cpu_pct_by_process": {
+        "s1-tauri-shell": 31.62,
+        "WebKitWebProces": 5.82,
+        "WebKitNetworkPr": 0.0
+      },
+      "rss_mb_avg": 717.7,
+      "rss_mb_max": 718.2,
+      "pss_mb_avg": 431.8,
+      "pss_mb_max": 432.9,
+      "processes": {
+        "s1-tauri-shell": 1,
+        "WebKitWebProces": 1,
+        "WebKitNetworkPr": 1
+      }
+    },
+    "L1_open_idle_60s": {
+      "root": 1458137,
+      "seconds": 60.0,
+      "cpu_pct_one_core": 0.98,
+      "cpu_pct_by_process": {
+        "s1-tauri-shell": 0.62,
+        "WebKitWebProces": 0.37,
+        "WebKitNetworkPr": 0.0
+      },
+      "rss_mb_avg": 720.8,
+      "rss_mb_max": 725.2,
+      "pss_mb_avg": 438.2,
+      "pss_mb_max": 454.0,
+      "pss_mb_by_process_last": {
+        "s1-tauri-shell": 219.5,
+        "WebKitWebProces": 183.7,
+        "WebKitNetworkPr": 50.7
+      },
+      "processes": {
+        "s1-tauri-shell": 1,
+        "WebKitWebProces": 1,
+        "WebKitNetworkPr": 1
+      }
+    },
+    "L1_closed_terminate_60s": {
+      "root": 1458137,
+      "seconds": 60.0,
+      "cpu_pct_one_core": 0.03,
+      "cpu_pct_by_process": {
+        "s1-tauri-shell": 0.03,
+        "WebKitNetworkPr": 0.0
+      },
+      "rss_mb_avg": 427.2,
+      "rss_mb_max": 429.9,
+      "pss_mb_avg": 288.5,
+      "pss_mb_max": 291.5,
+      "pss_mb_by_process_last": {
+        "s1-tauri-shell": 231.6,
+        "WebKitNetworkPr": 56.7
+      },
+      "processes": {
+        "s1-tauri-shell": 1,
+        "WebKitNetworkPr": 1
+      }
+    }
+  }
+}
