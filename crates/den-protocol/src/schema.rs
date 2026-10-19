@@ -127,6 +127,11 @@ fn strip_null(prop: &mut Value) {
             obj.insert("type".into(), single);
         }
     }
+    // schemars also admits null through `enum` for an optional inline enum (`const` becomes
+    // `enum: [c, null]`); `type` already rejects it, this keeps the published schema from saying both.
+    if let Some(Value::Array(members)) = obj.get_mut("enum") {
+        members.retain(|m| !m.is_null());
+    }
     if let Some(Value::Array(any_of)) = obj.get("anyOf")
         && any_of.len() == 2
         && let Some(idx) = any_of.iter().position(|s| s == &json!({ "type": "null" }))
@@ -323,6 +328,9 @@ mod tests {
             json!({ "anyOf": [{ "$ref": "#/types/X" }, { "type": "null" }], "description": "d" });
         strip_null(&mut v);
         assert_eq!(v, json!({ "$ref": "#/types/X", "description": "d" }));
+        let mut v = json!({ "type": ["string", "null"], "enum": ["a", "b", null] });
+        strip_null(&mut v);
+        assert_eq!(v, json!({ "type": "string", "enum": ["a", "b"] }));
         // Only a two-branch `anyOf` with a null branch is an optional; anything else is left alone.
         let other = json!({ "anyOf": [{ "type": "string" }, { "type": "integer" }] });
         let mut v = other.clone();

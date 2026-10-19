@@ -11,7 +11,17 @@
 //! published type table for every shared type and every fixture, the TypeScript export and the plugin
 //! schema. It runs over the core catalog, and over the core catalog plus a stress catalog of
 //! secret-bearing shapes written as Rust types (optional, inline, flattened, tagged, listed, mapped,
-//! templated, nested, and the two round-4 collision shapes). Every value here is synthetic.
+//! templated, nested) plus a JSON-authored operation with the round-4 collision shape. Every value here
+//! is synthetic.
+//!
+//! Reach of the planter, deliberately the redactor's own conjunction: `$ref` chains, `allOf`, one
+//! branch at a time of `anyOf`/`oneOf`, `if`, `then`, `else` and every `dependentSchemas` entry (all
+//! taken as applying, the way `codegen::redact_secrets` unions them), `properties`, selecting
+//! `patternProperties`, `additionalProperties`/`unevaluatedProperties` for undeclared members,
+//! `prefixItems`, `items`/`unevaluatedItems` and `contains` for items. Not planted: marks under `not`
+//! and `propertyNames` (an instance satisfying them is not a valid one; `redaction.rs` covers the
+//! redactor side), and alternatives past `MAX_ALTERNATIVES` per position (unions are sampled, not
+//! exhausted, past that). schemars emits none of those from Rust types.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -161,6 +171,15 @@ impl<'a> Planter<'a> {
             }
             if let Some(Value::Array(branches)) = obj.get("allOf") {
                 stack.extend(branches.iter().rev());
+            }
+            // Taken as applying whether or not the condition holds, like the redactor does.
+            for key in ["if", "then", "else"] {
+                if let Some(conditional) = obj.get(key) {
+                    stack.push(conditional);
+                }
+            }
+            if let Some(Value::Object(dependents)) = obj.get("dependentSchemas") {
+                stack.extend(dependents.values().rev());
             }
             for key in ["anyOf", "oneOf"] {
                 if let Some(Value::Array(branches)) = obj.get(key) {
@@ -347,9 +366,13 @@ impl<'a> Planter<'a> {
                     }
                 }
             }
-            if let Some(fallback) = obj.get("additionalProperties")
-                && fallback.is_object()
-            {
+            for key in ["additionalProperties", "unevaluatedProperties"] {
+                let Some(fallback) = obj.get(key) else {
+                    continue;
+                };
+                if !fallback.is_object() {
+                    continue;
+                }
                 let selected_by_any = |this: &mut Self, name: &str| {
                     conj.iter().any(|o| {
                         this.selecting_patterns(o, name).next().is_some()
@@ -427,7 +450,15 @@ impl<'a> Planter<'a> {
             }
             return vec![Value::Array(tuple)];
         }
-        let items: Vec<&'b Value> = conj.iter().filter_map(|o| o.get("items")).collect();
+        let mut items: Vec<&'b Value> = Vec::new();
+        for obj in conj {
+            if let Some(schema) = obj.get("items").or_else(|| obj.get("unevaluatedItems")) {
+                items.push(schema);
+            }
+            if let Some(contains) = obj.get("contains") {
+                items.push(contains);
+            }
+        }
         let alternatives = self.instances_marked(&items, &format!("{path}/0"), marked);
         if alternatives.is_empty() {
             return vec![Value::Array(Vec::new())];
@@ -526,8 +557,12 @@ impl<'a> Planter<'a> {
                             self.selecting_patterns(obj, &name).collect();
                         matched |= !patterns.is_empty();
                         schemas.extend(patterns);
-                        if !matched && let Some(fallback) = obj.get("additionalProperties") {
-                            schemas.push(fallback);
+                        if !matched {
+                            for key in ["additionalProperties", "unevaluatedProperties"] {
+                                if let Some(fallback) = obj.get(key) {
+                                    schemas.push(fallback);
+                                }
+                            }
                         }
                     }
                     let member_path = format!("{path}/{name}");
@@ -551,8 +586,13 @@ impl<'a> Planter<'a> {
                     for obj in &conj {
                         if let Some(prefixed) = obj.get("prefixItems").and_then(|p| p.get(i)) {
                             schemas.push(prefixed);
-                        } else if let Some(items_schema) = obj.get("items") {
+                        } else if let Some(items_schema) =
+                            obj.get("items").or_else(|| obj.get("unevaluatedItems"))
+                        {
                             schemas.push(items_schema);
+                        }
+                        if let Some(contains) = obj.get("contains") {
+                            schemas.push(contains);
                         }
                     }
                     self.plant_into(item, &schemas, &format!("{path}/{i}"));
@@ -931,7 +971,8 @@ struct Report {
     /// Sentinels present in the planted examples.
     planted_examples: usize,
     examples: usize,
-    valid_examples: usize,
+    /// Examples the pipeline's own validation rejects, with the reason.
+    invalid_examples: Vec<String>,
     type_instances: usize,
     /// Sentinels present in the shared-type instances.
     planted_types: usize,
@@ -1058,7 +1099,7 @@ fn run(catalog: Catalog, label: &str) -> Report {
     }
 
     // How many of the planted examples the pipeline's own validation (xtask) would accept.
-    let (examples, valid_examples) = count_valid(&doc);
+    let (examples, invalid_examples) = count_valid(&doc);
 
     let instances: Vec<&Value> = doc
         .operations
@@ -1128,17 +1169,18 @@ fn run(catalog: Catalog, label: &str) -> Report {
     Report {
         planted_examples: present.len(),
         examples,
-        valid_examples,
+        invalid_examples,
         type_instances,
         planted_types,
     }
 }
 
 /// Validates every example the way `xtask` does (params against the invocation schema, the result
-/// against the shape it declares, event payloads against the payload schema). Returns `(all, valid)`.
-fn count_valid(doc: &ProtocolDocument) -> (usize, usize) {
+/// against the shape it declares, event payloads against the payload schema). Returns the count and
+/// the examples that do not validate, each with the validator's first complaint.
+fn count_valid(doc: &ProtocolDocument) -> (usize, Vec<String>) {
     let mut all = 0;
-    let mut valid = 0;
+    let mut invalid = Vec::new();
     for (name, entry) in &doc.operations {
         let params =
             jsonschema::validator_for(&doc.schema_at(&format!("/operations/{name}/params")))
@@ -1166,26 +1208,32 @@ fn count_valid(doc: &ProtocolDocument) -> (usize, usize) {
         .collect();
         for example in &entry.def.examples {
             all += 1;
-            let result_ok = shapes
-                .iter()
-                .find(|(shape, _)| *shape == example.shape)
-                .is_some_and(|(_, v)| v.is_valid(&example.result));
-            if params.is_valid(&example.params) && result_ok {
-                valid += 1;
+            let label = format!("operation {name}, example {:?}", example.title);
+            if let Err(e) = params.validate(&example.params) {
+                invalid.push(format!("{label}: params: {e}"));
+                continue;
+            }
+            match shapes.iter().find(|(shape, _)| *shape == example.shape) {
+                Some((_, v)) => {
+                    if let Err(e) = v.validate(&example.result) {
+                        invalid.push(format!("{label}: result: {e}"));
+                    }
+                }
+                None => invalid.push(format!("{label}: no {:?} shape", example.shape)),
             }
         }
     }
     for (r#type, entry) in &doc.events {
         let payload = jsonschema::validator_for(&doc.schema_at(&format!("/events/{type}/payload")))
             .expect("payload schema compiles");
-        for example in &entry.def.examples {
+        for (i, example) in entry.def.examples.iter().enumerate() {
             all += 1;
-            if payload.is_valid(example) {
-                valid += 1;
+            if let Err(e) = payload.validate(example) {
+                invalid.push(format!("event {type}, example {i}: {e}"));
             }
         }
     }
-    (all, valid)
+    (all, invalid)
 }
 
 #[test]
@@ -1197,7 +1245,7 @@ fn planted_secrets_never_reach_a_published_artifact() {
             "{label}: {} sentinels planted across {} examples ({} valid as authored); {} planted across {} shared-type instances",
             report.planted_examples,
             report.examples,
-            report.valid_examples,
+            report.examples - report.invalid_examples.len(),
             report.planted_types,
             report.type_instances
         );
@@ -1211,9 +1259,10 @@ fn planted_secrets_never_reach_a_published_artifact() {
         "the stress catalog plants its shapes in examples ({})",
         stress.planted_examples
     );
-    assert_eq!(
-        stress.valid_examples, stress.examples,
-        "every planted stress example validates as authored, so each is one an author could have written"
+    assert!(
+        stress.invalid_examples.is_empty(),
+        "every planted stress example validates as authored, so each is one an author could have written; these do not:\n  - {}",
+        stress.invalid_examples.join("\n  - ")
     );
 
     // The other published artifacts carry no example and so no sentinel, whatever the catalog.
