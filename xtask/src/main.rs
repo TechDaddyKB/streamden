@@ -220,9 +220,9 @@ fn codegen_check() -> Result<()> {
     let files = generate()?;
     let mut drift = Vec::new();
     for (rel, content) in &files {
-        // Generated files are LF; tolerate a CRLF checkout (core.autocrlf) when comparing (§14).
-        match std::fs::read_to_string(root.join(rel)).map(|s| s.replace("\r\n", "\n")) {
-            Ok(existing) if existing == *content => {}
+        // Compare exact bytes, including the canonical LF line endings (§14).
+        match std::fs::read(root.join(rel)) {
+            Ok(existing) if existing == content.as_bytes() => {}
             Ok(_) => drift.push(format!("{} (content differs)", rel.display())),
             Err(_) => drift.push(format!("{} (missing)", rel.display())),
         }
