@@ -1,7 +1,9 @@
 //! Secret redaction at the publication boundary (Spec 02 §3): the walk behind
 //! `codegen::redact_secrets` is structurally fail-closed. Regressions for the Codex round-2 review of
-//! DEN-34 (overlapping named and pattern properties, conditional schemas) and DEN-47 (long reference
-//! chains), plus an exhaustive keyword-combination generator. Every value here is synthetic.
+//! DEN-34 (overlapping named and pattern properties, conditional schemas), round 3 (a `$ref` sibling
+//! erasing the target's mark during inlining; pattern dialect drift between redactor and validator) and
+//! DEN-47 (long reference chains), plus an exhaustive keyword-combination generator and a differential
+//! test of pattern applicability against the validator. Every value here is synthetic.
 
 use std::collections::BTreeMap;
 
@@ -56,7 +58,12 @@ fn op_at_tier(name: &str, tier: u8, params: Value, example: Value) -> OperationD
 /// the published invocation schema first, then the document is redacted. Returns the published
 /// params of the example and the serialized document.
 fn publish(params: Value, example: Value) -> (Value, String) {
-    let mut catalog = Catalog::new();
+    publish_from(Catalog::new(), params, example)
+}
+
+/// [`publish`] with a catalog that may already hold shared types (registered through
+/// `Catalog::ref_for`, the way a real operation references them).
+fn publish_from(mut catalog: Catalog, params: Value, example: Value) -> (Value, String) {
     catalog
         .register_operation(op("demo.op", params, example.clone()))
         .unwrap();
@@ -792,4 +799,412 @@ fn keyword_combinations_never_publish_a_marked_secret() {
         }
     }
     assert_eq!(cases, 16 + 16 * 16 + 16 * 16 * 16);
+}
+
+/// A shared type marked secret as a whole (every value of it is a secret), the round-3 reproduction.
+#[derive(schemars::JsonSchema)]
+#[schemars(extend("x-secret" = true))]
+#[allow(dead_code)]
+struct Marked {
+    /// The token.
+    token: String,
+}
+
+/// A shared type with one marked field, not marked as a whole.
+#[derive(schemars::JsonSchema)]
+#[allow(dead_code)]
+struct Creds {
+    /// The user.
+    user: String,
+    /// The token.
+    #[schemars(extend("x-secret" = true))]
+    token: String,
+}
+
+/// Codex round 3, P1 #1: secrecy is monotonic across reference inlining. The derived invocation schema
+/// inlines a structured shared target with the property's siblings merged in; a sibling
+/// `x-secret: false` must not replace the target's `true` there. End to end through `Catalog::ref_for`
+/// and `build_unredacted`: the lint rejects the contradiction before anything is generated, and should
+/// the lint ever be bypassed, the derivation keeps the mark and publication redacts.
+#[test]
+fn inlined_references_keep_the_targets_mark() {
+    // 1. End to end: the contradictory sibling fails the catalog lint.
+    let mut catalog = Catalog::new();
+    let mut creds = catalog.ref_for::<Marked>().to_value();
+    creds["x-secret"] = json!(false);
+    let params = json!({ "type": "object", "properties": { "creds": creds } });
+    catalog
+        .register_operation(op(
+            "demo.op",
+            params.clone(),
+            json!({ "creds": { "token": SECRET } }),
+        ))
+        .unwrap();
+    let err = codegen::build_unredacted(catalog)
+        .expect_err("x-secret: false beside a $ref to a marked type fails lint");
+    let text = err.to_string();
+    assert!(
+        text.contains("params/properties/creds")
+            && text.contains("Marked")
+            && text.contains("monotonic"),
+        "{text}"
+    );
+
+    // 2. Defence in depth: derivation alone keeps the target's mark, and the derived schema redacts.
+    let types: BTreeMap<String, Value> = BTreeMap::from([(
+        "Marked".to_string(),
+        json!({ "type": "object", "x-secret": true, "properties": { "token": { "type": "string" } } }),
+    )]);
+    let (invocation, authoring) =
+        codegen::derive_param_schemas(&Schema::try_from(params.clone()).unwrap(), &types);
+    for (label, schema) in [("params", invocation), ("paramsAuthoring", authoring)] {
+        let v = schema.to_value();
+        let creds = &v["properties"]["creds"];
+        assert!(
+            creds.get("$ref").is_none(),
+            "{label}: the structured target was inlined"
+        );
+        assert_eq!(
+            creds["x-secret"],
+            json!(true),
+            "{label}: the target's mark survives a false sibling"
+        );
+        let example = json!({ "creds": { "token": SECRET } });
+        assert_valid(&v, &example, &types, label);
+        let mut published = example;
+        redact_secrets(&mut published, &v, &types);
+        assert_eq!(published, json!({ "creds": REDACTED }), "{label}");
+    }
+
+    // A malformed mark on either side stays malformed through the merge, so publication fails closed.
+    for (sibling, target) in [
+        (json!(false), json!("yes")),
+        (json!("yes"), json!(true)),
+        (json!("yes"), json!(false)),
+    ] {
+        let types: BTreeMap<String, Value> = BTreeMap::from([(
+            "T".to_string(),
+            json!({ "type": "object", "x-secret": target, "properties": { "token": { "type": "string" } } }),
+        )]);
+        let params = json!({ "type": "object", "properties": { "creds": { "$ref": "#/types/T", "x-secret": sibling } } });
+        let (invocation, _) =
+            codegen::derive_param_schemas(&Schema::try_from(params).unwrap(), &types);
+        let v = invocation.to_value();
+        assert_eq!(
+            v["properties"]["creds"]["x-secret"],
+            json!("yes"),
+            "{sibling} over {target}"
+        );
+        let mut published = json!({ "creds": { "token": SECRET }, "other": "kept" });
+        redact_secrets(&mut published, &v, &types);
+        assert_eq!(published, json!({ "creds": REDACTED, "other": "kept" }));
+    }
+
+    // 3. The shapes the lint accepts publish correctly through the whole pipeline: a false sibling on
+    // a reference to an unmarked type whose field is marked (the field stays marked after inlining),
+    // and a plain annotation sibling on a reference to a type marked as a whole.
+    let mut catalog = Catalog::new();
+    let mut creds = catalog.ref_for::<Creds>().to_value();
+    creds["x-secret"] = json!(false);
+    let (published, doc) = publish_from(
+        catalog,
+        json!({ "type": "object", "properties": { "creds": creds } }),
+        json!({ "creds": { "user": "kept", "token": SECRET } }),
+    );
+    assert_eq!(
+        published["creds"],
+        json!({ "user": "kept", "token": REDACTED })
+    );
+    assert!(!doc.contains(SECRET), "secret published:\n{doc}");
+
+    let mut catalog = Catalog::new();
+    let mut whole = catalog.ref_for::<Marked>().to_value();
+    whole["description"] = json!("Local description");
+    let (published, doc) = publish_from(
+        catalog,
+        json!({ "type": "object", "properties": { "whole": whole, "name": { "type": "string" } } }),
+        json!({ "whole": { "token": SECRET }, "name": "kept" }),
+    );
+    assert_eq!(published, json!({ "whole": REDACTED, "name": "kept" }));
+    assert!(!doc.contains(SECRET), "secret published:\n{doc}");
+}
+
+/// The lint on `x-secret` marks: a non-boolean mark anywhere, and `x-secret: false` beside a `$ref`
+/// whose target chain is marked (directly or through aliases), are reported with their position; a
+/// `false` beside a reference to an unmarked type is a harmless no-op and passes.
+#[test]
+fn lint_reports_marks_that_cannot_hold() {
+    let lint_of = |params: Value, result: Value| -> Vec<String> {
+        let mut catalog = Catalog::new();
+        catalog.register_type::<Marked>();
+        catalog.register_type::<Creds>();
+        let mut def = op("demo.op", params, json!({}));
+        def.result = Schema::try_from(result).unwrap();
+        catalog.register_operation(def).unwrap();
+        codegen::lint(&catalog)
+            .into_iter()
+            .map(|e| e.to_string())
+            .collect()
+    };
+    let object = json!({ "type": "object" });
+
+    let findings = lint_of(
+        json!({ "type": "object", "properties": {
+            "a": { "$ref": "#/types/Marked", "x-secret": false },
+            "b": { "$ref": "#/types/Creds", "x-secret": false },
+            "c": { "type": "string", "x-secret": "yes" },
+            "d": { "type": "array", "items": { "anyOf": [{ "$ref": "#/types/Marked", "x-secret": false }] } }
+        } }),
+        json!({ "type": "object", "properties": { "r": { "$ref": "#/types/Marked", "x-secret": false } } }),
+    );
+    let expect = |needle: &str| {
+        assert!(
+            findings.iter().any(|f| f.contains(needle)),
+            "missing {needle:?} in {findings:#?}"
+        );
+    };
+    expect("params/properties/a: `x-secret: false` beside a $ref to `Marked`");
+    expect("params/properties/c: x-secret must be a boolean, got \"yes\"");
+    expect("params/properties/d/items/anyOf/0: `x-secret: false` beside a $ref to `Marked`");
+    expect("result/properties/r: `x-secret: false` beside a $ref to `Marked`");
+    assert!(
+        !findings.iter().any(|f| f.contains("properties/b")),
+        "a false sibling on an unmarked type is a no-op, not a finding: {findings:#?}"
+    );
+    assert_eq!(findings.len(), 4, "{findings:#?}");
+
+    // Through an alias chain or a composition that applies to the same value, and a malformed mark
+    // on the target counts as marked.
+    let mut catalog = Catalog::new();
+    catalog.register_type::<Marked>();
+    #[derive(schemars::JsonSchema)]
+    #[allow(dead_code)]
+    struct Alias(Marked);
+    catalog.register_type::<Alias>();
+    fn wrap_in_all_of(schema: &mut Schema) {
+        *schema = schemars::json_schema!({ "allOf": [{ "$ref": "#/types/Marked" }] });
+    }
+    #[derive(schemars::JsonSchema)]
+    #[schemars(transform = wrap_in_all_of)]
+    #[allow(dead_code)]
+    struct Wrap(Marked);
+    catalog.register_type::<Wrap>();
+    assert_eq!(
+        catalog.peek_definitions()["Wrap"],
+        json!({ "allOf": [{ "$ref": "#/types/Marked" }] })
+    );
+    assert_eq!(
+        catalog.peek_definitions()["Alias"],
+        json!({ "$ref": "#/types/Marked" }),
+        "a newtype is a reference alias of its inner type"
+    );
+    assert_eq!(
+        lint_of(object.clone(), object.clone()),
+        Vec::<String>::new()
+    );
+    let clean: Vec<String> = codegen::lint(&catalog)
+        .iter()
+        .map(|e| e.to_string())
+        .collect();
+    assert_eq!(clean, Vec::<String>::new());
+    catalog
+        .register_operation(op(
+            "demo.op",
+            json!({ "type": "object", "properties": {
+                "a": { "$ref": "#/types/Alias", "x-secret": false },
+                "w": { "$ref": "#/types/Wrap", "x-secret": false }
+            } }),
+            json!({}),
+        ))
+        .unwrap();
+    let findings: Vec<String> = codegen::lint(&catalog)
+        .iter()
+        .map(|e| e.to_string())
+        .collect();
+    for at in ["params/properties/a", "params/properties/w"] {
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.contains(at) && f.contains("beside a $ref to `Marked`")),
+            "{at}: {findings:#?}"
+        );
+    }
+    assert_eq!(findings.len(), 2, "{findings:#?}");
+}
+
+/// The two round-3 P1 #2 reproductions, and the applicability control Codex used: the validator
+/// applies the entry (a `type: integer` twin rejects the string member), so the published example must
+/// redact it, whatever a Rust regex thinks of `\W` (Unicode-aware there, ASCII in ECMA-262) or `\s`
+/// (ECMA-262 includes U+FEFF).
+#[test]
+fn pattern_properties_match_in_the_validators_dialect() {
+    for (pattern, key) in [(r"^\W+$", "é"), (r"^\skey$", "\u{FEFF}key")] {
+        let control = jsonschema::validator_for(
+            &json!({ "type": "object", "patternProperties": { pattern: { "type": "integer" } } }),
+        )
+        .unwrap();
+        assert!(
+            !control.is_valid(&json!({ key: "s" })),
+            "the validator applies {pattern} to {key:?}, or the case proves nothing"
+        );
+        let params = json!({ "type": "object", "patternProperties": { pattern: { "type": "string", "x-secret": true } } });
+        let (published, doc) = publish(params, json!({ key: SECRET }));
+        assert_eq!(published[key], json!(REDACTED), "{pattern} on {key:?}");
+        assert!(
+            !doc.contains(SECRET),
+            "{pattern} on {key:?}: secret published:\n{doc}"
+        );
+    }
+}
+
+/// Differential test: over generated member names and patterns, the redactor applies a marked
+/// `patternProperties` entry exactly when the validator does. The validator's verdict is observed
+/// without the redactor, through a `type: integer` twin of the entry (a string member is rejected
+/// exactly when the pattern selects it). Patterns the validator cannot compile redact every member,
+/// marked or not, and whatever the fallback entries say.
+#[test]
+fn pattern_applicability_agrees_with_the_validator() {
+    const KEYS: &[&str] = &[
+        "key",
+        "api_key",
+        "é",
+        "\u{FEFF}key",
+        " key",
+        "\tkey",
+        "k",
+        "1",
+        "١",
+        "ß",
+        "ｋey",
+        "😀",
+        "",
+        "a b",
+        "KEY",
+        "key\n",
+        "_",
+        "-",
+        "\u{00A0}key",
+        "x\u{200B}",
+        "Ab",
+        "a.b",
+        "\\",
+        "$",
+        "^",
+    ];
+    const PATTERNS: &[&str] = &[
+        r"^\W+$",
+        r"^\skey$",
+        r"^\w+$",
+        r"^\d$",
+        r"^\D+$",
+        r"^\S+$",
+        r"^.$",
+        r"^[^a-z]+$",
+        r"^\bkey$",
+        r"^[\s\S]+$",
+        r"^é$",
+        r"^\x41b$",
+        r"^(?i)key$",
+        r"^(?<n>k)ey$",
+        r"^\p{L}+$",
+        r"^[[:alpha:]]+$",
+        r"^key$",
+        "key",
+        r"^(key|api_key)$",
+        "(",
+        "[",
+        r"^\",
+        r"^\cJ$",
+        r"^$",
+        r"^[é]$",
+        r"^.+$",
+        r"^\u{1F600}$",
+        r"(?<=a)b",
+        r"^(a)\1$",
+        r"^\$$",
+        r"^[\w-]+$",
+        r"^[^\W_]+$",
+        r"^.*\.b$",
+        r"^\p{Letter}$",
+        r"^\x{41}$",
+    ];
+    let mut applied = 0usize;
+    let mut skipped = 0usize;
+    let mut uncompilable = 0usize;
+    for pattern in PATTERNS {
+        let control = jsonschema::validator_for(
+            &json!({ "type": "object", "patternProperties": { *pattern: { "type": "integer" } } }),
+        );
+        for key in KEYS {
+            let params = json!({
+                "type": "object",
+                "patternProperties": { *pattern: { "type": "string", "x-secret": true } },
+                "additionalProperties": { "type": "string" }
+            });
+            let example = json!({ *key: SECRET });
+            match &control {
+                Err(_) => {
+                    // The validator rejects the pattern: no example could be validated against this
+                    // schema, and the redactor cannot tell which members the entry (or the fallback)
+                    // covers, so every member redacts whole: with the mark on the entry, with it on
+                    // the fallback instead, and with no mark anywhere.
+                    let unmarked_entry = json!({
+                        "type": "object",
+                        "patternProperties": { *pattern: { "type": "string" } },
+                        "additionalProperties": { "type": "string", "x-secret": true }
+                    });
+                    let no_mark = json!({
+                        "type": "object",
+                        "patternProperties": { *pattern: { "type": "string" } },
+                        "unevaluatedProperties": { "type": "string" }
+                    });
+                    for (label, schema) in [
+                        ("marked entry", &params),
+                        ("marked fallback", &unmarked_entry),
+                        ("no mark", &no_mark),
+                    ] {
+                        let mut v = example.clone();
+                        redact_secrets(&mut v, schema, &BTreeMap::new());
+                        assert_eq!(
+                            v[*key],
+                            json!(REDACTED),
+                            "{pattern} on {key:?}: uncompilable fails closed ({label})"
+                        );
+                    }
+                    uncompilable += 1;
+                }
+                Ok(control) => {
+                    let applies = !control.is_valid(&json!({ *key: "s" }));
+                    let (published, doc) = publish(params, example);
+                    if applies {
+                        assert_eq!(
+                            published[*key],
+                            json!(REDACTED),
+                            "{pattern} on {key:?}: the validator applies the entry"
+                        );
+                        assert!(
+                            !doc.contains(SECRET),
+                            "{pattern} on {key:?}: secret published:\n{doc}"
+                        );
+                        applied += 1;
+                    } else {
+                        assert_eq!(
+                            published[*key],
+                            json!(SECRET),
+                            "{pattern} on {key:?}: the validator does not apply the entry, so the (unmarked additionalProperties) member is published"
+                        );
+                        skipped += 1;
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        applied > 0 && skipped > 0 && uncompilable > 0,
+        "{applied} {skipped} {uncompilable}"
+    );
+    assert_eq!(
+        applied + skipped + uncompilable,
+        KEYS.len() * PATTERNS.len()
+    );
 }

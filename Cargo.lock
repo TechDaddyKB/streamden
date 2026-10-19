@@ -586,7 +586,6 @@ name = "den-protocol"
 version = "0.0.0"
 dependencies = [
  "jsonschema",
- "regex",
  "schemars 1.2.3",
  "serde",
  "serde_json",
