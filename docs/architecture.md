@@ -30,7 +30,7 @@
                    MCP clients (Claude, Codex, ChatGPT, Cursor…) · third-party apps via WS/REST
 ```
 
-- `streamdend` is the **same engine without a GUI** (headless daemon, optional systemd user unit). The
+- `streamdend` is the **same engine without a tray** (headless daemon, optional systemd user unit). The
   UI process can attach to a running daemon instead of the local engine, e.g. a daemon on the stream PC
   controlled from the gaming PC.
 - **The UI is just another API client.** It talks to the engine over the local API (`/ws` JSON-RPC and REST),
@@ -38,7 +38,7 @@
 - **Process split (from spike S-1, to be specified in spec 07):** the always-running process is the engine plus
   tray and **never loads WebKit** (52 MB PSS / 92 MB RSS measured). The UI windows run in a separate, on-demand
   Tauri process that talks to the engine over the local API, and is fully exited when the last window closes.
-  Measured: the in-process app closed to tray still held 184 MB PSS / 332 MB RSS, and destroying a webview
+  Measured: the previous single-process app closed to tray still held 184 MB PSS / 332 MB RSS, and destroying a webview
   without terminating its web process leaked it (3 close/reopen cycles left 4 web processes, 573 MB PSS).
 
 ## 2. Core domain model
