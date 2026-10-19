@@ -802,9 +802,14 @@ passed review without a correctness finding.
 Admission runs synchronously in the matcher or the calling operation, under the scheduler's lock:
 
 1. **Eligibility to start now:** `canStart = !paused || action.alwaysRun`, and `blocking → running == 0`, and the
-   engine-wide concurrency has a free slot.
+   engine-wide concurrency has a free slot **that is not owed to an older head**: a free slot always goes to the
+   oldest-admitted eligible head across queues (§10.3), so a new run takes it immediately only when no eligible
+   head of any queue is waiting for one (then the new run is that head). Admission runs the same selector as the
+   pump, under the same lock, so a slot released while the pump is between its unlock and relock is never taken
+   by a newer run ahead of an older head; the pump sees the result when it relocks.
 2. If `canStart`, the run is dispatched immediately. **The bound never applies to a run that does not have to
-   wait** (B-1 review P2-1: an always-run alert on a paused, full queue must get through).
+   wait** (B-1 review P2-1: an always-run alert on a paused, full queue must get through). A run that must wait
+   only because an older head is owed the slot does have to wait, and the bound applies to it.
 3. Otherwise the run must wait. If `waiting.len() >= maxPending` (default `engine.queue.defaultMaxPending`, 1,000,
    when the queue's `maxPending` is `None`), apply `overflow`:
    - `reject_new`: the new run is recorded as `Rejected` with `RunError { code: "INVALID_STATE", details: {
@@ -1082,9 +1087,10 @@ user **as they were**, never a current user record, and a stored `payloadVersion
 converted through a registered **upgrade** function `(type, from, to)` (A13: spec 02 §5.2 registers only
 downgrades today) or, when none exists, the call fails `INVALID_STATE` (`details.reason = "payload_version"`). §22.6 replays a chat event after a restart with a role
 filter and no Action History record. Chat messages are in
-this log; the owner's Q-H1 answer (2026-10-19: a rolling 24 h by default, configurable; a separate local chat
-history store with a user-defined length up to 120 streams or 120 days, owned by spec 08) bounds `maxAgeHours`
-for `chat.*` types at 120 days (§16) and lets spec 08 prune them earlier.
+this log; the owner's Q-H1 answer (2026-10-19) governs **chat** retention only: a rolling 24 h by default,
+configurable, plus a separate local chat-history store with a user-defined length up to 120 streams or 120 days,
+owned by spec 08, which prunes `chat.*` entries from this log on that setting. The ceiling of `maxAgeHours` for
+the log as a whole is Q-E9 (§16, §24), not derived from Q-H1.
 
 ### 12.6 Listing runs: order, paging and sources
 
@@ -1101,21 +1107,36 @@ cursor?: String }` (tier 0) returns `{ runs: Vec<Run>, nextCursor: Option<String
 - **Sources.** `queued` and `running` runs come from the scheduler's in-memory view (every live run, also those of
   actions with `history.record: false`); terminal runs (`completed`, `failed`, `cancelled`, `rejected`, `dropped`)
   come from the `runs` table of `history.db` (§13.2; the `runs_queued_at`, `runs_state` and `runs_action` indexes
-  serve the filters). The operation reads the live view **first**, then the history rows, each with the same
-  `state`, `action`, `since` (`queuedAt ≥ since`) and cursor bounds; the two lists are merged by `id` with the
-  history row winning when both hold the same run (it ended between the two reads), sorted, and cut at `limit`.
-  History inserts are asynchronous and droppable (§13.1), so a run that has just ended becomes visible to a
-  terminal query when its record lands, and a record dropped under storage backlog is absent for good
-  (`system.storage_backlog` reports the drop); `runs.get` follows the same two sources.
+  serve the filters). **Visibility handoff.** History inserts are asynchronous and droppable (§13.1), so a run
+  that has ended is not in `history.db` yet; it therefore stays in the live view as a **settling** entry (its
+  terminal `state` already set) until the storage thread acknowledges the insert, or the insert is dropped, or
+  the action has `history.record: false` (never persisted: it leaves the view at once and no terminal query ever
+  shows it). A run is thus always in exactly one source, live (queued, running, settling) or history, and the
+  settling set is bounded by the storage channel (§13.1) because a dropped insert releases its entry immediately
+  (`system.storage_backlog` reports the drop; the run is then absent for good). The operation reads the live
+  view **first**, then the history rows, each with the same `state`, `action`, `since` (`queuedAt ≥ since`) and
+  cursor bounds; the two lists are merged by `id` with the history row winning when both hold the same run (its
+  insert landed between the two reads), sorted, and cut at `limit`. A run that completes and lands between two
+  pages appears on exactly the page its `id` falls on; one whose insert is still pending is on that page as a
+  settling live entry. `runs.get` follows the same two sources.
 - **Filters.** An absent or empty `state` means every state. `history.pending: false` (§12.1) hides a run only
   from a query whose `state` filter is non-empty and names no terminal state (the Pending view); every other
   query shows it. `since` applies to `queuedAt`.
-- **Size.** `runs.list` returns the `Run` record with `eventSnapshot` **elided** (`null`; `event: EventId` still
-  says whether there was one, spec 02 §6.5) and without the two args snapshots; `runs.get { runId }` returns the
-  record with `eventSnapshot` and both snapshots (§12.1). Records are not fixed-size (`error.details`,
-  `warnings`, the taint lists), so the server cuts a page **before** `limit` when the next record would push the
-  response over the session's message budget (spec 02 §3, default 1 MiB) and returns `nextCursor`; a client
-  never sees a failed page, only a shorter one.
+- **Size.** `runs.list` returns the `Run` record with `eventSnapshot` **omitted** (absent, never `null`, spec 02
+  §3 "Optional vs null"; `event: EventId` still says whether there was one) and without the two args snapshots;
+  `runs.get { runId, trace?, snapshots?: bool /* default true */ }` returns the record with `eventSnapshot` and
+  both snapshots (§12.1). Storage limits and transport budgets are different things: `maxSnapshotBytes` bounds
+  what is **stored** per snapshot; what one response may carry is the session's message budget (spec 02 §3,
+  default 1 MiB, raised per session by spec 06). Records are not fixed-size (`error.details`, `warnings`, the
+  taint lists), so the server cuts a page **before** `limit` when the next record would push the response over
+  the budget and returns `nextCursor`. When the **first** remaining record alone would exceed the budget, the
+  page still makes progress: that one record is returned with `error.details` omitted, both taint lists empty
+  and `warnings` replaced by the single `RunWarning { code: "row_truncated" }`, so `nextCursor` advances and the
+  full record is reachable through `runs.get`. A `runs.get` response that would exceed the budget fails with
+  `PAYLOAD_TOO_LARGE` (`details.reason = "message_budget"`, `details.bytes`); the client retries with
+  `snapshots: false` (the record, trace and taint lists without the three snapshots) or raises its session
+  budget. The `message_size` settings warning (§16) fires when three snapshots at `maxSnapshotBytes` plus the
+  record could exceed the default budget; it is advice, not a guarantee.
 
 ## 13. Storage
 
@@ -1355,7 +1376,7 @@ All are catalog operations (spec 02 §8.1) with the usual generated `dryRun`; ti
 | `actions.set_group_state { group, enabled }` | 2 | ✓ / ✓ / ✓ | every action whose `group` path starts with `group` |
 | `triggers.test`, `events.simulate`, `events.replay` | 1 | ✓ / ✓ / ✓ | §6.5, §12.5 |
 | `events.emit { name, data?: object, user?: UserRef }` | 1 | ✓ / ✓ / ✓ | publishes `core.custom { name, data }` (row 2.36, below); scope `events:emit` |
-| `runs.list { state?, action?, since?, limit?, cursor? }` → `{ runs, nextCursor? }`, `runs.get { runId, trace? }` | 0 | ✓ / — / ✓ | pending view = `state: [queued, running]`; order, keyset paging and the live/history merge in §12.6 |
+| `runs.list { state?, action?, since?, limit?, cursor? }` → `{ runs, nextCursor? }`, `runs.get { runId, trace?, snapshots? }` | 0 | ✓ / — / ✓ | pending view = `state: [queued, running]`; order, keyset paging, the live/history merge and the size rules in §12.6 |
 | `runs.cancel`, `runs.replay`, `runs.clear_history` | 1 | ✓ / ✓ / ✓ | `runs.replay` effective tier = action's |
 | `queues.get/list` | 0 | ✓ / — / ✓ | with runtime counters |
 | `queues.create/update/delete` | 2 | ✓ / — / ✓ | |
@@ -1426,30 +1447,34 @@ source.
 | `engine.variables.maxValueBytes` | 262144 | 1024–4194304 | §11.4 |
 | `engine.storage.flushMs` | 1000 | 0 (sync) – 10000 | §11.4 |
 | `engine.storage.dailyBackup` | true | boolean | §13.6 |
-| `engine.history.maxRuns` / `maxAgeDays` / `maxSnapshotBytes` / `traceRuns` | 10000 / 7 / 262144 / 200 | 100–1000000 / 1–120 / 4096–1048576 / 0–10000 | §12 |
-| `engine.events.maxAgeHours` / `maxCount` | 24 / 50000 | 1–2880 / 1000–10000000 | §12.5 |
+| `engine.history.maxRuns` / `maxAgeDays` / `maxSnapshotBytes` / `traceRuns` | 10000 / 7 / 262144 / 200 | 100–1000000 / 1–(Q-E9) / 4096–1048576 / 0–10000 | §12 |
+| `engine.events.maxAgeHours` / `maxCount` | 24 / 50000 | 1–(Q-E9) / 1000–10000000 | §12.5 |
 | `engine.shutdown.graceMs` | 5000 | 0–60000 | §10.8 |
 | `engine.action.maxNodes` / `maxDepth` | 2000 / 32 | 50–20000 / 4–64 | §9.13 |
 
 The ranges of the `engine.history.*`, `engine.events.*` and `engine.action.*` rows and the lower bound of the
 `engine.signals.*` row were added in r6 (the earlier revisions gave only their defaults). They are **validator
-bounds** of the same kind as every other range in the table, chosen by this spec, not product limits; the two
-retention ceilings follow the owner's Q-H1 answer (user-configurable retention of chat-derived data up to 120
-days), because the event log and the history snapshots hold chat text; a longer Action History is a one-number
-change for the owner, not a design change. The `maxNodes` and `maxSnapshotBytes` ceilings keep one action
-document and one `runs.get` response within spec 02's 1 MiB message default (the `message_size` warning below
-fires when a value could exceed it). A value outside its range is **rejected,
-never clamped**: `settings.update` fails with `INVALID_PARAMS` and stores nothing, and a stored document with a
-key outside its range is invalid as a whole (the startup rule below). The defaults are unchanged.
+bounds** chosen by this spec, not product limits, with one exception: how long a user may keep Action History
+and the event log is a product choice (Q-E4 accepted the **defaults** only; Q-H1 answers **chat** retention
+only), so the upper bounds of `history.maxAgeDays` and `events.maxAgeHours` are **open as Q-E9** (§24) and the
+table shows no number for them. Until the owner answers, the validator enforces only the lower bound of those
+two keys and the implementation cards (DEN-146, DEN-118, DEN-119) carry no upper bound for them; the defaults
+(7 days, 24 h) are unchanged either way. `maxSnapshotBytes` and `maxNodes` bound what is **stored**; transport
+is bounded separately by the session's message budget (§12.6), which is why their ceilings are plain storage
+limits and the `message_size` warning below is advice. A value outside its range is **rejected, never
+clamped**: `settings.update` fails with `INVALID_PARAMS` and stores nothing, and a stored document with a key
+outside its range is invalid as a whole (the startup rule below). The defaults are unchanged.
 
 **Operations.** Both are catalog operations (§15, spec 02 §8.1) in the reserved `settings` namespace, exposed on
 WS/REST and MCP and never as sub-actions (a run does not reconfigure the engine that is executing it):
 
 - `settings.get {}` (tier 0, scope `settings:read`) returns `{ settings: Settings, revision: u64, updatedAt:
   Timestamp, updatedBy: UpdatedBy, source: "document" | "defaults", pendingRestart: Vec<String> }`.
-  `pendingRestart` names the restart-only keys whose stored value differs from the value the running engine started
-  with; `source` is `defaults` while the engine runs on the built-in defaults because the stored document is
-  unusable (below).
+  `pendingRestart` names the restart-only keys whose stored value differs from the **boot value** (the value the
+  running engine sized its channels with at start); `source` is `defaults` while the engine runs on the built-in
+  defaults because the stored document is unusable (below). `settings` and `revision` are the stored document and
+  `pendingRestart` is computed against the effective configuration, read together under the settings guard
+  (below), so one response never mixes two revisions.
 - `settings.update { settings: Settings, revision?: u64 }` (tier 2, scope `settings:write`, draft-first under MCP
   as a `PendingChange { targetKind: "settings", operation: "settings.update" }`, spec 02 §6.1) replaces **whole
   sections**: inside a section (`engine.run`, `engine.bus`, …) every field is `required`, so a partial section is
@@ -1458,18 +1483,30 @@ WS/REST and MCP and never as sub-actions (a run does not reconfigure the engine 
   the call keeps its stored values, so a client pinned to an older `rpcVersion` keeps working when a later spec
   adds a section (spec 02 §7.2 forbids new required request fields). The stored `PendingChange.params` omit
   `revision`, so *Apply* days later does not fail on a stale revision; the Apply screen shows the diff against
-  the then-current document instead. The call validates ranges (`INVALID_PARAMS`
-  with one `fieldErrors` entry per offending dotted key; nothing is stored), checks `revision` when given
-  (`CONFLICT`, `details.reason = "revision"`, when it is not the stored one), stores the document in one
-  transaction (`revision + 1`, `updatedBy` from the context, A7), **hot-applies** every changed key that is not
-  restart-only, publishes `settings.updated { revision, changed, restartRequired, updatedBy }`, and returns
-  `{ settings, revision, changed: Vec<String> /* keys whose value differs from the previous document */, applied:
-  Vec<String> /* changed keys in effect now */, restartRequired: Vec<String> /* changed restart-only keys */,
-  warnings: Vec<SettingsWarning { key: Option<String>, code: String, message: String }> }`. Warnings never block:
+  the then-current document instead. The call validates ranges (`INVALID_PARAMS` with one `fieldErrors` entry per
+  offending field, whose `path` is the ordinary JSON Pointer into the **request** params, for example
+  `/settings/engine/run/maxConcurrent`, spec 02 §8.5; nothing is stored), then runs the write under the
+  engine's **settings guard**, one async mutex over the sequence *compare revision → commit → swap effective
+  config → publish*: the `revision` check (`CONFLICT`, `details.reason = "revision"`, when it is not the stored
+  one) and the store happen in the same storage transaction (`revision + 1`, `updatedBy` from the context, A7),
+  and only after the commit the new document is swapped into the effective configuration (hot-apply of every
+  changed key that is not restart-only; restart-only keys keep their boot value in the effective configuration)
+  and `settings.updated { revision, changed, restartRequired, updatedBy }` is published. The guard is held across
+  the storage `await` (it is an async mutex, never a synchronous runtime lock), so two updates, with or without
+  `revision`, always commit, apply and publish in revision order and the effective configuration never regresses
+  behind the stored one; a failure before the commit swaps and publishes nothing and returns the error. The
+  result is `{ settings, revision, changed: Vec<String> /* keys whose value differs from the previous document
+  */, applied: Vec<String> /* changed keys in effect now */, restartRequired: Vec<String> /* restart-only keys
+  whose new stored value differs from the boot value; an undo back to the boot value removes the key and is
+  reported as an empty list */, warnings: Vec<SettingsWarning { key: Option<String>, code: String, message:
+  String }> }`; the event carries the same `changed` and `restartRequired`, and `pendingRestart` of a later
+  `settings.get` is the same set computed over the whole document. The lists and `SettingsWarning.key` use the
+  **dotted document key** (`engine.run.maxConcurrent`); only `fieldErrors[].path` uses the request pointer, and
+  §22.13 has a fixture showing both forms for the same field. Warnings never block:
   `memory_budget` when `engine.run.maxConcurrent × maxRunBytes` exceeds half of physical memory (§9.6),
   `below_running_value` when a tightened limit is already exceeded by live state (for example `maxConcurrent`
-  under the current number of running runs), `message_size` when `maxSnapshotBytes` or `maxNodes` could make one
-  `runs.get` response or one action document exceed the message default. `dryRun` returns the usual
+  under the current number of running runs), `message_size` when three snapshots at `maxSnapshotBytes` plus a
+  record could exceed the default message budget (§12.6). `dryRun` returns the usual
   `DryRunResult` with `diff` =
   `{ "<key>": { "from", "to" } }` over the changed keys and the same warnings as strings.
 - **Hot-apply** means the new value is read at the next decision that consults it, never retroactively: a lower
@@ -1477,7 +1514,8 @@ WS/REST and MCP and never as sub-actions (a run does not reconfigure the engine 
   enforced at the next check inside a run, a new `flushMs` re-arms the next flush, new retention limits apply at
   the next write-triggered prune, a new `graceMs` applies to the next shutdown. No running run is cancelled by a
   settings change. The restart-only keys are the three bus capacities (`engine.bus.capacity`, `internalCapacity`,
-  `subscriberCapacity`): channels are sized once at start. Every other key hot-applies.
+  `subscriberCapacity`): channels are sized once at start, so their **boot value** is what the effective
+  configuration holds until the next start, whatever the stored document says. Every other key hot-applies.
 - **Startup.** A missing document is created with the defaults (`revision` 1, `updatedBy: system`). A stored
   document that fails validation (schema or range) is **not** used: the engine runs on the defaults, publishes
   `system.document_invalid { kind: "settings", … }` (§13.5), reports `source: "defaults"` from `settings.get`,
@@ -1680,8 +1718,10 @@ and requires:
    and the next start reports `flush_failed`); **engine-wide slot (§10.3):** with `maxConcurrent = 1` and three
    queues, runs admitted A1, B1, C1, A2 start in admission order as slots free, `force_next` in queue C does not
    let C2 overtake A2, a blocking queue with a running run does not compete, an `alwaysRun` run on a paused queue
-   takes its turn by admission order and not before older heads, and a slot release costs O(queues), not a scan
-   of every waiting run; **queue override (§10.2):** `actions.run { queue }` admits into the named queue and the
+   takes its turn by admission order and not before older heads, a slot release costs O(queues), not a scan
+   of every waiting run, and an admission interleaved with a release while the pump is active (between its
+   unlock and relock) does not start ahead of an older eligible head, also under a paused queue with
+   `alwaysRun` and after `force_next`; **queue override (§10.2):** `actions.run { queue }` admits into the named queue and the
    record, `runs.queued` and `run.queueName` show it, a queued `RunAction` child goes to its target's queue,
    `runs.replay` of the run uses the action's queue, an unknown queue is `NOT_FOUND` before admission, the
    dry-run plan steps are identical with and without the override, and an approval obtained without it does not
@@ -1722,10 +1762,14 @@ and requires:
    moderator`, a command with a role permission, and a `{user.displayName}` template, all with the stored user,
    while the current user record has lost the role; a stored older `payloadVersion` converts or fails
    `payload_version`; **`runs.list` paging (§12.6):** 2,500 terminal and 20 live runs page newest-first in pages
-   of 1,000 with no duplicate and no gap, also when a live run completes between two pages; the cursor is opaque
-   and a malformed one is `INVALID_PARAMS`; `history.pending: false` runs are absent from `state: [queued,
-   running]` and present in an unfiltered query; list rows carry `eventSnapshot: null` while `runs.get` returns
-   it; a record dropped under storage backlog is absent and counted.
+   of 1,000 with no duplicate and no gap, also when a live run completes between two pages, and when it completes
+   before the second page's live read while its history insert is **delayed** past that read (it is returned as
+   a settling entry), and when that insert is dropped (absent and counted); the cursor is opaque and a malformed
+   one is `INVALID_PARAMS`; `history.pending: false` runs are absent from `state: [queued, running]` and present
+   in an unfiltered query; list rows **omit** `eventSnapshot` (the key is absent, validated against the schema)
+   while `runs.get` returns it; a first remaining record that alone exceeds the session budget is returned as a
+   `row_truncated` row and the cursor advances; `runs.get` of a run whose three snapshots exceed the budget fails
+   `PAYLOAD_TOO_LARGE` / `message_budget` and succeeds with `snapshots: false`, also with `trace: true`.
 7. **Timers and cron:** paused-clock tests for drift-free intervals, direct dispatch to the owning trigger, random ranges, `minChatLines` gate, `repeat:
    false` disabling, missed-tick coalescing after a simulated suspend; cron DST skip and fall-back, `catchUp`,
    time zone changes, leap day; **cron cursor:** a daily trigger fires, the engine restarts twice within the day
@@ -1801,17 +1845,28 @@ and requires:
 13. **Settings (§16):** a first start creates the document with the defaults; an invalid stored document (bad
     range, unknown key) starts the engine on the defaults with `system.document_invalid` and `source: "defaults"`;
     a partial `engine.run` section is `INVALID_PARAMS` while an omitted top-level section keeps its stored values;
-    an out-of-range value yields one `fieldErrors` entry per
-    dotted key and stores nothing; a stale `revision` is `CONFLICT`; a changed `maxConcurrent` and `flushMs` take
-    effect at the next dispatch and flush without cancelling a running run; a changed `engine.bus.capacity` is
-    reported in `restartRequired`, in `pendingRestart` afterwards and in `settings.updated`, and the channel size
-    is unchanged until restart; the `memory_budget` warning appears at the threshold; under MCP the call yields a
-    `PendingChange { targetKind: "settings" }` and the live document is untouched; `dryRun` returns the key diff.
+    an out-of-range value yields one `fieldErrors` entry per field with the request pointer
+    (`/settings/engine/run/maxConcurrent`) while the same field appears as `engine.run.maxConcurrent` in
+    `changed` after a valid write (one fixture shows both), and stores nothing; a stale `revision` is `CONFLICT`;
+    **concurrent writers** (forced interleaving): two unconditional updates, and two updates with the same
+    explicit `revision`, never both succeed against one stored revision, commit, apply and publish in revision
+    order, and the effective configuration never shows an older revision than the stored one; a storage failure
+    before the commit leaves the effective configuration and the event stream untouched; a changed
+    `maxConcurrent` and `flushMs` take effect at the next dispatch and flush without cancelling a running run; a
+    changed `engine.bus.capacity` (8192 → 16384) is reported in `restartRequired`, in `pendingRestart` afterwards
+    and in `settings.updated`, the channel size is unchanged until restart, and the **undo** (16384 → 8192, the
+    boot value) reports an empty `restartRequired` and empties `pendingRestart`, while an unrelated change made
+    in between keeps the pending key; the `memory_budget` warning appears at the threshold; under MCP the call
+    yields a `PendingChange { targetKind: "settings" }` and the live document is untouched; `dryRun` returns the
+    key diff.
 14. **`templates.parse` (§15):** the template strings of every spec 02 §17.11 fixture parsed through the operation
     yield the AST, errors, spans and references the in-process parser yields (one code path); a `{"a": 1}` text
-    yields the literal-brace warning; a source over the parser limits of spec 02 §10 (length, nesting, node
-    count) is a parse error, never `INTERNAL`; `value` mode with two forms is an error with the second form's
-    span.
+    yields the literal-brace warning; a `source` over `maxLength` is `INVALID_PARAMS` from the schema, never a
+    parse diagnostic, and a source at exactly `maxLength` parses; nesting deeper than 32 or more than 10,000 AST
+    nodes is a parse diagnostic with `ast` absent, `references` empty and `dynamicLookup: false`, never
+    `INTERNAL`; multibyte and astral-plane text (emoji, combining marks) yields spans in Unicode scalar offsets,
+    `end` exclusive, equal through the operation and the in-process call; the largest permitted AST serializes
+    under the default message budget; `value` mode with two forms is an error with the second form's span.
 
 ## 23. Contract amendments requested from spec 02 (`den-protocol`)
 
@@ -1879,15 +1934,19 @@ cards DEN-69 and DEN-118):
   limits spec 02 §10 now defines next to the AST (`TemplateParseError`, `TemplateLint`, `Span`, `TemplatePath`).
   A14 and A15 are **proposals** of this revision until spec 02 r7 is reviewed by Codex Astra and the owner; the
   DEN-65 catalog inventory counts them conditionally (65 operations, 29 events).
-- **A16 — `runs.list` paging** (`limit`, `cursor`, `{ runs, nextCursor }`) and `actions.run.queue:
-  Option<QueueId>` as the catalog registrations of the existing operations (§12.6, §10.2; the shapes are stated
+- **A16 — `runs.list` paging** (`limit`, `cursor`, `{ runs, nextCursor }`), `runs.get.snapshots: Option<bool>`, the
+  `row_truncated` warning code and `actions.run.queue: Option<QueueId>` as the catalog registrations of the existing operations (§12.6, §10.2; the shapes are stated
   here because spec 02 §5.2 lets this spec own its operations' payloads).
 
 ## 24. Open questions (added to [QUESTIONS.md](../QUESTIONS.md), section E)
 
-All eight were answered by the owner on 2026-10-19 with the spec defaults (D-039); the list is kept as the record
-of what was asked. r6 raised no new product question: the eight DEN-65 gaps were engineering decisions, taken in
-§7.1, §10.2, §10.3, §12.6, §15, §16 and §19.
+Q-E1–Q-E8 were answered by the owner on 2026-10-19 with the spec defaults (D-039); the list is kept as the record
+of what was asked. The eight DEN-65 gaps were engineering decisions, taken in §7.1, §10.2, §10.3, §12.6, §15, §16
+and §19; r6 raised one product question, Q-E9.
+
+- **Q-E9:** the upper bound a user may set for `engine.history.maxAgeDays` and `engine.events.maxAgeHours`
+  (Action History and the event log for non-chat data; Q-E4 accepted the defaults, Q-H1 covers chat only). Spec
+  default until answered: only the lower bound is validated (§16).
 
 - **Q-E1:** should queued runs survive a restart (durable queues)? Spec default: no (§10.8).
 - **Q-E2:** should a failed sub-action stop the run by default? Spec default: yes, `onError: stop` (§9.10).
@@ -2002,8 +2061,8 @@ grammar"; signals are implemented as operations rather than new `Node` kinds so 
   the cap is `unplanned_call`. Spec 02 §8.8 rule 4 and §17.9 synchronized (r6 amendment line there).
 - **r6** (DEN-68, the gaps found while slicing Spec 03 into engine cards, DEN-65):
   1. Settings → §16 rewritten around the `Settings { engine: EngineSettings }` document (spec 02 §6.5, A14):
-     dotted keys as JSON paths, the missing ranges filled as validator bounds (retention ceilings from Q-H1;
-     reject, never clamp; defaults unchanged; the DEN-67/DEN-146 handoff), `x-den-restart`, `settings.get` / `settings.update`
+     dotted keys as JSON paths, the missing ranges filled as validator bounds (reject, never clamp; defaults
+     unchanged; the DEN-67/DEN-146 handoff; the two retention ceilings left to Q-E9), `x-den-restart`, `settings.get` / `settings.update`
      (whole document, every field required, `CONFLICT` on a stale revision, hot-apply and restart reporting,
      warnings, dry-run diff), `settings.updated`, startup fallback to defaults; §13.2 fixed id; §15 rows; §17;
      §22.13.
@@ -2029,6 +2088,16 @@ grammar"; signals are implemented as operations rather than new `Node` kinds so 
   `override`; `maxNodes` and `maxSnapshotBytes` ceilings and the `message_size` warning under the 1 MiB default;
   pages cut at the message budget; one id generator for admitted and inline runs; `eventSnapshot` elided on
   list rows; `PendingChange.params` without `revision`.
+  **Round 2** (the Codex Astra review of `dabe19e`, 1 P1 / 9 P2, all resolved): F1 the Q-H1 inference removed,
+  the two retention ceilings opened as Q-E9 with only lower bounds validated meanwhile (§12.5, §16, §24); F2 the
+  live-to-terminal visibility handoff with settling entries (§12.6, §22.6); F3 storage limits separated from the
+  message budget, `row_truncated` progress rule, `runs.get { snapshots }` and `PAYLOAD_TOO_LARGE` /
+  `message_budget` (§12.6, §16, §22.6); F4 `eventSnapshot` omitted, never `null` (§12.6, §22.6; spec 02 §6.5); F5
+  `fieldErrors[].path` stays a request JSON Pointer, dotted keys only in the lists, warnings and the event (§16,
+  §22.13; spec 02 §6.5); F6 the settings guard ordering compare → commit → swap → publish (§16, §22.13); F7
+  `restartRequired` and `pendingRestart` against the boot value, undo case (§16, §22.13); F8 immediate admission
+  honours the global head (§10.2, §22.3); F9 transport-independent parser limits, `source.maxLength`, failure
+  shape, span units (§22.14; spec 02 §10). Cards DEN-69, 77, 82, 93, 118, 119 and 146 re-synchronized (F10).
   Owner answers applied: Q-E1–Q-E8 marked confirmed (D-039) where the text asked for confirmation (§6.3, §7.1,
   §9.5, §9.10, §10.8, §12.2, §24); the Q-H1 and Q-C5 answers of 2026-10-19 recorded where §12.5 and §13.6
   deferred to them (no behaviour change here; spec 08 owns the chat history store). Cards DEN-69, 70, 77, 82, 93,

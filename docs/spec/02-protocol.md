@@ -478,7 +478,7 @@ pub struct Run {
     pub parent: Option<RunId>,           // the run whose RunAction node started this one
     pub inline: bool,                    // an inline RunAction child (shares the parent's task)
     pub test: bool, pub replay_of: Option<RunId>,
-    pub event_snapshot: Option<Event>,   // the firing or replayed event, secrets redacted; elided (null) by runs.list, present on runs.get (spec 03 §12.6); `event` says whether there was one
+    pub event_snapshot: Option<Event>,   // the firing or replayed event, secrets redacted; omitted (absent, §3) by runs.list, present on runs.get (spec 03 §12.6); `event` says whether there was one
     pub untrusted_args_queued: Vec<String>, pub untrusted_args_after: Vec<String>, // taint set of each snapshot (spec 03 §21)
     pub error: Option<RunError>,         // when state is failed, rejected or dropped
     pub stopped_by: Option<NodeId>,      // the Stop node or Code node that ended the run early
@@ -497,7 +497,8 @@ writes are tier 2 and draft-first under MCP (`PendingChange.targetKind` `command
 `settings:read`) reads it; spec 03 §16 defines every key, default and range, the hot-apply rule, the result shapes
 and the `settings.updated` event, and §13.2 there stores it. `settings.update` replaces whole sections: a present
 section must be complete, an absent one keeps its stored values. The dotted key `engine.run.maxConcurrent` names the
-JSON path inside `data` and is the form `fieldErrors[].path`, the result lists and the event use. `Run` is read-only on
+JSON path inside `data` and is the form the result lists, `SettingsWarning.key` and the event use; `fieldErrors[].path`
+keeps the ordinary request JSON Pointer (`/settings/engine/run/maxConcurrent`, §8.5). `Run` is read-only on
 the wire. Counters, cooldown state and the two args snapshots are spec 03 storage; `runs.get` returns the snapshots
 as plain objects next to the record.
 
@@ -1146,9 +1147,16 @@ Per tool:
   `TemplateLint { code /* literal_brace, missing_value_likely… open */, message, span }`, `Span { start, end }`
   (offsets in Unicode scalar values into `source`) and `TemplatePath` (the root and segments of one referenced
   context path), all defined in `den-protocol` next to `TemplateAst` (card DEN-69). The editor calls it per
-  field (debounced, batched with `batch.execute`). **Parser limits:** a source longer than the session's message
-  default (§3), nested deeper than 32 or producing more than 10,000 AST nodes is a parse error (never
-  `INTERNAL`); the same limits apply at save time. Spec 07 MAY additionally ship the parser module of `den-core`
+  field (debounced, batched with `batch.execute`). **Parser limits** are fixed numbers independent of any
+  transport or session: `source` has schema `maxLength: 65536` (Unicode scalar values, as JSON Schema counts
+  them), so a longer source is `INVALID_PARAMS` from schema validation, never a parse diagnostic; a template
+  nested deeper than 32 or producing more than 10,000 AST nodes is a **parse diagnostic** (an entry in `errors`,
+  never `INTERNAL`) with `ast` absent, `references` empty and `dynamicLookup: false`; `warnings` may still be
+  present. The same three limits apply to every stored template at save time and on import (a violating
+  template is `INVALID_PARAMS` with `fieldErrors` naming the node and field). Spans count Unicode scalar values
+  into `source`, `end` exclusive (den-core's internal byte offsets never reach the wire). A result for the
+  largest permitted AST stays under the default message budget (§3), which is what bounds the node count. Spec 07
+  MAY additionally ship the parser module of `den-core`
   (feature-gated, runtime-free) compiled to WASM for zero-latency highlighting, but never a TypeScript
   re-implementation; the operation stays the reference the §17.11 template strings are checked against.
 - **Import (D-027):** `%x%` → `{x}`; `%x:fmt%` → `{x | number:"fmt"}` or `{x | date:"fmt"}` (by type);
@@ -1560,5 +1568,8 @@ protocol design choice made here, not a product decision, and is open to reviewe
   update input, complete when present), `SettingsWarning`, the `settings.get` / `settings.update` summary, the
   `runs.list` elision note on `Run.eventSnapshot` and the scopes `settings:read`, `settings:write` (§6.5, §8.7).
   A15 the reserved namespace `templates`, the `templates.parse` result types and parser limits, the WASM option for
-  the parser module and the exclusion of a TypeScript port (§4, §5.2, §10). A16 is registration-only (`runs.list` paging, `actions.run.queue`) and lives in
+  the parser module and the exclusion of a TypeScript port (§4, §5.2, §10). Round 2 (Codex Astra review of
+  `dabe19e`): `Run.eventSnapshot` omitted rather than `null` on `runs.list` (§6.5); `fieldErrors[].path` stays a
+  request JSON Pointer for `settings.update` (§6.5); parser limits made transport-independent with
+  `source.maxLength`, the failure shape and span units (§10). A16 is registration-only (`runs.list` paging, `actions.run.queue`) and lives in
   spec 03 §12.6 and §10.2.
