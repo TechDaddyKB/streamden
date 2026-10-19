@@ -17,6 +17,8 @@ MD034: false # Research keeps bare source URLs.
 MD036: false # Bold lead-ins are used in runbooks and reports.
 MD038: false # Historical inline code spacing.
 MD040: false # Some examples are plain text snippets.
+MD041: false # PR template starts at H2; CLAUDE.md is an @AGENTS.md import.
+MD049: false # PLAN.md uses underscore emphasis in historical checklist entries.
 MD051: false # File targets use lychee; historical heading fragments need repair.
 MD056: false # Historical research table layout.
 MD058: false # Compact table layout.
