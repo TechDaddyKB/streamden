@@ -1,0 +1,11 @@
+{
+  "sessionId": "ses_abcdefghijklmnopqrstuv",
+  "negotiatedRpcVersion": 1,
+  "scopes": [
+    "events:read:twitch.**",
+    "variables:read:deaths"
+  ],
+  "serverTime": "2026-10-18T20:15:03.120Z",
+  "replayed": 12,
+  "gap": false
+}

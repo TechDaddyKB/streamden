@@ -1,0 +1,30 @@
+{
+  "principal": {
+    "kind": "trigger",
+    "triggerId": "018f7a8c-1111-7000-8000-000000000001",
+    "actionId": "018f7a8c-3e6b-7c1d-9a2b-5f4e3d2c1b0a"
+  },
+  "surface": "event",
+  "scopes": [
+    "actions:run",
+    "chat:send"
+  ],
+  "maxTier": 3,
+  "approvals": [],
+  "lineage": [
+    "018f7a8c-4444-7000-8000-000000000001"
+  ],
+  "chain": {
+    "originRun": "018f7a8c-4444-7000-8000-000000000001",
+    "originPrincipal": {
+      "kind": "mcp",
+      "tokenId": "018f7a8c-5555-7000-8000-000000000001",
+      "sessionId": "ses_abcdefghijklmnopqrstuv",
+      "client": {
+        "name": "Claude Code",
+        "version": "2.0"
+      }
+    },
+    "hops": 1
+  }
+}

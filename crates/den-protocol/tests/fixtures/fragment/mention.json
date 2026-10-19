@@ -1,0 +1,6 @@
+{
+  "kind": "mention",
+  "text": "@alice",
+  "userId": "123",
+  "login": "alice"
+}

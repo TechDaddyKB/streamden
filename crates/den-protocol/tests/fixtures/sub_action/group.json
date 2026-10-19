@@ -1,0 +1,19 @@
+{
+  "id": "018f7a8c-0000-7000-8000-000000000003",
+  "enabled": true,
+  "kind": "group",
+  "name": "Alerts",
+  "color": "#ff0000",
+  "random": false,
+  "children": [
+    {
+      "id": "018f7a8c-0000-7000-8000-000000000001",
+      "enabled": true,
+      "kind": "op",
+      "type": "chat.send",
+      "params": {
+        "message": "Hello {user.displayName}!"
+      }
+    }
+  ]
+}

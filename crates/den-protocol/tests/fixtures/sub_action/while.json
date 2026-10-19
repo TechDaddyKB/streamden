@@ -1,0 +1,14 @@
+{
+  "id": "018f7a8c-0000-7000-8000-000000000006",
+  "enabled": true,
+  "kind": "while",
+  "condition": {
+    "left": "{i}",
+    "op": "lt",
+    "right": "3",
+    "autoType": true,
+    "ignoreCase": false
+  },
+  "maxIterations": 10,
+  "children": []
+}

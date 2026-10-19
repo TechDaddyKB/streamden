@@ -1,0 +1,7 @@
+{
+  "field": "amount",
+  "op": "not_in",
+  "value": [
+    "prime"
+  ]
+}

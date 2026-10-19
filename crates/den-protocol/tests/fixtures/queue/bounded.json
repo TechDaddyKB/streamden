@@ -1,0 +1,8 @@
+{
+  "id": "018f7a8c-2222-7000-8000-000000000001",
+  "name": "TTS",
+  "blocking": true,
+  "paused": true,
+  "maxPending": 20,
+  "overflow": "drop_oldest"
+}

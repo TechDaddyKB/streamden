@@ -1,0 +1,19 @@
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "error": {
+    "code": -32602,
+    "message": "Invalid params",
+    "data": {
+      "code": "INVALID_PARAMS",
+      "fieldErrors": [
+        {
+          "path": "/message",
+          "message": "expected string"
+        }
+      ],
+      "retryAfterMs": 0,
+      "docsUrl": "https://example.com/errors#INVALID_PARAMS"
+    }
+  }
+}

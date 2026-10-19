@@ -1,0 +1,16 @@
+{
+  "id": "018f7a8c-1111-7000-8000-000000000001",
+  "type": "twitch.cheer",
+  "enabled": true,
+  "unresolved": false,
+  "alwaysRun": false,
+  "filters": [
+    {
+      "field": "bits",
+      "op": "gte",
+      "value": 100
+    }
+  ],
+  "config": {},
+  "plugin": "io.github.alice.acmelive"
+}

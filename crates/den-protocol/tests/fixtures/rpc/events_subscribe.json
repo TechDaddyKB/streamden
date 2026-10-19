@@ -1,0 +1,9 @@
+{
+  "topics": [
+    "obs.**"
+  ],
+  "highVolume": [
+    "obs.transform"
+  ],
+  "since": "018f7a8c-3333-7000-8000-000000000001"
+}

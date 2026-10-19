@@ -1,0 +1,5 @@
+{
+  "field": "user.roles",
+  "op": "contains",
+  "value": "moderator"
+}

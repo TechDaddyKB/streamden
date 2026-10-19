@@ -1,0 +1,8 @@
+{
+  "field": "amount",
+  "op": "between",
+  "value": [
+    1,
+    10
+  ]
+}

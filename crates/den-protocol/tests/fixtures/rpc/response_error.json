@@ -1,0 +1,16 @@
+{
+  "jsonrpc": "2.0",
+  "id": "req-1",
+  "error": {
+    "code": -32000,
+    "message": "Scope missing",
+    "data": {
+      "code": "PERMISSION_DENIED",
+      "details": {
+        "required": [
+          "actions:run"
+        ]
+      }
+    }
+  }
+}

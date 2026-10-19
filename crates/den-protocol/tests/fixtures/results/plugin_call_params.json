@@ -1,0 +1,5 @@
+{
+  "plugin": "io.github.alice.acmelive",
+  "method": "get_gift_catalog",
+  "params": {}
+}

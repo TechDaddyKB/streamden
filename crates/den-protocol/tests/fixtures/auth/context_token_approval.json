@@ -1,0 +1,48 @@
+{
+  "principal": {
+    "kind": "token",
+    "tokenId": "018f7a8c-5555-7000-8000-000000000001",
+    "name": "Deck",
+    "tokenKind": "api"
+  },
+  "surface": "rpc",
+  "scopes": [
+    "admin:all"
+  ],
+  "maxTier": 4,
+  "approvals": [
+    {
+      "id": "apr_AAAAAAAAAAAAAAAAAAAAAA",
+      "operation": "actions.run",
+      "argsHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "plan": {
+        "actions": [
+          {
+            "id": "018f7a8c-3e6b-7c1d-9a2b-5f4e3d2c1b0a",
+            "revision": 3
+          }
+        ],
+        "calls": [
+          {
+            "action": "018f7a8c-3e6b-7c1d-9a2b-5f4e3d2c1b0a",
+            "node": "018f7a8c-0000-7000-8000-000000000001",
+            "operation": "chat.send",
+            "argsHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "dynamicFields": [
+              "/message"
+            ]
+          },
+          {
+            "plugin": "io.github.alice.acmelive",
+            "operation": "acme.send_chat",
+            "argsHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "dynamicFields": []
+          }
+        ]
+      },
+      "sessionGrant": false,
+      "expiresAt": "2026-10-18T20:15:03.120Z"
+    }
+  ],
+  "lineage": []
+}
