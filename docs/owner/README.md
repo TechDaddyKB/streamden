@@ -80,13 +80,13 @@ Phases are from [PLAN.md](../../PLAN.md): P0 Foundations, P1 Core (Twitch, v0.1)
 | 2 | Tauri updater key + GPG key ([distribution](registrations/distribution-and-signing.md)) | Signed auto-updates; signed RPM and checksums | P0 | Free | none (but back them up) | ☐ |
 | 3 | Domain ([distribution](registrations/distribution-and-signing.md)) | Homepage and privacy policy (Google, Twitch, Meta, SignPath need them), docs, relay hostname | P0 to P2 | about $10-20/year (verify at registrar) | Q-B1 | ☐ |
 | 4 | AUR account + `-bin` package ([distribution](registrations/distribution-and-signing.md)) | Arch distribution | P0 (account), first push at v0.1 | Free | Q-B1 (name), Q-B2 (license) | ☐ |
-| 5 | Windows code signing: SignPath Foundation or Azure Artifact Signing ([distribution](registrations/distribution-and-signing.md)) | Avoid SmartScreen warnings | Before the first public release (v0.1) | SignPath free for OSS; Azure Basic $9.99/mo | Q-B2 (OSI license), Q-B4 (public repo), Q-G3 (budget) | ☐ |
-| 6 | Apple Developer Program ([distribution](registrations/distribution-and-signing.md)) | Developer ID signing + notarization | P0 build, signing at v0.5 (or earlier if Q-P2 says so) | $99/year | Q-P2, Q-G3 | ☐ |
+| 5 | Windows code signing: **SignPath Foundation (chosen, D-055)**; Azure Artifact Signing not pursued ([distribution](registrations/distribution-and-signing.md)) | Avoid SmartScreen warnings | Before the first public release (v0.1) | SignPath free for OSS; Azure Basic $9.99/mo | Q-B2 (OSI license), Q-B4 (public repo), Q-G3 (budget) | ☐ |
+| 6 | Apple Developer Program ([distribution](registrations/distribution-and-signing.md)) | Developer ID signing + notarization | P0 build, signing at v0.5 (or earlier if Q-P2 says so) | $99/year | Q-P2 | ✅ Account exists (owner, 2026-10-19, D-055); signing is still gated by Q-P2 |
 | 7 | Twitch developer app ([twitch](registrations/twitch.md)) | All Twitch features: EventSub, chat, moderation, rewards | P1 | Free | Q-B1 | ☐ |
 | 8 | Stream-ready test accounts and eligibility ([go-live](go-live-requirements.md)) | Test against real platforms; some have waiting periods | P1 onward (start the clocks now) | Free; X Premium is paid | Q-S1 (which platforms) | ☐ |
 | 9 | Google Cloud + YouTube Data API ([google-youtube](registrations/google-youtube.md)) | YouTube chat, events, moderation | P2 | Free; quota 10,000 units/day | Q-B1, Q-C2, Q-S1; domain for verification | ☐ |
 | 10 | Kick developer app ([kick](registrations/kick.md)) | Kick chat send, moderation, events (webhooks) | P2 | Free | Q-B1, Q-C1 (webhooks/secret), Q-S1, Q-C3 | ☐ |
-| 11 | Cloudflare account + `wrangler` ([relay](registrations/relay-cloudflare.md)) | Optional self-hostable relay for Kick events and webhook-only donation services | P2 | Free tier (Workers Free + Durable Objects SQLite) | Q-C1 | ☐ |
+| 11 | Cloudflare account + `wrangler` ([relay](registrations/relay-cloudflare.md)) | Optional self-hostable relay for Kick events and webhook-only donation services | P2 | Free tier (Workers Free + Durable Objects SQLite) | Q-C1 | ✅ Account exists (owner, 2026-10-19, D-055); deployment still P2 |
 | 12 | X developer app + credits ([x-twitter](registrations/x-twitter.md)) | Post go-live and clip tweets | P2 | Pay-per-use: $0.015 per post, $0.20 per post with a link; buy about $5-10 to test | Q-B1, Q-C4 | ☐ |
 | 13 | Discord: webhook and (optional) bot application ([discord](registrations/discord.md)) | Go-live posts (webhook, no app) and optional chat bridge (bot) | P2 | Free | Q-B1 (bot name), Q-S1 | ☐ |
 | 14 | OpenAI API key + "Sign in with ChatGPT" ([openai](registrations/openai.md)) | In-app assistant and AI chat responder; plan-usage sign-in | P4 | Pay-as-you-go (start with about $10). SIWC plan usage: no registration for open-source/local apps | Q-A1; Q-B2 and Q-B3 for SIWC eligibility | ☐ |
@@ -133,7 +133,7 @@ Not covered yet (write a runbook when the feature enters scope): ElevenLabs/Azur
 | Q-P2 macOS tier | Apple Developer Program purchase |
 | Q-S1 platform scope | Which of Kick, Rumble, Facebook, TikTok, Discord runbooks you actually run |
 | Q-A1 AI subscriptions | Which AI accounts you create and whether to contact Anthropic/xAI |
-| Q-G3 budget | Apple, Azure signing, domain, credits |
+| Q-G3 budget (answered, D-055) | Apple and Cloudflare accounts already exist and SignPath is the Windows signer; only the domain and test credits remain |
 
 ## Handing results back to the agents
 
