@@ -1,0 +1,55 @@
+{
+  "metadata": {
+    "message_id": "7297f7eb-3bf5-461f-8ae6-7cd7781ebce3",
+    "message_type": "notification",
+    "message_timestamp": "2024-02-23T21:12:33.771005262Z",
+    "subscription_type": "channel.moderate",
+    "subscription_version": "1"
+  },
+  "payload": {
+    "subscription": {
+      "id": "7297f7eb-3bf5-461f-8ae6-7cd7781ebce3",
+      "status": "enabled",
+      "type": "channel.moderate",
+      "version": "1",
+      "condition": {
+        "broadcaster_user_id": "141981764",
+        "moderator_user_id": "12826"
+      },
+      "transport": {
+        "method": "webhook",
+        "callback": "https://example.com/webhooks/callback"
+      },
+      "created_at": "2024-02-23T21:12:33.771005262Z"
+    },
+    "event": {
+      "broadcaster_user_id": "141981764",
+      "broadcaster_user_login": "twitchdev",
+      "broadcaster_user_name": "TwitchDev",
+      "moderator_user_id": "12826",
+      "moderator_user_login": "twitch",
+      "moderator_user_name": "Twitch",
+      "action": "raid",
+      "followers": null,
+      "slow": null,
+      "vip": null,
+      "unvip": null,
+      "mod": null,
+      "unmod": null,
+      "ban": null,
+      "unban": null,
+      "timeout": null,
+      "untimeout": null,
+      "raid": {
+        "user_id": "197886470",
+        "user_login": "twitchrivals",
+        "user_name": "TwitchRivals",
+        "viewer_count": 0
+      },
+      "unraid": null,
+      "delete": null,
+      "automod_terms": null,
+      "unban_request": null
+    }
+  }
+}

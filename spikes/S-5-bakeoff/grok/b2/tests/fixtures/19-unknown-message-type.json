@@ -1,0 +1,10 @@
+{
+  "metadata": {
+    "message_id": "00000000-0000-4000-8000-000000000019",
+    "message_type": "session_something_new",
+    "message_timestamp": "2026-10-18T00:00:00.000000000Z"
+  },
+  "payload": {
+    "note": "retained"
+  }
+}
