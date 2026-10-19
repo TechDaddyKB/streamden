@@ -59,7 +59,7 @@ runtime ships no WebKitGTK, so a Linux depot is hard. No competing automation to
 **Recommendation:** at launch, GitHub Releases + itch.io + AUR + winget, with GitHub Releases as the single
 update source (the in-app updater is compiled out of store and package builds). Steam after v1.0: free,
 Windows first, no Steamworks SDK (like OBS).
-**Answer:**
+**Answer:** Go with the recommendation
 
 ### Q-B6 — License of the `den-protocol` crate 🟥 (Round 3)
 D-016 makes SDKs and protocol schemas MIT OR Apache-2.0, and the app GPL-3.0-or-later. `crates/den-protocol` is
@@ -68,7 +68,7 @@ Options: (a) MIT OR Apache-2.0, so the public Rust SDK crate can re-export the t
 depend on it; (b) GPL-3.0-or-later like the rest of the app, with the SDK crate getting separately generated
 types.
 **Recommendation:** (a). It contains only types, schemas and catalog metadata, no engine logic.
-**Answer:**
+**Answer:** Go with the recommendation
 
 ### Q-B7 — Host for published schema URLs 🟥 (Round 3)
 Plugin manifests and `protocol.json` carry `$schema`/`$id` URLs that ship inside plugins and binaries, so they
@@ -79,7 +79,7 @@ ADR-0004's open item; (b) GitHub Pages on the org, `tech-daddy-digital.github.io
 (c) raw files from the org repo.
 **Recommendation:** (b) now, since it needs no domain and survives the repo transfer. Add a redirect from (a)
 later.
-**Answer:**
+**Answer:** Go with the recommendation
 
 ---
 
@@ -97,7 +97,7 @@ unsigned, best-effort. (c) Later.
 ### Q-P3 — Flatpak at launch? 🟥 (Round 2)
 **Recommendation:** no, P6. The sandbox complicates system Python/.NET, local ports, MIDI and input
 simulation.
-**Answer:**
+**Answer:** Go with the recommendation
 
 ---
 
@@ -114,19 +114,19 @@ an optional community plugin, not core.
 ### Q-S2 — Streamer.bot alpha-only features count toward parity? 🟥 (Round 2)
 Points/currency, Cron triggers, game-controller input, Whisper voice control, new Elgato apps, OBSBOT.
 **Recommendation:** yes. Points and Cron in P5; controller and voice in P5.
-**Answer:**
+**Answer:** Go with the recommendation
 
 ### Q-S3 — Built-in loyalty (points, currency, ranks, cross-platform identity merge)? 🟥 (Round 2)
 **Recommendation:** yes, P5, including linking one viewer across Twitch, YouTube and Kick.
-**Answer:**
+**Answer:** Go with the recommendation
 
 ### Q-S4 — Speech-to-text and voice commands in v1? CPU-only or GPU? 🟥 (Round 2)
 **Recommendation:** P5. CPU by default with 1–2 threads so games aren't affected; GPU optional.
-**Answer:**
+**Answer:** Go with the recommendation
 
 ### Q-S5 — SAMMI-style OBS source/filter animation (easing, curves)? 🟥 (Round 2)
 **Recommendation:** yes, P5, as sub-actions using obs-websocket.
-**Answer:**
+**Answer:** Go with the recommendation
 
 ### Q-S7 — Discord companion scope 🟥 (Round 2)
 Research: [discord-companion.md](research/discord-companion.md).
@@ -150,7 +150,7 @@ bring-your-own only, no voice TTS until the Discord voice libraries stabilize.
 
 ### Q-S6 — Viewer-facing Twitch Extension (viewer-pressable buttons, Bits)? 🟥 (Round 3)
 **Recommendation:** P6. It needs a hosted backend (EBS), which conflicts with local-first.
-**Answer:**
+**Answer:** Go with the recommendation
 
 ---
 
@@ -176,7 +176,7 @@ in core (could be a community plugin).
 ### Q-C3 — Kick unofficial chat WebSocket fallback? 🟥 (Round 2)
 It's the only way to get deleted-message sync, but Kick staff call it unsupported.
 **Recommendation:** read-only fallback behind an "experimental" toggle.
-**Answer:**
+**Answer:** Go with the recommendation
 
 ### Q-C4 — X/Twitter 🟥 (Round 2)
 X moved to pay-per-use in February 2026 (a tweet with a link costs about $0.20). Users would register their own X
@@ -190,7 +190,7 @@ about $0.001 each; feasible triggers are new follower, mention, reply, like or r
 Polling costs cents per stream. To avoid the $0.20 link-tweet fee, use X's free "web intent" (it opens a
 prefilled tweet). Logging in with your browser session or cookies breaks X's terms (risk of suspension), so we
 won't. X Live chat has no usable API.
-**Answer:**
+**Answer:** Go with the recommendation
 
 ### Q-C6 — Venmo / Cash App / X Money tips 🟥 (Round 2)
 Research: [payments-x-bluesky.md](research/payments-x-bluesky.md).
@@ -209,19 +209,19 @@ Research: [payments-x-bluesky.md](research/payments-x-bluesky.md).
 - Never log in to or scrape payment apps.
 
 Also: a dedicated tips mailbox? Regions beyond the US?
-**Answer:**
+**Answer:** Go with the recommendation
 
 ### Q-C7 — Bluesky, Threads, Mastodon 🟥 (Round 2)
 Bluesky is free and works locally: posting, the "Live Now" badge (Twitch/YouTube links only, not Kick), and
 follow/like/repost/mention/reply triggers by polling notifications. DMs are possible.
 **Recommendation:** Bluesky in P2 alongside X. Threads and Mastodon as go-live announcement plugins later.
 App password or OAuth as the default Bluesky login?
-**Answer:**
+**Answer:** Go with the recommendation
 
 ### Q-C5 — Cloud backups? 🟥 (Round 3)
 **Recommendation:** local backups plus "export to a folder" (users can point it at Dropbox, Syncthing or Nextcloud).
 No hosted backups.
-**Answer:**
+**Answer:** Go with the recommendation
 
 ---
 
@@ -242,7 +242,7 @@ widget import.
 **Update 2026-10-18:** StreamElements widget compatibility is now a goal (D-012) and is proposed for **P2**,
 so chat overlays work before our own designer ships in P3. Streamlabs custom chat-box compatibility is a
 possible follow-up.
-**Answer:**
+**Answer:** Go with the recommendation
 
 ### Q-X3 — Variable and template syntax 🟩 (Round 2)
 Keep Streamer.bot's `%var%` / `~global~` / `$fn()$` as-is? Use a new typed expression language (e.g.
@@ -257,7 +257,7 @@ filters (`{amount | currency}`), and inline expressions (`{= count * 2}`, which 
 then stays unconverted text until they land); (c) paths only, with logic in sub-actions and code.
 **Recommendation:** (a). Imported Streamer.bot actions use `$math()$` a lot, and a pure expression evaluator with
 a step budget is small.
-**Answer:**
+**Answer:** Go with the recommendation
 
 ---
 
@@ -279,7 +279,7 @@ The UI says so.
 ### Q-R3 — Embedded JS plugins have no Node.js APIs 🟥 (Round 2)
 Plugins needing Node would be sidecars. Acceptable?
 **Recommendation:** yes.
-**Answer:**
+**Answer:** Go with the recommendation
 
 ---
 
@@ -308,11 +308,11 @@ Research: [se-widget-compat-and-node-editor.md](research/se-widget-compat-and-no
 
 ### Q-U3 — Visual direction 🟥 (Round 2)
 "Like Streamer.bot" (dark, dense, panel-based)? Any brand colors, references or things to avoid?
-**Answer:**
+**Answer:** No
 
 ### Q-U4 — Localization at launch? 🟥 (Round 3)
 **Recommendation:** i18n-ready strings from day one; English only until P6.
-**Answer:**
+**Answer:** Go with the recommendation
 
 ### Q-U5 — Native chat window on Wayland ✅ (proposed default)
 OBS disables custom browser docks on native Wayland (Hyprland included), so we ship a native always-on-top
@@ -338,12 +338,12 @@ accepts a remote host, not just `localhost`.
 Play alert sounds through the OBS browser source (captured by OBS), the app's own audio device, or user's choice
 per alert?
 **Recommendation:** user's choice, defaulting to the browser source.
-**Answer:**
+**Answer:** Go with the recommendation
 
 ### Q-D2 — Alert queue defaults 🟥 (Round 2)
 How many priority lanes, should higher priority interrupt, and should gift bombs merge into one alert?
 **Recommendation:** three lanes (critical, normal, low), no interruption by default, gift bombs merged.
-**Answer:**
+**Answer:** Go with the recommendation
 
 ### Q-D4 — StreamElements widget runtime defaults 🟥 (Round 2)
 Research: [se-widget-compat-and-node-editor.md](research/se-widget-compat-and-node-editor.md). Estimate: about
@@ -365,11 +365,11 @@ personal-use).
 **Spike S-2 input (2026-10-18):** the per-widget origin scheme `w-<id>.localhost` works in OBS's CEF (isolated and
 persistent). But iframed widgets get partitioned storage, and writes made just before a CEF crash were lost. So
 the SE `localStorage` shim should be **backed by our server's storage**. Recommendation: yes.
-**Answer:**
+**Answer:** Yes
 
 ### Q-D3 — Real-time co-editing with mods? 🟥 (Round 3)
 **Recommendation:** not in v1. Yjs underneath keeps it possible.
-**Answer:**
+**Answer:** Go with the recommendation
 
 ---
 
@@ -388,37 +388,37 @@ Polly, Google, ElevenLabs, OpenAI, TTS Monster…
 ### Q-I1 — Is a small C# companion plugin for Warudo acceptable? 🟥 (Round 2)
 Warudo mods must be C#. It would be a tiny, separately built plugin.
 **Recommendation:** yes.
-**Answer:**
+**Answer:** Yes
 
 ### Q-I2 — Wayland keystroke simulation 🟥 (Round 2)
 Portal-only (prompts the user, partly supported on Hyprland), or also ship a `ydotool`-style fallback that needs
 a udev rule?
 **Recommendation:** portal first, with an optional fallback and a guided setup.
-**Answer:**
+**Answer:** Go with the recommendation
 
 ### Q-I3 — Spotify 🟥 (Round 2)
 Since February 2026, apps in Spotify's development mode need the owner to have Premium, and allow 5 users.
 Options: users supply their own client ID, or skip and use OS "now playing" (MPRIS/Windows media session).
 **Recommendation:** OS now-playing in core; Spotify as a bring-your-own-client-ID plugin.
-**Answer:**
+**Answer:** Go with the recommendation
 
 ### Q-I4 — Unofficial/reverse-engineered APIs (Wave Link, SteelSeries Sonar…)? 🟥 (Round 2)
 **Recommendation:** only behind an "experimental" toggle.
-**Answer:**
+**Answer:** Go with the recommendation
 
 ### Q-I5 — Stream Deck approach 🟥 (Round 2)
 Our own Elgato plugin (also runs on OpenDeck on Linux), direct hardware control, or both?
 **Recommendation:** an Elgato SDK plugin that is OpenDeck-compatible (P4). Direct HID control later, if ever.
-**Answer:**
+**Answer:** Go with the recommendation
 
 ### Q-I6 — Home Assistant as the official smart-home bridge? 🟥 (Round 2)
 **Recommendation:** yes for the long tail. Native Hue, Elgato Key Light and WLED for the most common devices.
-**Answer:**
+**Answer:** Go with the recommendation
 
 ### Q-I7 — Unknowns to confirm 🟥 (Round 2)
 What is "Karasubot"? Is PolyPop still used by your community? Any other tools you or your VTuber friends rely
 on that aren't in [app-integrations-vtuber.md](research/app-integrations-vtuber.md)?
-**Answer:**
+**Answer:** I think you mistook karasubot for kbonk (https://typeou.itch.io/karasubonk) but yes lets make sure integration works there too. Polypop is still used I believe
 
 ---
 
@@ -427,15 +427,15 @@ on that aren't in [app-integrations-vtuber.md](research/app-integrations-vtuber.
 ### Q-K1 — Native sidecar plugins in the public registry? 🟥 (Round 3)
 **Recommendation:** only in a "Verified" channel with build provenance. Declarative and JS plugins in the open
 channel.
-**Answer:**
+**Answer:** Go with the recommendation
 
 ### Q-K2 — Paid or DRM plugins ever? 🟥 (Round 3)
 **Recommendation:** the registry only lists free plugins. Paid plugins can exist outside it.
-**Answer:**
+**Answer:** Go with the recommendation
 
 ### Q-K3 — Registry governance 🟥 (Round 3)
 Who reviews submissions, the namespace policy, takedown process.
-**Answer:**
+**Answer:** I (or an AI agent) will review and handle the registry governance
 
 ---
 
@@ -467,13 +467,13 @@ StreamDen. Code execution and ending the stream are never exposed over MCP.
 ### Q-A4 — Remote AI access (ChatGPT web, claude.ai, grok.com) 🟥 (Round 3)
 These need a public URL (tunnel) plus OAuth.
 **Recommendation:** after v1. Local clients cover most needs.
-**Answer:**
+**Answer:** Go with the recommendation
 
 ### Q-A5 — Secrets on Linux without a keychain daemon 🟥 (Round 2)
 Some Hyprland setups have no Secret Service daemon. Fall back to an encrypted file (passphrase), or require
 gnome-keyring/KeePassXC?
 **Recommendation:** use Secret Service if present, otherwise an encrypted file with a clear warning in the UI.
-**Answer:**
+**Answer:** Go with the recommendation
 
 ### Q-A3 — AI in chat 🟥 (Round 2)
 AI co-host replies, chat summaries, moderation assist? Should replies auto-post or go to an approval queue? Which
@@ -481,7 +481,7 @@ providers can power it (local models too)? Disclosure (the EU AI Act Art. 50 tra
 2026-08-02, per secondary sources)? Budget caps per stream?
 **Recommendation:** v0.5. The responder has **no write tools**, so viewers can't talk it into running actions.
 Replies pass moderation, the approval queue is the default, disclosure is on, and there's a hard budget cap.
-**Answer:**
+**Answer:** Go with the recommendation
 
 ### Q-A6 — Do MCP-caused event chains inherit the MCP restrictions? 🟩 (Round 3)
 [Spec 02 §8.8](spec/02-protocol.md) makes authorization transitive: a run started over MCP can never reach tier 4
@@ -507,7 +507,7 @@ without `causedBy` (upstream events, including a platform echoing the engine's o
 ### Q-H1 — Chat history retention 🟥 (Round 3)
 Twitch and YouTube developer policies limit how long chat data is cached (about 24 h and 30 days).
 **Recommendation:** keep a rolling 24 h by default, configurable, and keep only aggregate stats beyond that.
-**Answer:**
+**Answer:** Go with the recommendation but implement local chat history storage with length/size definable by the user (up to 120 streams/120 days)
 
 ---
 
@@ -526,7 +526,7 @@ Throwaway code in `spikes/`, mainly to test Tauri on your Hyprland + NVIDIA mach
 ### Q-G3 — Budget for paid items 🟥 (Round 2)
 Apple Developer ($99/yr), Windows signing (SignPath free for OSS; Azure Trusted Signing about $10/mo), domain,
 Cloudflare (relay free tier), test accounts.
-**Answer:**
+**Answer:** I already have an Apple Developer, and cloudflare account. Lets use signpath for signing. 
 
 ---
 
