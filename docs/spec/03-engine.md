@@ -1037,7 +1037,11 @@ Every run (including inline children, test runs, rejected and dropped runs) whos
 true` is stored as a `Run` record (§3) plus two snapshots: **`argsQueued`**, the args map at admission (for a
 queued `RunAction` child, the seeded map; for a trigger run, the seeded payload fields), and **`argsAfter`**, the
 map when the run ended. Both are stored as JSON with `x-secret` fields redacted (spec 02 §3) and truncated to
-`engine.history.maxSnapshotBytes` (256 KiB) with a `truncated: true` marker. The firing **event envelope is
+`engine.history.maxSnapshotBytes` (256 KiB) with a `truncated: true` marker. The record's other variable-length
+fields are bounded at record time the same way, so no stored record is unbounded: `error.details` is truncated
+to `maxSnapshotBytes` with the same marker; `error.message`, `RunWarning.message` and `actionName` are cut to
+4,096 Unicode scalar values; `warnings` keeps at most 100 entries, the rest replaced by one final `RunWarning {
+code: "warnings_truncated", message: "<n> more" }`. The firing **event envelope is
 copied into the run record** (`eventSnapshot`, redacted, counted against the same budget), because the event log
 (§12.5) is pruned sooner than history and never holds `highVolume` events (a run fired by
 `variables.user_updated` must still be inspectable and replayable). Each snapshot stores its own taint set
@@ -1128,15 +1132,29 @@ cursor?: String }` (tier 0) returns `{ runs: Vec<Run>, nextCursor: Option<String
   both snapshots (§12.1). Storage limits and transport budgets are different things: `maxSnapshotBytes` bounds
   what is **stored** per snapshot; what one response may carry is the session's message budget (spec 02 §3,
   default 1 MiB, raised per session by spec 06). Records are not fixed-size (`error.details`, `warnings`, the
-  taint lists), so the server cuts a page **before** `limit` when the next record would push the response over
-  the budget and returns `nextCursor`. When the **first** remaining record alone would exceed the budget, the
-  page still makes progress: that one record is returned with `error.details` omitted, both taint lists empty
-  and `warnings` replaced by the single `RunWarning { code: "row_truncated" }`, so `nextCursor` advances and the
-  full record is reachable through `runs.get`. A `runs.get` response that would exceed the budget fails with
-  `PAYLOAD_TOO_LARGE` (`details.reason = "message_budget"`, `details.bytes`); the client retries with
-  `snapshots: false` (the record, trace and taint lists without the three snapshots) or raises its session
-  budget. The `message_size` settings warning (§16) fires when three snapshots at `maxSnapshotBytes` plus the
-  record could exceed the default budget; it is advice, not a guarantee.
+  taint lists), so the server **serializes the response as it goes** (the JSON-RPC envelope included) and cuts
+  the page **before** `limit` when the next record would push it over the budget, returning `nextCursor`. When
+  the **first** remaining record alone would exceed the budget, it is returned as a **reduced row** so that the
+  cursor advances: the reduced row keeps every required field and the fixed-size optional ids (`event`,
+  `parent`, `replayOf`, `stoppedBy`, `cancelReason`), omits `chain`, `error.details` and both taint lists (they
+  are optional or default-empty on the wire), cuts `error.message` and `actionName` to 256 Unicode scalar values
+  each, and replaces `warnings` by the single `RunWarning { code: "row_truncated", message: "<comma-separated
+  names of the reduced fields>" }`. Every field of the reduced row is therefore of fixed or capped size, so its
+  serialized size has a constant upper bound `K_row` (identifiers, timestamps, enums and the capped strings;
+  the implementation derives the exact constant from the schema and asserts it, below 8 KiB). A session whose
+  negotiated budget is below `K_row` plus the envelope cannot be served a list at all: `runs.list` fails
+  `PAYLOAD_TOO_LARGE` (`details.reason = "message_budget"`, `details.bytes`, `details.minimum = K_row`) instead
+  of returning an empty page, and nothing is skipped. The reduced row is a presentation of the stored record,
+  never a rewrite of it. A `runs.get` response is assembled in three **components**, the record (bounded by
+  §12.1: at most `maxSnapshotBytes` of `error.details` plus the capped strings and warnings), then the three
+  snapshots (`snapshots: true`, default), then the trace (`trace: true`); each component is added only if the
+  response still fits, otherwise the call fails `PAYLOAD_TOO_LARGE` (`details.reason = "message_budget"`,
+  `details.bytes`, `details.component ∈ { "record", "snapshots", "trace" }`). `snapshots: false` and
+  `trace: false` therefore cure exactly the overflow their component caused; a record whose §12.1-bounded
+  `error.details` alone exceeds the budget is readable only after the session raises its budget, which the
+  error says. The `message_size` settings warning (§16) fires when three snapshots at `maxSnapshotBytes` plus a
+  record with `maxSnapshotBytes` of `error.details` could exceed the default budget; it is advice, not a
+  guarantee.
 
 ## 13. Storage
 
@@ -1472,9 +1490,17 @@ WS/REST and MCP and never as sub-actions (a run does not reconfigure the engine 
   Timestamp, updatedBy: UpdatedBy, source: "document" | "defaults", pendingRestart: Vec<String> }`.
   `pendingRestart` names the restart-only keys whose stored value differs from the **boot value** (the value the
   running engine sized its channels with at start); `source` is `defaults` while the engine runs on the built-in
-  defaults because the stored document is unusable (below). `settings` and `revision` are the stored document and
-  `pendingRestart` is computed against the effective configuration, read together under the settings guard
-  (below), so one response never mixes two revisions.
+  defaults because the stored document is unusable (below). `settings` is always a **valid `Settings` value**:
+  with `source: "document"` it is the stored document, `revision`, `updatedAt` and `updatedBy` are its metadata,
+  and `pendingRestart` compares it with the boot values; with `source: "defaults"` it is the **built-in defaults
+  the engine actually runs on** (never the stored bytes, which may not satisfy the schema), `reason: "invalid" |
+  "newer_schema"` says why (present only in that state), `revision`, `updatedAt` and `updatedBy` are the
+  metadata of the persisted record that was set aside (its body is untouched until a successful
+  `settings.update` replaces it, or never under `newer_schema`), and `pendingRestart` is empty, because the
+  engine booted on those same defaults. The diagnostics of the rejected body travel in
+  `system.document_invalid` (§13.5), not in this result. Stored document, effective configuration and
+  provenance are read together under the settings writer (below), so one response never mixes two
+  revisions.
 - `settings.update { settings: Settings, revision?: u64 }` (tier 2, scope `settings:write`, draft-first under MCP
   as a `PendingChange { targetKind: "settings", operation: "settings.update" }`, spec 02 §6.1) replaces **whole
   sections**: inside a section (`engine.run`, `engine.bus`, …) every field is `required`, so a partial section is
@@ -1485,16 +1511,30 @@ WS/REST and MCP and never as sub-actions (a run does not reconfigure the engine 
   `revision`, so *Apply* days later does not fail on a stale revision; the Apply screen shows the diff against
   the then-current document instead. The call validates ranges (`INVALID_PARAMS` with one `fieldErrors` entry per
   offending field, whose `path` is the ordinary JSON Pointer into the **request** params, for example
-  `/settings/engine/run/maxConcurrent`, spec 02 §8.5; nothing is stored), then runs the write under the
-  engine's **settings guard**, one async mutex over the sequence *compare revision → commit → swap effective
-  config → publish*: the `revision` check (`CONFLICT`, `details.reason = "revision"`, when it is not the stored
-  one) and the store happen in the same storage transaction (`revision + 1`, `updatedBy` from the context, A7),
-  and only after the commit the new document is swapped into the effective configuration (hot-apply of every
-  changed key that is not restart-only; restart-only keys keep their boot value in the effective configuration)
-  and `settings.updated { revision, changed, restartRequired, updatedBy }` is published. The guard is held across
-  the storage `await` (it is an async mutex, never a synchronous runtime lock), so two updates, with or without
-  `revision`, always commit, apply and publish in revision order and the effective configuration never regresses
-  behind the stored one; a failure before the commit swaps and publishes nothing and returns the error. The
+  `/settings/engine/run/maxConcurrent`, spec 02 §8.5; nothing is stored), then hands the write to the
+  engine's **settings writer**: one owned task (started with the engine, stopped by §10.8 step 3) that consumes
+  a bounded request queue in order and runs, for each request, the sequence *compare revision → commit → swap
+  effective config → publish* to completion **independently of the requesting future**. The caller only
+  submits `(request, cancellation token, completion channel)` and awaits the completion; callers never hold a
+  lock across an `await`, and the writer never holds a synchronous lock across one either. The `revision`
+  check (`CONFLICT`, `details.reason = "revision"`, when it is not the stored one) and the store happen in the
+  same storage transaction (`revision + 1`, `updatedBy` from the context, A7); only after the commit is the
+  new document swapped into the effective configuration (hot-apply of every changed key that is not
+  restart-only; restart-only keys keep their boot value in the effective configuration) and `settings.updated {
+  revision, changed, restartRequired, updatedBy }` published (an engine-internal event, §5.1: non-blocking, so
+  it can be dropped and counted under internal-lane overflow, in which case the stored revision is still the
+  truth and `settings.get` shows it). Because one task does all of it in queue order, updates with or without
+  `revision` always commit, apply and publish in revision order and the effective configuration never
+  regresses behind the stored one. **Cancellation boundary:** the writer checks the request's token
+  immediately before it opens the storage transaction; a request cancelled before that point is discarded with
+  no durable write. From that point on the request is **accepted** and runs to completion whatever happens to
+  the caller: a caller whose future is dropped after submission learns the outcome through `settings.get`
+  (the stored `revision`) and `settings.updated`, nothing is rolled back and nothing is pretended undone. A
+  storage failure inside the transaction swaps and publishes nothing and the completion carries the error.
+  Queue capacity is small and fixed (16 requests); a caller that finds it full awaits a slot (the must-land
+  class of §13.1), never fails. At shutdown the writer finishes the accepted request it is running, rejects
+  the rest of the queue and every later submission with `INVALID_STATE` (`details.reason = "shutting_down"`),
+  and exits before the final flush. The
   result is `{ settings, revision, changed: Vec<String> /* keys whose value differs from the previous document
   */, applied: Vec<String> /* changed keys in effect now */, restartRequired: Vec<String> /* restart-only keys
   whose new stored value differs from the boot value; an undo back to the boot value removes the key and is
@@ -1518,11 +1558,13 @@ WS/REST and MCP and never as sub-actions (a run does not reconfigure the engine 
   configuration holds until the next start, whatever the stored document says. Every other key hot-applies.
 - **Startup.** A missing document is created with the defaults (`revision` 1, `updatedBy: system`). A stored
   document that fails validation (schema or range) is **not** used: the engine runs on the defaults, publishes
-  `system.document_invalid { kind: "settings", … }` (§13.5), reports `source: "defaults"` from `settings.get`,
-  and the next successful `settings.update` replaces it (sections it omits come from the defaults then). A document with a newer
-  `schemaVersion` than the app knows is read-only (spec 02 §7.3): the engine runs on the defaults the same way and
-  `settings.update` fails `INVALID_STATE` (`details.reason = "read_only"`). Document migrations add new keys with
-  their defaults (spec 02 §7.3).
+  `system.document_invalid { kind: "settings", … }` (§13.5), reports `source: "defaults", reason: "invalid"`
+  with the defaults as `settings` from `settings.get` (above), keeps the rejected record in place, and the next
+  successful `settings.update` replaces it (sections the call omits come from the defaults then, since there is
+  no usable stored section). A document with a newer `schemaVersion` than the app knows is read-only (spec 02
+  §7.3): the engine runs on the defaults the same way with `reason: "newer_schema"`, and `settings.update`
+  fails `INVALID_STATE` (`details.reason = "read_only"`). Document migrations add new keys with their defaults
+  (spec 02 §7.3).
 
 ## 17. UI flows (engine-visible parts; spec 07 owns the screens)
 
@@ -1767,9 +1809,18 @@ and requires:
    a settling entry), and when that insert is dropped (absent and counted); the cursor is opaque and a malformed
    one is `INVALID_PARAMS`; `history.pending: false` runs are absent from `state: [queued, running]` and present
    in an unfiltered query; list rows **omit** `eventSnapshot` (the key is absent, validated against the schema)
-   while `runs.get` returns it; a first remaining record that alone exceeds the session budget is returned as a
-   `row_truncated` row and the cursor advances; `runs.get` of a run whose three snapshots exceed the budget fails
-   `PAYLOAD_TOO_LARGE` / `message_budget` and succeeds with `snapshots: false`, also with `trace: true`.
+   while `runs.get` returns it; **bounded rows (§12.1, §12.6):** a run failed with a 2 MiB `error.message` and
+   a 2 MiB `error.details` is stored with both cut (4,096 scalars / `maxSnapshotBytes` with the marker) and 101
+   warnings become 100 plus `warnings_truncated`; a first remaining record that alone exceeds a 16 KiB session
+   budget is returned as a schema-valid reduced row (`row_truncated` with a non-empty `message` naming the
+   reduced fields, `error.message` ≤ 256 scalars, no `chain`, no `error.details`, empty taint lists) whose
+   serialized size is ≤ `K_row`, the measured response including the envelope is under the budget, and the
+   cursor advances; a session budget below `K_row` fails `runs.list` with `message_budget` and
+   `details.minimum`, never an empty page; `runs.get` of a run whose three snapshots exceed the budget fails
+   `PAYLOAD_TOO_LARGE` / `message_budget` / `component: "snapshots"` and succeeds with `snapshots: false`; a
+   trace-only overflow fails with `component: "trace"` and succeeds with `trace: false`; a record whose bounded
+   `error.details` alone exceeds a small budget fails with `component: "record"` and succeeds after the budget
+   is raised.
 7. **Timers and cron:** paused-clock tests for drift-free intervals, direct dispatch to the owning trigger, random ranges, `minChatLines` gate, `repeat:
    false` disabling, missed-tick coalescing after a simulated suspend; cron DST skip and fall-back, `catchUp`,
    time zone changes, leap day; **cron cursor:** a daily trigger fires, the engine restarts twice within the day
@@ -1851,7 +1902,19 @@ and requires:
     **concurrent writers** (forced interleaving): two unconditional updates, and two updates with the same
     explicit `revision`, never both succeed against one stored revision, commit, apply and publish in revision
     order, and the effective configuration never shows an older revision than the stored one; a storage failure
-    before the commit leaves the effective configuration and the event stream untouched; a changed
+    before the commit leaves the effective configuration and the event stream untouched; **cancellation
+    finality (§16 writer):** a caller cancelled before its request reaches the writer's transaction leaves no
+    durable write and no event; a caller cancelled after submission once the transaction has opened, after the
+    commit before the swap, and during publication, in every case ends with the stored revision, the effective
+    configuration and `settings.updated` all showing the committed revision, with the same assertions as the
+    two-writer case; a full writer queue makes the 17th caller wait, not fail; a submission after shutdown has
+    begun is `shutting_down` while the accepted request completes; **defaults path (§16 `settings.get`):** a
+    stored document with a wrong-typed field, a missing field, an out-of-range value and a newer `schemaVersion`
+    each start the engine on the defaults, `settings.get` returns `source: "defaults"` with the matching
+    `reason`, a `settings` value that validates against the `Settings` schema, the persisted record's
+    `revision`/`updatedAt`/`updatedBy` and an empty `pendingRestart`, never the stored bytes; a valid
+    whole-section repair update then returns `source: "document"`, and the newer-version case refuses the
+    repair with `read_only`; a changed
     `maxConcurrent` and `flushMs` take effect at the next dispatch and flush without cancelling a running run; a
     changed `engine.bus.capacity` (8192 → 16384) is reported in `restartRequired`, in `pendingRestart` afterwards
     and in `settings.updated`, the channel size is unchanged until restart, and the **undo** (16384 → 8192, the
@@ -2098,6 +2161,15 @@ grammar"; signals are implemented as operations rather than new `Node` kinds so 
   `restartRequired` and `pendingRestart` against the boot value, undo case (§16, §22.13); F8 immediate admission
   honours the global head (§10.2, §22.3); F9 transport-independent parser limits, `source.maxLength`, failure
   shape, span units (§22.14; spec 02 §10). Cards DEN-69, 77, 82, 93, 118, 119 and 146 re-synchronized (F10).
+  **Round 3** (the Codex Astra re-review of `360358d`, 3 P2, all resolved): R2-1 every variable-length record
+  field bounded at record time (§12.1) and the reduced list row made fixed-size with a derived bound `K_row`, a
+  serialized-size check including the envelope, an explicit `message_budget` / `details.minimum` failure
+  below that bound, and `runs.get` overflow reported per component (§12.6, §22.6); R2-2 the settings guard
+  replaced by an owned, bounded **settings writer** task with a defined cancellation boundary (before the
+  transaction: discarded; after: completes commit → swap → publish regardless of the caller) and shutdown
+  behaviour (§16, §22.13); R2-3 `settings.get` under `source: "defaults"` returns the defaults the engine runs
+  on as a valid `Settings`, a `reason`, the set-aside record's provenance and an empty `pendingRestart`, never
+  the invalid stored bytes (§16, §22.13).
   Owner answers applied: Q-E1–Q-E8 marked confirmed (D-039) where the text asked for confirmation (§6.3, §7.1,
   §9.5, §9.10, §10.8, §12.2, §24); the Q-H1 and Q-C5 answers of 2026-10-19 recorded where §12.5 and §13.6
   deferred to them (no behaviour change here; spec 08 owns the chat history store). Cards DEN-69, 70, 77, 82, 93,
