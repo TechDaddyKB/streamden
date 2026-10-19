@@ -50,7 +50,7 @@ Follow AGENTS.md and docs/agents/board.md exactly:
 1. project_summary(streamden), then project_card_get(card $n). Read its detail and history; respect depends_on/ready.
 2. Claim it: project_card_claim(slug streamden, card $n, role = plan for kind:spec cards, else code, worktree_path=$wt, username=$username, client_request_id=$card-$mode-$today), then move it to your lane.
 3. Work ONLY in this worktree ($wt) and only on the card's Scope (paths). Run its Done-when commands and keep evidence.
-4. Commit with ONE Conventional Commit subject line ending in ($card): no body, no trailers. Do not push.
+4. Commit per AGENTS.md (D-037): Conventional Commit subject ending in ($card), a body with what/why and the checks you ran, then exactly one AI-Assisted-By trailer for your engine. No co-author lines. Do not push.
 5. Append your handoff (tasks/_TEMPLATE.md §B) to the card detail, then project_card_release with a one-line note (advance only if every Done-when passes; otherwise resolution handoff or blocked)."
 else
   [[ -d "$wt" ]] || { echo "No worktree $wt to review" >&2; exit 1; }

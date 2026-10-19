@@ -53,8 +53,10 @@ A later helper (`scripts/den-claim`) can compare the paths of claimed cards auto
 - Agents are launched with `scripts/dispatch.sh` (D-036), or remotely: since 2026-10-18 the host runs
   `cxx-daemon.service` (service account `kris`) with fleet Agent Messaging and remote starts enabled, so sessions
   can also be started from the orchestrator console or the Android app, and wake/cron schedules can target live
-  agents. Codex and Claude are daemon-ready; Grok is pending a signed-config refresh (see shared memory
-  `host.omarchy-desktop`).
+  agents. All three engines (Codex, Claude, Grok) are daemon-ready; daemon health is green. Grok needed two extra
+  steps: `cgx update` to refresh its signed config (Grok only refreshes it on expiry or update), and a one-time
+  `cgx login` on the host, because the server only counts an engine as remote-startable on a secure host once that
+  host holds its credential. Details are in shared memory `host.omarchy-desktop`.
 
 ## Consequences
 - One MCP (the orchestrator's) covers board, merges, schedules and messaging for all three vendors.

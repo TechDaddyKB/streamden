@@ -9,7 +9,7 @@ MCP that `clx`, `cdx` and `cgx` install. Docs, specs and contracts stay in git.
 
 ## Identity
 - Card titles start with `DEN-<n> · `. Refer to work as **DEN-<n>** in branches, commits and docs.
-- Branch: `agent/<vendor>/DEN-<n>-<slug>`. Commit subject ends with `(DEN-<n>)`; no body or trailers (D-034).
+- Branch: `agent/<vendor>/DEN-<n>-<slug>`. Commit subject names the card `(DEN-<n>)`, then a body and one `AI-Assisted-By:` trailer (D-037, see AGENTS.md).
 - `username` you pass to the board: `<vendor>/<model>`, e.g. `claude/claude-opus-5-5`, `codex/gpt-6.1-sol`,
   `grok/grok-4.7`. `worktree_path`: the absolute path of your worktree.
 

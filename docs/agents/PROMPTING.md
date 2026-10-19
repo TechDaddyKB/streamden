@@ -36,7 +36,8 @@ Done when (run these and paste the output): `<cmd 1>`, `<cmd 2>`, `<cmd 3>`.
 Autonomy: proceed without asking for reversible, in-scope steps. Stop and ask only for destructive actions,
 contract changes, or product decisions (add those to docs/QUESTIONS.md).
 Before ending: project_card_release DEN-<n> with the handoff note (tasks/_TEMPLATE.md §B), advancing it
-only if every Done-when passes; commit with a single Conventional Commit subject line ending in (DEN-<n>): no body, no trailers.
+only if every Done-when passes; commit per AGENTS.md (D-037): subject ending in (DEN-<n>), a body with what/why and the checks you ran, and one
+`AI-Assisted-By: <engine>` trailer.
 ```
 
 ## 3. Vendor-specific tips

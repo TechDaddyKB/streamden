@@ -9,7 +9,7 @@
 - **SDKs, protocol schemas, generated client libraries, plugin templates and examples** (`sdk/**`,
   `crates/den-protocol` generated outputs, `tools/create-streamden-plugin` templates): **MIT OR Apache-2.0**, so
   plugin authors can license their plugins however they like. Each of these folders gets its own `LICENSE-*` files.
-- **Contributions:** external contributors sign off under the Developer Certificate of Origin (`Signed-off-by:`, checked on PRs). No CLA. Owner and fleet-agent commits follow D-034 (single subject line).
+- **Contributions:** external contributors sign off under the Developer Certificate of Origin (`Signed-off-by:`, checked on PRs). No CLA. Owner and fleet-agent commits follow D-037 (subject, body, one `AI-Assisted-By` trailer for agent commits).
 
 ## Why
 - Piper/Kokoro local voices pull in GPL-3.0 espeak-ng. GPL avoids a separate optional download.
