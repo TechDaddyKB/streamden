@@ -50,8 +50,11 @@ A later helper (`scripts/den-claim`) can compare the paths of claimed cards auto
 - Agents reach the MCP through the stdio server the wrappers install (`cxx communicator mcp <engine>`; the `clx`
   entry for Claude Code). The communicator capability is off on this host, so the adapter uses the HTTPS MCP
   endpoint, which works.
-- Agents are launched with `scripts/dispatch.sh` (D-036). This host has no `cxx daemon` and no agent messaging yet,
-  so sessions can't be started or messaged from the console or MCP; enabling those is optional.
+- Agents are launched with `scripts/dispatch.sh` (D-036), or remotely: since 2026-10-18 the host runs
+  `cxx-daemon.service` (service account `kris`) with fleet Agent Messaging and remote starts enabled, so sessions
+  can also be started from the orchestrator console or the Android app, and wake/cron schedules can target live
+  agents. Codex and Claude are daemon-ready; Grok is pending a signed-config refresh (see shared memory
+  `host.omarchy-desktop`).
 
 ## Consequences
 - One MCP (the orchestrator's) covers board, merges, schedules and messaging for all three vendors.
