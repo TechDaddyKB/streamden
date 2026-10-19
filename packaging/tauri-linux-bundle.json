@@ -1,0 +1,13 @@
+{
+  "productName": "streamden",
+  "bundle": {
+    "linux": {
+      "deb": {
+        "desktopTemplate": "../../packaging/StreamDen.desktop.hbs"
+      },
+      "rpm": {
+        "desktopTemplate": "../../packaging/StreamDen.desktop.hbs"
+      }
+    }
+  }
+}

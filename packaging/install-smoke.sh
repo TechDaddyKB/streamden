@@ -5,22 +5,24 @@ shopt -s nullglob
 
 case "${1:?expected debian, fedora or arch}" in
   debian)
-    bundles=(/work/artifacts/deb/StreamDen*.deb)
+    bundles=(/work/artifacts/deb/streamden_*.deb)
     [[ ${#bundles[@]} == 1 ]]
     apt-get update
     apt-get install -y "${bundles[0]}" xvfb xauth dbus-x11
     package_name=$(dpkg-deb -f "${bundles[0]}" Package)
+    [[ "$package_name" == streamden ]]
     dpkg-query -L "$package_name"
     ;;
   fedora)
-    bundles=(/work/artifacts/rpm/StreamDen*.rpm)
+    bundles=(/work/artifacts/rpm/streamden-*.rpm)
     [[ ${#bundles[@]} == 1 ]]
     dnf install -y "${bundles[0]}" xorg-x11-server-Xvfb xorg-x11-xauth dbus-x11
     package_name=$(rpm -qp --queryformat '%{NAME}' "${bundles[0]}")
+    [[ "$package_name" == streamden ]]
     rpm -ql "$package_name"
     ;;
   arch)
-    bundles=(/work/artifacts/deb/StreamDen*.deb)
+    bundles=(/work/artifacts/deb/streamden_*.deb)
     [[ ${#bundles[@]} == 1 ]]
     pacman -Syu --noconfirm --needed base-devel namcap xorg-server-xvfb xorg-xauth dbus
     useradd -m probe
@@ -49,7 +51,8 @@ esac
 
 # Assert installed paths, including the desktop entry and every bundled icon size.
 test -x /usr/bin/streamden
-test -s /usr/share/applications/StreamDen.desktop
+test -s /usr/share/applications/streamden.desktop
+grep -Fxq 'Name=StreamDen' /usr/share/applications/streamden.desktop
 for size in 32 128 512; do
   test -s "/usr/share/icons/hicolor/${size}x${size}/apps/streamden.png"
 done

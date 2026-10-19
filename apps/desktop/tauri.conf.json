@@ -43,6 +43,7 @@
     "license": "GPL-3.0-or-later",
     "category": "Utility",
     "shortDescription": "StreamDen streaming automation hub",
+    "longDescription": "StreamDen is a streaming automation hub. This P0 preview contains the desktop shell; automation and integration features are under development.",
     "createUpdaterArtifacts": false,
     "windows": {
       "allowDowngrades": false,

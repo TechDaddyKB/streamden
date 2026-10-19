@@ -14,21 +14,33 @@ From the repository root, with the [repository prerequisites](../AGENTS.md) inst
 pnpm install --frozen-lockfile --ignore-scripts
 cargo install tauri-cli --version 2.12.3 --locked
 bash packaging/fetch-appimage-tools.sh
-cd apps/desktop
-cargo tauri build -- --locked
+bash packaging/build-linux.sh
 ```
 
 Linux produces `target/release/bundle/{deb,rpm,appimage}` at the workspace root.
+Native deb/rpm package names are explicitly `streamden`; artifact names start with
+`streamden` too. Tauri 2.12.3 has no deb/rpm package-name field and derives these
+names from `productName`. The build script first runs
+`cargo tauri build --no-bundle -- --locked` with the original
+`productName: "StreamDen"`, then `cargo tauri bundle`
+with [`tauri-linux-bundle.json`](../packaging/tauri-linux-bundle.json). This bundle-only
+override sets `productName` to `streamden`; the compiled application's display name
+stays `StreamDen`. The shared desktop template also keeps `Name=StreamDen`.
+Use this script for Linux distribution builds: plain `cargo tauri build` still uses
+Tauri's default `stream-den` package name. Windows uses the original config directly.
 Windows produces MSI and NSIS installers. The MSI upgrade code is frozen to Tauri's
 current product-derived value; preserve it across updates. NSIS defaults to the current
 user. WebView2's bootstrapper downloads the runtime if needed; installers are not offline.
 No signing certificate or publishing credentials are configured.
 
 The [Packaging workflow](../.github/workflows/release-packaging.yml) runs manually, on
-`v*` tags, and on pull requests touching `packaging/**`, `apps/desktop/tauri.conf.json`
-or the packaging workflow itself. It builds on Ubuntu 24.04 and Windows 2025, then
+`v*` tags, and on pull requests touching packaging, apps, crates, web packages,
+workspace manifests/lockfiles, Rust toolchain/config, or the packaging workflow itself.
+It builds on Ubuntu 24.04 and Windows 2025, then
 uploads bundles for 14 days before the separate install-smoke jobs run. It never creates
-a GitHub release. All actions
+a GitHub release. Install-smoke jobs also run after a failed bundle matrix, so a
+Windows-only failure does not suppress Linux evidence; missing Linux artifacts still
+fail the download step. All actions
 and container images are pinned by digest; the Linux AppImage tools have SHA-256 checks
 in [`fetch-appimage-tools.sh`](../packaging/fetch-appimage-tools.sh). A changed upstream
 continuous asset fails verification and requires review before updating its digest.
@@ -50,8 +62,9 @@ location and SHA-256 with the downloaded deb. This exercises the actual AUR payl
 extraction and dependency list without a published release or disabled checksums;
 `makepkg` runs as an unprivileged user. The checked-in draft stays fail-closed.
 
-Each job lists package-owned files and asserts `/usr/bin/streamden`,
-`/usr/share/applications/StreamDen.desktop`, and the 32/128/512-pixel icons in
+Each deb/rpm job asserts the native package name is `streamden`. Each job lists
+package-owned files and asserts `/usr/bin/streamden`,
+`/usr/share/applications/streamden.desktop` with `Name=StreamDen`, and the 32/128/512-pixel icons in
 `/usr/share/icons/hicolor`. It logs `ldd /usr/bin/streamden` and fails on unresolved
 libraries or an ldd error. If `/usr/bin/streamdend` is present it runs
 `streamdend --version`; the current desktop-only packages explicitly skip that check.
@@ -97,8 +110,8 @@ permission denied while trying to connect to the docker API at unix:///var/run/d
 Podman was not installed. The Docker denial was not bypassed. Coordinator: push this
 branch and run Packaging with `workflow_dispatch`; retain the Linux/Windows artifacts
 and all three install-smoke job logs. Packaging-related pull requests also run these
-jobs before merge. Neither hosted execution nor Windows installer execution was
-available during this local session. The exact current CI reproduction, after downloading
+jobs before merge. Local Docker and Windows installer execution remain unavailable.
+The exact current CI reproduction, after downloading
 the Linux artifact into `artifacts/` with its `deb/`, `rpm/` and `appimage/` directories, is:
 
 ```bash
@@ -111,8 +124,10 @@ docker run --rm -v "$PWD:/work:ro" "$SMOKE_IMAGE" \
 
 [`streamden-bin`](../packaging/aur/streamden-bin/PKGBUILD) extracts Tauri's gzip Debian
 payload; [`streamden`](../packaging/aur/streamden/PKGBUILD) builds the release archive
-using the workspace's pinned Rust toolchain, frozen Cargo dependencies and locked pnpm
-install with scripts disabled. Both target x86_64 only, matching this workflow. Modern
+using `rustup` (an explicit build dependency) to honour the workspace's pinned Rust
+toolchain, frozen Cargo dependencies and locked pnpm install with scripts disabled.
+It uses the same separate compile/bundle configuration as the Linux build script.
+Both target x86_64 only, matching this workflow. Modern
 Arch package hooks handle icon/desktop caches; no custom install hooks are needed.
 
 These are **unpublished drafts**. Release URLs use the permanent organisation from
@@ -160,15 +175,29 @@ copy of the `streamden-bin` draft, adapted exactly as in CI, passed checksum val
 and `makepkg --nodeps --noconfirm` on Arch and contained the expected binary, desktop
 entry and all three icons. This local probe skipped dependency checks and did not
 install the package; CI checks dependencies and installs it with pacman. Native package
-names are read from artifact metadata (the generated deb is named `stream-den`).
-Hosted container execution remains pending because local Docker access is unavailable.
+names were read from artifact metadata (before round 4, the deb was `stream-den`).
+Local Docker access remains unavailable.
 
 Round 3 replaces the session-log grep with direct desktop PID survival. The coordinator
 reports hosted run `39212543221` on PR #17 installed successfully on all three distros:
 Arch passed; Debian/Fedora failed the former diagnostic check on container portal noise.
 Local regression controls now pass for noisy survival and reject SIGSEGV (status 139)
 and early clean exit (status 0). They run in every install-smoke container before the
-installed desktop probe. The updated hosted run is still required; local Arch startup
-does not establish Debian/Fedora runtime success.
+installed desktop probe. Claude's review verified hosted run
+[39214623808](https://github.com/TechDaddyKB/streamden/actions/runs/39214623808) at
+`2b760be`: both bundle jobs and all three install jobs passed, including controls and
+15-second desktop survival. Round 4's renamed packages still need a hosted rerun.
+
+Round 4 rebuilt all three Linux bundles through `bash packaging/build-linux.sh`:
+`streamden_0.0.0_amd64.deb`, `streamden-0.0.0-1.x86_64.rpm` and
+`streamden_0.0.0_amd64.AppImage`. Direct deb control and rpm header inspection assert
+`Package: streamden` / `Name: streamden`; desktop entries in the deb and AppImage
+assert `Name=StreamDen`. The deb long description is populated. Both PKGBUILD lints,
+actionlint, Markdown lint and all six workspace checks above passed again.
+The three launch controls passed, and the renamed deb payload's desktop survived
+15 seconds on Arch (exit 0); this does not establish Debian installation success.
+The Debian command above was retried with the explicit
+`/work/target/release/bundle/deb/streamden_0.0.0_amd64.deb` path and `bash -ec`:
+exit 1, the same Docker socket permission denial; no container was created.
 
 Rollback: revert the DEN-35 commits; no host package, service or release was installed.
