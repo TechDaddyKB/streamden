@@ -1,7 +1,19 @@
 const { execFileSync } = require('node:child_process');
+const { readFileSync, existsSync } = require('node:fs');
 
 function currentBranch() {
-  return execFileSync('git', ['branch', '--show-current'], { encoding: 'utf8' }).trim();
+  const git = args => execFileSync('git', args, { encoding: 'utf8' }).trim();
+  const branch = git(['branch', '--show-current']);
+  if (branch) return branch;
+  // Rebase hooks run on detached HEAD; head-name retains the original branch.
+  for (const state of ['rebase-merge', 'rebase-apply']) {
+    const path = git(['rev-parse', '--git-path', `${state}/head-name`]);
+    if (existsSync(path)) {
+      const ref = readFileSync(path, 'utf8').trim();
+      return ref.startsWith('refs/heads/') ? ref.slice('refs/heads/'.length) : '';
+    }
+  }
+  return '';
 }
 
 function validBranch(branch) {
