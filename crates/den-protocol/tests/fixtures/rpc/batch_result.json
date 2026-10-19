@@ -1,0 +1,27 @@
+{
+  "results": [
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "runId": "018f7a8c-4444-7000-8000-000000000001"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": "req-1",
+      "error": {
+        "code": -32000,
+        "message": "Scope missing",
+        "data": {
+          "code": "PERMISSION_DENIED",
+          "details": {
+            "required": [
+              "actions:run"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

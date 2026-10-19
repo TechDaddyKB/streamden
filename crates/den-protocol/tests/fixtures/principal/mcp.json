@@ -1,0 +1,9 @@
+{
+  "kind": "mcp",
+  "tokenId": "018f7a8c-5555-7000-8000-000000000001",
+  "sessionId": "ses_abcdefghijklmnopqrstuv",
+  "client": {
+    "name": "Claude Code",
+    "version": "2.0"
+  }
+}

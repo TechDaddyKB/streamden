@@ -6,6 +6,7 @@ members = [
     "crates/den-server",
     "apps/daemon",
     "apps/desktop",
+    "xtask",
 ]
 # Spikes are throwaway projects with their own lockfiles; never workspace members.
 exclude = ["spikes"]

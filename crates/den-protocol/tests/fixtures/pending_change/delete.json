@@ -1,0 +1,18 @@
+{
+  "id": "018f7a8c-6666-7000-8000-000000000001",
+  "kind": "action",
+  "draftOf": "018f7a8c-3e6b-7c1d-9a2b-5f4e3d2c1b0a",
+  "operation": "actions.delete",
+  "params": {
+    "id": "018f7a8c-3e6b-7c1d-9a2b-5f4e3d2c1b0a"
+  },
+  "createdBy": {
+    "kind": "mcp",
+    "tokenId": "018f7a8c-5555-7000-8000-000000000001",
+    "sessionId": "ses_abcdefghijklmnopqrstuv",
+    "client": {
+      "name": "Claude Code",
+      "version": "2.0"
+    }
+  }
+}

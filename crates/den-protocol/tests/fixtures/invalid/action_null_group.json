@@ -1,0 +1,94 @@
+{
+  "id": "018f7a8c-3e6b-7c1d-9a2b-5f4e3d2c1b0a",
+  "revision": 3,
+  "name": "Cheer alert",
+  "group": null,
+  "enabled": true,
+  "queue": "00000000-0000-0000-0000-000000000000",
+  "concurrent": false,
+  "random": false,
+  "alwaysRun": false,
+  "history": {
+    "record": true,
+    "pending": false
+  },
+  "triggers": [
+    {
+      "id": "018f7a8c-1111-7000-8000-000000000001",
+      "type": "twitch.cheer",
+      "enabled": true,
+      "unresolved": false,
+      "alwaysRun": false,
+      "filters": [
+        {
+          "field": "bits",
+          "op": "gte",
+          "value": 100
+        }
+      ],
+      "config": {}
+    },
+    {
+      "id": "018f7a8c-1111-7000-8000-000000000002",
+      "type": "acme.gift",
+      "plugin": "io.github.alice.acmelive",
+      "enabled": true,
+      "unresolved": true,
+      "alwaysRun": true,
+      "filters": [],
+      "config": {
+        "minAmount": 5
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "id": "018f7a8c-0000-7000-8000-000000000001",
+      "enabled": true,
+      "kind": "op",
+      "type": "chat.send",
+      "params": {
+        "message": "Hello {user.displayName}!"
+      }
+    },
+    {
+      "id": "018f7a8c-0000-7000-8000-000000000004",
+      "enabled": true,
+      "kind": "if",
+      "condition": {
+        "left": "{amount}",
+        "op": "gte",
+        "right": "100",
+        "autoType": true,
+        "ignoreCase": false
+      },
+      "then": [
+        {
+          "id": "018f7a8c-0000-7000-8000-000000000001",
+          "enabled": true,
+          "kind": "op",
+          "type": "chat.send",
+          "params": {
+            "message": "Hello {user.displayName}!"
+          }
+        }
+      ],
+      "else": []
+    },
+    {
+      "id": "018f7a8c-0000-7000-8000-000000000002",
+      "enabled": true,
+      "kind": "delay",
+      "ms": "{= wait * 2}"
+    }
+  ],
+  "description": "Thanks for the bits",
+  "tags": [
+    "alerts"
+  ],
+  "origin": {
+    "kind": "imported",
+    "from": "streamerbot",
+    "trusted": false
+  }
+}

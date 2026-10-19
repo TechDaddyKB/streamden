@@ -1,0 +1,37 @@
+{
+  "dryRun": true,
+  "plan": [
+    {
+      "operation": "chat.send",
+      "params": {
+        "message": "Hello Dallas!"
+      },
+      "tier": 3,
+      "action": "018f7a8c-3e6b-7c1d-9a2b-5f4e3d2c1b0a",
+      "node": "018f7a8c-0000-7000-8000-000000000001",
+      "argsHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "dynamicFields": [
+        "/message"
+      ],
+      "target": "twitch:dallas",
+      "description": "Send a chat message"
+    }
+  ],
+  "actions": [
+    {
+      "id": "018f7a8c-3e6b-7c1d-9a2b-5f4e3d2c1b0a",
+      "revision": 3
+    }
+  ],
+  "diff": {
+    "name": [
+      "old",
+      "new"
+    ]
+  },
+  "warnings": [
+    "Approval needed"
+  ],
+  "wouldRequireApproval": true,
+  "effectiveTier": 3
+}

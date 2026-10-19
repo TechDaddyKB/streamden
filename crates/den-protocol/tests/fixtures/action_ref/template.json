@@ -1,0 +1,4 @@
+{
+  "kind": "template",
+  "template": "{args.target}"
+}

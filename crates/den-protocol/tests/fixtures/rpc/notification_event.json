@@ -1,0 +1,55 @@
+{
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+    "event": {
+      "id": "018f7a8c-3333-7000-8000-000000000001",
+      "type": "twitch.subscription",
+      "ts": "2026-10-18T20:15:03.120Z",
+      "source": {
+        "plugin": "core.twitch",
+        "connection": "018f7a8c-7777-7000-8000-000000000001",
+        "account": "dallas"
+      },
+      "platform": "twitch",
+      "user": {
+        "platform": "twitch",
+        "id": "44322889",
+        "login": "dallas",
+        "displayName": "Dallas",
+        "avatarUrl": "https://example.com/a.png",
+        "color": "#1E90FF",
+        "roles": [
+          "subscriber"
+        ],
+        "badges": [
+          {
+            "id": "subscriber",
+            "version": "12",
+            "title": "1-Year Subscriber"
+          }
+        ],
+        "pronouns": "he/him"
+      },
+      "payload": {
+        "tier": "1000",
+        "cumulativeMonths": 12,
+        "message": {
+          "text": "gg",
+          "fragments": [
+            {
+              "kind": "text",
+              "text": "gg"
+            }
+          ]
+        }
+      },
+      "meta": {
+        "payloadVersion": 1,
+        "test": false,
+        "replay": false,
+        "correlationId": "abc"
+      }
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "draft": {
+    "id": "018f7a8c-6666-7000-8000-000000000001",
+    "kind": "pending_change",
+    "draftOf": "018f7a8c-3e6b-7c1d-9a2b-5f4e3d2c1b0a",
+    "operation": "actions.delete"
+  },
+  "plan": [
+    {
+      "operation": "actions.delete",
+      "params": {
+        "id": "018f7a8c-3e6b-7c1d-9a2b-5f4e3d2c1b0a"
+      },
+      "tier": 2,
+      "description": "Delete the action"
+    }
+  ],
+  "warnings": []
+}

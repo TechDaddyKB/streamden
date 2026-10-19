@@ -1,0 +1,11 @@
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "actions.run",
+  "params": {
+    "id": "018f7a8c-3e6b-7c1d-9a2b-5f4e3d2c1b0a",
+    "args": {
+      "n": 1
+    }
+  }
+}

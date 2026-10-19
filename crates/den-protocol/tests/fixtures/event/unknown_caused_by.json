@@ -1,0 +1,21 @@
+{
+  "id": "018f7a8c-3333-7000-8000-000000000001",
+  "type": "twitch.unknown",
+  "ts": "2026-10-18T20:15:03.120Z",
+  "source": {
+    "plugin": "core.twitch"
+  },
+  "payload": {
+    "upstreamType": "channel.new_thing",
+    "upstreamVersion": "1",
+    "data": {
+      "x": 1
+    }
+  },
+  "meta": {
+    "payloadVersion": 1,
+    "test": true,
+    "replay": true,
+    "causedBy": "018f7a8c-4444-7000-8000-000000000001"
+  }
+}

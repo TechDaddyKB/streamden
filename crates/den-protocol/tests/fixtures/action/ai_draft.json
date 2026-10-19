@@ -1,0 +1,21 @@
+{
+  "id": "018f7a8c-3e6b-7c1d-9a2b-5f4e3d2c1b0b",
+  "revision": 0,
+  "name": "Cheer alert",
+  "enabled": false,
+  "queue": "018f7a8c-2222-7000-8000-000000000001",
+  "concurrent": false,
+  "random": false,
+  "alwaysRun": false,
+  "history": {
+    "record": true,
+    "pending": false
+  },
+  "triggers": [],
+  "nodes": [],
+  "tags": [],
+  "origin": {
+    "kind": "ai_draft",
+    "draftOf": "018f7a8c-3e6b-7c1d-9a2b-5f4e3d2c1b0a"
+  }
+}

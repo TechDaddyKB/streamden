@@ -1,0 +1,32 @@
+{
+  "id": "018f7a8c-0000-7000-8000-000000000000",
+  "enabled": true,
+  "note": "D-028",
+  "kind": "parallel",
+  "branches": [
+    [
+      {
+        "id": "018f7a8c-0000-7000-8000-000000000001",
+        "enabled": true,
+        "kind": "op",
+        "type": "chat.send",
+        "params": {
+          "message": "Hello {user.displayName}!"
+        }
+      }
+    ],
+    [
+      {
+        "id": "018f7a8c-0000-7000-8000-000000000002",
+        "enabled": true,
+        "kind": "op",
+        "type": "acme.send_chat",
+        "plugin": "io.github.alice.acmelive",
+        "params": {
+          "message": "gg"
+        },
+        "saveAs": "sent"
+      }
+    ]
+  ]
+}

@@ -1,0 +1,178 @@
+{
+  "$schema": "den://schemas/v0/plugin.schema.json",
+  "manifestVersion": 0,
+  "id": "io.github.alice.acmelive",
+  "slug": "acme",
+  "name": "%plugin.name%",
+  "version": "1.4.2",
+  "description": "%plugin.description%",
+  "author": {
+    "name": "Alice",
+    "url": "https://github.com/alice"
+  },
+  "license": "MIT",
+  "repository": "https://github.com/alice/streamden-acmelive",
+  "categories": [
+    "platform",
+    "chat"
+  ],
+  "keywords": [
+    "acme"
+  ],
+  "engines": {
+    "streamden": ">=0.1.0 <1.0.0",
+    "pluginApi": "^0.1"
+  },
+  "runtime": {
+    "kind": "js",
+    "entry": "dist/main.js",
+    "isolation": "process"
+  },
+  "activation": [
+    "onConnectionEnabled"
+  ],
+  "permissions": {
+    "network": {
+      "http": [
+        "https://api.acme.live/*"
+      ]
+    }
+  },
+  "connection": {
+    "kind": "oauth2"
+  },
+  "settings": {
+    "type": "object",
+    "properties": {
+      "apiKey": {
+        "type": "string",
+        "x-secret": true
+      }
+    }
+  },
+  "contributes": {
+    "events": [
+      {
+        "id": "gift",
+        "title": "%event.gift.title%",
+        "description": "A gift",
+        "category": [
+          "Acme Live",
+          "Monetization"
+        ],
+        "payloadVersion": 1,
+        "payload": {
+          "type": "object",
+          "required": [
+            "giftName",
+            "amount"
+          ],
+          "properties": {
+            "giftName": {
+              "type": "string"
+            },
+            "amount": {
+              "$ref": "den://schemas/v0/Money.json"
+            }
+          }
+        },
+        "filters": [
+          {
+            "field": "amount",
+            "ops": [
+              "gte",
+              "lte",
+              "between"
+            ],
+            "specificity": 2
+          },
+          {
+            "field": "giftName",
+            "ops": [
+              "eq",
+              "in"
+            ],
+            "optionsFrom": "acme.list_gift_types",
+            "specificity": 3
+          }
+        ],
+        "highVolume": false,
+        "testPayload": "fixtures/gift.json"
+      }
+    ],
+    "operations": [
+      {
+        "id": "send_chat",
+        "title": "%op.send_chat.title%",
+        "sentence": "Send {message} to Acme chat",
+        "category": [
+          "Acme Live",
+          "Chat"
+        ],
+        "params": {
+          "type": "object",
+          "required": [
+            "message"
+          ],
+          "properties": {
+            "message": {
+              "type": "string",
+              "maxLength": 500,
+              "x-ui": {
+                "widget": "textarea",
+                "variables": true
+              }
+            },
+            "reply": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        },
+        "result": {
+          "type": "object",
+          "properties": {
+            "messageId": {
+              "type": "string"
+            }
+          }
+        },
+        "tier": 3,
+        "scopes": [
+          "chat:send"
+        ],
+        "expose": {
+          "rpc": true,
+          "subAction": true,
+          "mcp": true
+        },
+        "timeoutMs": 5000,
+        "idempotent": false,
+        "external": true,
+        "examples": []
+      }
+    ],
+    "conditions": [],
+    "variables": [
+      {
+        "id": "viewerCount",
+        "type": "integer"
+      }
+    ],
+    "chatSources": [],
+    "ttsVoices": [],
+    "overlayWidgets": [],
+    "panels": [],
+    "commands": [],
+    "templates": []
+  },
+  "definitions": {
+    "Gift": {
+      "type": "object"
+    }
+  },
+  "x-acme-extra": {
+    "ok": true
+  },
+  "typo": 1
+}
