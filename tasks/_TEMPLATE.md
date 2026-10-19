@@ -30,7 +30,7 @@ one `WS-*`.
 
 Dependencies go in the card's `depends_on` field (card numbers), not in the text.
 
-## B. Handoff note (the `note` on `project_card_release` at the end of EVERY session)
+## B. Handoff (appended to the card detail as a `### Handoff` section at the end of EVERY session; the `project_card_release` note is just a one-line summary)
 
 ```markdown
 **Handoff — YYYY-MM-DD — <vendor>/<model>**

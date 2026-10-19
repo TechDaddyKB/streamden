@@ -47,7 +47,10 @@ start it.
    - `resolution:"handoff"`: partial work, the card stays where it is for the next session;
    - `resolution:"blocked"` + the reason in `note`: the card moves to Blocked;
    - never `resolution:"done"`, which is the owner's call.
-   The handoff note uses the template in [`tasks/_TEMPLATE.md`](../../tasks/_TEMPLATE.md) §B.
+   **Keep `note` to one short line (under ~200 chars).** Long notes currently fail with a database error. Put
+   the full handoff (template: [`tasks/_TEMPLATE.md`](../../tasks/_TEMPLATE.md) §B) into the card itself:
+   `project_card_update` with `detail` = existing detail + an appended `### Handoff — <date> — <vendor>/<model>`
+   section.
 5. **New work you discover:** `project_card_create` (lands in Backlog) with `kind:*`, `phase:*` and `WS-*`
    labels and a `detail` following §A of the template. Mention its number in your handoff. Don't claim it.
 6. **Merging locally:** Git Director (`git_register` → `git_merge_request` → `git_release`), see AGENTS.md.
