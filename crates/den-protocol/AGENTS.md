@@ -15,23 +15,40 @@ crate rules.
 - Layout (DEN-34): `ids`, `timestamp`, `shared`, `events`, `domain`, `template`, `results`, `auth`, `rpc`, `catalog`,
   `manifest` hold the types; `schema` holds the generator settings and transforms; `core::register` registers what
   Spec 02 itself defines; `codegen` builds `protocol.json`, the catalog lint and the TS export that `xtask` writes.
-- `x-secret` (Spec 02 §3) is monotonic: mark a field or type `true` and every position that reaches it, by name,
-  pattern, composition or `$ref`, is published as `"***"`. `x-secret: false` never clears a mark a referenced
-  type carries (the lint rejects that sibling); a non-boolean mark fails lint and, if it ever gets through,
-  publication redacts the position whole. `codegen::redact_secrets` asks the `jsonschema` validator which
+- **Secrets (Spec 02 §3) are typed values first, schema marks second.** A position that holds a secret is
+  `Secret<T>` (`src/secret.rs`) in the Rust type: it serializes as `"***"` unless the caller is inside
+  `expose_secrets` (the wire path, synchronous and thread-local), `Debug` never shows it, its schema is
+  `T`'s plus `x-secret: true`, its TypeScript type is `T`'s. Examples are built from the typed values
+  (`OperationExample::typed`, `EventDef::push_typed_example`): the published `params`/`result`/payload is
+  serialized with secrets withheld, so it never held the secret, and the authored values the validator
+  checks live in a `#[serde(skip)]` field that `redact_examples` drops. Every core example must be typed
+  (`tests/codegen_rules.rs::core_examples_are_typed`), and `build_unredacted` refuses a typed example the
+  schema walk would still change (a plain field with a hand-set `x-secret`, a pre-serialized exposed value,
+  plan params rendered exposed): the value level must be what withholds it. Never set `x-secret` by hand
+  on a Rust type when `Secret<T>` can express it; `#[schemars(extend("x-secret" = true))]` is for
+  JSON-authored schemas. `EventDef`/`AuthoredExample` print the authored values only by count in `Debug`.
+- The schema walk `codegen::redact_secrets` is defence in depth, and the only mechanism for JSON-authored
+  examples. `x-secret` is monotonic: mark a field or type `true` and every position that reaches it, by
+  name, pattern, composition or `$ref`, is published as `"***"`. `x-secret: false` is rejected by the lint
+  everywhere (§3 marks with `true` only; a `false` can only hide a mark, and a field-level
+  `#[schemars(extend(...))]` replaces the keys an `#[schemars(inline)]` type brought, before any transform
+  here runs: use `extend` for `x-` annotations only). A non-boolean mark fails lint and, if it ever gets
+  through, publication redacts the position whole. The walk asks the `jsonschema` validator which
   `patternProperties` apply, so never add a second regex engine to decide that. Marks under
-  `patternProperties` and `additionalProperties` are allowed on purpose: schemars emits `additionalProperties`
-  for `HashMap<String, T>` (a map of named secrets is a common shape), and applicability there is the
-  validator's own verdict, so forbidding them would cost expressiveness without adding safety.
-- `x-secret: false` is rejected by the lint everywhere: §3 marks with `true` only, and a `false` can only
-  hide a mark. `#[schemars(extend(...))]` on a field *replaces* top-level keys of that field's schema,
-  including everything an `#[schemars(inline)]` type brought with it, before any transform of this crate
-  runs: use `extend` for `x-` annotations only, never to set `x-secret: false` or a validation keyword
-  (`properties`, `required`, …) beside an inline type. The `DenyNullForOptional` transform lifts an
-  optional's surviving branch into the property only when the property holds nothing but annotations
-  (`x-secret` joined monotonically) and keeps it whole in `allOf` otherwise; a transform must never take
-  "the keys the other side lacks" and drop the rest. `tests/secret_invariant.rs` plants a sentinel at every
-  marked position of the authored schemas and runs the real pipeline; it is the net for this whole class.
+  `patternProperties` and `additionalProperties` are allowed on purpose (schemars emits
+  `additionalProperties` for `HashMap<String, T>`).
+- **A transform never changes keyword scope.** JSON Schema keywords interact only within their own schema
+  object (`additionalProperties` exempts the `properties` beside it, `items` the `prefixItems` beside it),
+  so a `$ref` sibling or an optional's surviving branch must never be laid beside the other side's
+  validation keywords: `merge_ref_target` keeps the target whole as `allOf: [target]` whenever the property
+  carries a validation keyword (a sibling `allOf` takes the target as one more member; annotations are
+  lifted, `x-secret` joined monotonically), and
+  `DenyNullForOptional` lifts a branch only into a property that holds nothing but annotations. Preserving
+  every key is not enough (Codex rounds 4 and 5): a mark that survives textually can stop applying.
+- `tests/secret_invariant.rs` is the net for this whole class: it plants a sentinel at every marked
+  position of the authored schemas (per schema object, the way the walk unions them), plus typed
+  `Secret<T>` sentinels, runs the real pipeline, and fails on any sentinel in any artifact; typed examples
+  must hold none before the walk runs and be left unchanged by it.
 - Fixtures live in `tests/fixtures/<type>/*.json`: one per tagged-union variant, round-tripped and schema-validated
   by `tests/contract.rs`. Add a fixture for every new variant (Spec 02 §17.1). `schema/protocol.json` and
   `schema/plugin.schema.json` are golden snapshots: a type change fails `cargo test -p den-protocol` until you run

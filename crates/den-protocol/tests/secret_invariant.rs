@@ -18,10 +18,18 @@
 //! branch at a time of `anyOf`/`oneOf`, `if`, `then`, `else` and every `dependentSchemas` entry (all
 //! taken as applying, the way `codegen::redact_secrets` unions them), `properties`, selecting
 //! `patternProperties`, `additionalProperties`/`unevaluatedProperties` for undeclared members,
-//! `prefixItems`, `items`/`unevaluatedItems` and `contains` for items. Not planted: marks under `not`
-//! and `propertyNames` (an instance satisfying them is not a valid one; `redaction.rs` covers the
-//! redactor side), and alternatives past `MAX_ALTERNATIVES` per position (unions are sampled, not
-//! exhausted, past that). schemars emits none of those from Rust types.
+//! `prefixItems`, `items`/`unevaluatedItems` and `contains` for items. A schema object that does not
+//! evaluate a member or an item itself applies its fallback to it, whatever another object in the
+//! conjunction declared (Codex round 5: a `$ref` sibling `properties` or `prefixItems` beside a target
+//! whose `additionalProperties` or `items` is marked). Not planted: marks under `not` and
+//! `propertyNames` (an instance satisfying them is not a valid one; `redaction.rs` covers the redactor
+//! side), and alternatives past `MAX_ALTERNATIVES` per position (unions are sampled, not exhausted,
+//! past that). schemars emits none of those from Rust types.
+//!
+//! The value level (round 6): the stress catalog also holds an operation and an event whose secrets are
+//! `Secret<T>` in the Rust types and whose examples are built from the typed values. Their published
+//! form is asserted to hold no sentinel *before* any redaction walk runs, and to be left unchanged by
+//! it: the walk is defence in depth there, not the mechanism.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -30,7 +38,9 @@ use den_protocol::catalog::{
     ArgWrites, Catalog, EventDef, Exposure, OperationDef, OperationExample, ResultShape,
 };
 use den_protocol::codegen::{self, ProtocolDocument, redact_secrets};
-use den_protocol::ids::{EventType, OperationName};
+use den_protocol::ids::{EntityId, EventType, OperationName};
+use den_protocol::results::{DraftKind, DraftRef, DraftResult, DryRunResult, PlanStep, True};
+use den_protocol::secret::{Secret, expose_secrets, withhold_secrets};
 use den_protocol::shared::RiskTier;
 use den_protocol::template::TemplateOr;
 use schemars::JsonSchema;
@@ -45,6 +55,9 @@ const MAX_ALTERNATIVES: usize = 24;
 
 /// Numeric sentinels count up from here: inside `uint32`, and no authored number comes near it.
 const NUMERIC_SENTINEL_BASE: i64 = 4_000_000_000;
+
+/// The one numeric secret of the typed stress operation (a `Secret<u32>`), checked by its digits.
+const TYPED_PIN: u32 = 4_000_000_999;
 
 /// Strings tried, in order, until one satisfies every `pattern`, `minLength` and `maxLength` at a leaf.
 const STRING_CANDIDATES: &[&str] = &[
@@ -332,10 +345,25 @@ impl<'a> Planter<'a> {
         {
             let mut schemas: Vec<&'b Value> = Vec::new();
             for obj in conj {
+                let mut matched = false;
                 if let Some(prop) = obj.get("properties").and_then(|p| p.get(name)) {
+                    matched = true;
                     schemas.push(prop);
                 }
-                schemas.extend(self.selecting_patterns(obj, name));
+                let patterns: Vec<&'b Value> = self.selecting_patterns(obj, name).collect();
+                matched |= !patterns.is_empty();
+                schemas.extend(patterns);
+                // A schema object that does not evaluate the member itself applies its fallback to
+                // it, whatever another object of the conjunction declared (Codex round 5).
+                if !matched {
+                    for key in ["additionalProperties", "unevaluatedProperties"] {
+                        if let Some(fallback) = obj.get(key)
+                            && fallback.is_object()
+                        {
+                            schemas.push(fallback);
+                        }
+                    }
+                }
             }
             let alternatives = self.instances_marked(&schemas, &format!("{path}/{name}"), marked);
             if alternatives.is_empty() {
@@ -439,10 +467,27 @@ impl<'a> Planter<'a> {
     {
         let get = |key: &str| conj.iter().find_map(|o| o.get(key));
         let min_items = get("minItems").and_then(Value::as_u64).unwrap_or(0) as usize;
-        if let Some(Value::Array(prefix)) = get("prefixItems") {
+        let prefix_len = conj
+            .iter()
+            .filter_map(|o| o.get("prefixItems")?.as_array())
+            .map(Vec::len)
+            .max();
+        if let Some(len) = prefix_len {
             let mut tuple = Vec::new();
-            for (i, item) in prefix.iter().enumerate() {
-                let alternatives = self.instances_marked(&[item], &format!("{path}/{i}"), marked);
+            for i in 0..len {
+                // Each schema object positions the item itself: its `prefixItems[i]`, else its
+                // `items`, whatever another object of the conjunction prefixed (Codex round 5).
+                let mut schemas: Vec<&'b Value> = Vec::new();
+                for obj in conj {
+                    if let Some(prefixed) = obj.get("prefixItems").and_then(|p| p.get(i)) {
+                        schemas.push(prefixed);
+                    } else if let Some(items) =
+                        obj.get("items").or_else(|| obj.get("unevaluatedItems"))
+                    {
+                        schemas.push(items);
+                    }
+                }
+                let alternatives = self.instances_marked(&schemas, &format!("{path}/{i}"), marked);
                 let Some(first) = alternatives.into_iter().next() else {
                     return Vec::new();
                 };
@@ -779,9 +824,166 @@ struct StressPayload {
     choice: Choice,
 }
 
+/// An unmarked shared type; a `$ref` to it with a sibling `allOf` is where the mark lives.
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct PlainCreds {
+    user: String,
+    token: String,
+}
+
+/// Codex round 5: shared targets whose marked fallback a `$ref` sibling applicator used to exempt.
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[allow(dead_code)]
+struct SecretMap(BTreeMap<String, Secret<String>>);
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[allow(dead_code)]
+struct SecretList(Vec<Secret<String>>);
+
+// ----- the typed stress shapes: every secret a `Secret<T>`, examples from the typed values -----------
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct TypedCreds {
+    user: String,
+    token: Secret<String>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+enum TypedChoice {
+    Plain { text: String },
+    Keyed { key: Secret<String> },
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct TypedFlat {
+    flat_token: Secret<String>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct TypedParams {
+    user: String,
+    token: Secret<String>,
+    pin: Option<Secret<u32>>,
+    whole: Secret<TypedCreds>,
+    optional_whole: Option<Secret<TypedCreds>>,
+    creds: TypedCreds,
+    keys: BTreeMap<String, Secret<String>>,
+    list: Vec<Secret<String>>,
+    nested: Vec<TypedCreds>,
+    choice: TypedChoice,
+    choices: Vec<TypedChoice>,
+    pair: (String, Secret<String>),
+    #[serde(flatten)]
+    flat: TypedFlat,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct TypedResult {
+    session: Secret<String>,
+    items: Vec<TypedChoice>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct TypedPayload {
+    viewer: String,
+    session: Secret<String>,
+    creds: TypedCreds,
+}
+
+fn typed_sentinel(tag: &str) -> Secret<String> {
+    Secret::new(format!("{SENTINEL_PREFIX}_typed_{tag}"))
+}
+
+fn typed_params() -> TypedParams {
+    TypedParams {
+        user: "alice".into(),
+        token: typed_sentinel("token"),
+        pin: Some(Secret::new(TYPED_PIN)),
+        whole: Secret::new(TypedCreds {
+            user: "bob".into(),
+            token: typed_sentinel("whole_token"),
+        }),
+        optional_whole: Some(Secret::new(TypedCreds {
+            user: "carol".into(),
+            token: typed_sentinel("optional_whole_token"),
+        })),
+        creds: TypedCreds {
+            user: "dave".into(),
+            token: typed_sentinel("creds_token"),
+        },
+        keys: BTreeMap::from([("k_1".to_string(), typed_sentinel("keys_k_1"))]),
+        list: vec![typed_sentinel("list_0")],
+        nested: vec![TypedCreds {
+            user: "erin".into(),
+            token: typed_sentinel("nested_0_token"),
+        }],
+        choice: TypedChoice::Keyed {
+            key: typed_sentinel("choice_key"),
+        },
+        choices: vec![
+            TypedChoice::Plain {
+                text: "kept".into(),
+            },
+            TypedChoice::Keyed {
+                key: typed_sentinel("choices_1_key"),
+            },
+        ],
+        pair: ("kept".into(), typed_sentinel("pair_1")),
+        flat: TypedFlat {
+            flat_token: typed_sentinel("flat_token"),
+        },
+    }
+}
+
+fn stress_op(
+    name: &str,
+    params: schemars::Schema,
+    result: schemars::Schema,
+    tier: RiskTier,
+    examples: Vec<OperationExample>,
+) -> OperationDef {
+    OperationDef {
+        name: OperationName::new(name).unwrap(),
+        title: "Stress".into(),
+        description: "Stress. Secret-bearing shapes.".into(),
+        category: vec!["Stress".into()],
+        params,
+        result,
+        tier,
+        scopes: vec![],
+        expose: Exposure {
+            rpc: true,
+            sub_action: true,
+            mcp: true,
+        },
+        idempotent: false,
+        writes_args: ArgWrites::None,
+        external: false,
+        timeout_ms: None,
+        platforms: None,
+        high_volume_result: false,
+        since: "0.1.0".into(),
+        deprecated: None,
+        examples,
+    }
+}
+
 /// The core catalog plus one operation per tiered shape (tier 1: dry-run result; tier 2: dry-run and
-/// draft results) and one event, all over the stress types. Their registration examples are planted
-/// too, so the catalog lint sees them.
+/// draft results) and one event, all over the stress types; a JSON-authored operation; and a typed
+/// operation and event whose examples come from `Secret`-bearing values. Their registration examples
+/// are planted too, so the catalog lint sees them.
 fn stress_catalog() -> Catalog {
     let mut catalog = Catalog::core();
     let params = catalog.schema_for::<StressParams>();
@@ -842,12 +1044,14 @@ fn stress_catalog() -> Catalog {
                 params: params_instance.clone(),
                 shape: ResultShape::Normal,
                 result: result_instance.clone(),
+                authored: None,
             },
             OperationExample {
                 title: "planted dry run".into(),
                 params: dry_run_params.clone(),
                 shape: ResultShape::DryRun,
                 result: dry_run.clone(),
+                authored: None,
             },
         ];
         if tier == RiskTier::CONFIG {
@@ -856,6 +1060,7 @@ fn stress_catalog() -> Catalog {
                 params: params_instance.clone(),
                 shape: ResultShape::Draft,
                 result: draft.clone(),
+                authored: None,
             });
         }
         catalog
@@ -887,9 +1092,19 @@ fn stress_catalog() -> Catalog {
     }
     // A JSON-authored operation (what a connector spec may register), with the shapes schemars never
     // emits from Rust types: the round-4 collision (a property's own `properties` beside the optional
-    // branch that carries the mark), marked `patternProperties`, a marked `additionalProperties`, and a
-    // referenced marked type inside a union.
+    // branch that carries the mark), marked `patternProperties`, a marked `additionalProperties`, a
+    // referenced marked type inside a union, and the round-5 pair: a `$ref` sibling `properties` beside
+    // a target whose `additionalProperties` is marked, a sibling `prefixItems` beside a target whose
+    // `items` is marked.
     let creds_ref = catalog.ref_for::<Creds>().to_value();
+    let mut mapped = catalog.ref_for::<SecretMap>().to_value();
+    mapped["properties"] = json!({ "token": { "type": "string" } });
+    let mut listed = catalog.ref_for::<SecretList>().to_value();
+    listed["prefixItems"] = json!([{ "type": "string" }]);
+    // And a `$ref` with a sibling `allOf` that alone carries the mark (fresh-context review, round 6).
+    let mut conjoined = catalog.ref_for::<PlainCreds>().to_value();
+    conjoined["allOf"] =
+        json!([{ "properties": { "token": { "type": "string", "x-secret": true } } }]);
     let authored = json!({
         "type": "object",
         "properties": {
@@ -906,7 +1121,10 @@ fn stress_catalog() -> Catalog {
                 "additionalProperties": { "type": "string" }
             },
             "bag": { "type": "object", "additionalProperties": { "type": "string", "x-secret": true } },
-            "either": { "anyOf": [creds_ref, { "type": "integer" }] }
+            "either": { "anyOf": [creds_ref, { "type": "integer" }] },
+            "mapped": mapped,
+            "listed": listed,
+            "conjoined": conjoined
         }
     });
     let types: BTreeMap<String, Value> = catalog.peek_definitions().into_iter().collect();
@@ -944,6 +1162,7 @@ fn stress_catalog() -> Catalog {
                 params: example,
                 shape: ResultShape::Normal,
                 result: json!({}),
+                authored: None,
             }],
         })
         .unwrap();
@@ -959,8 +1178,93 @@ fn stress_catalog() -> Catalog {
             high_volume: false,
             critical: false,
             examples: vec![payload_instance],
+            authored_examples: vec![],
         })
         .unwrap();
+
+    // The typed operation (round 6): secrets are `Secret<T>` in the types, examples come from the
+    // typed values. Plan steps carry the rendered params with secrets withheld, as the engine would.
+    let typed_params_schema = catalog.schema_for::<TypedParams>();
+    let typed_result_schema = catalog.schema_for::<TypedResult>();
+    let params = typed_params();
+    let plan = vec![PlanStep {
+        operation: OperationName::new("stress.typed").unwrap(),
+        params: withhold_secrets(|| serde_json::to_value(&params).unwrap()),
+        tier: RiskTier::CONFIG,
+        action: None,
+        node: None,
+        args_hash: None,
+        dynamic_fields: None,
+        target: None,
+        description: "Typed.".into(),
+    }];
+    let result = TypedResult {
+        session: typed_sentinel("result_session"),
+        items: vec![TypedChoice::Keyed {
+            key: typed_sentinel("result_items_0_key"),
+        }],
+    };
+    let dry_run = DryRunResult {
+        dry_run: True,
+        plan: plan.clone(),
+        actions: None,
+        diff: None,
+        warnings: vec![],
+        would_require_approval: false,
+        effective_tier: RiskTier::CONFIG,
+    };
+    let draft = DraftResult {
+        draft: DraftRef {
+            id: EntityId::NIL,
+            kind: DraftKind::PendingChange,
+            draft_of: None,
+            operation: OperationName::new("stress.typed").unwrap(),
+        },
+        plan,
+        warnings: vec![],
+    };
+    catalog
+        .register_operation(stress_op(
+            "stress.typed",
+            typed_params_schema,
+            typed_result_schema,
+            RiskTier::CONFIG,
+            vec![
+                OperationExample::typed("typed", &params, ResultShape::Normal, &result),
+                OperationExample::typed("typed dry run", &params, ResultShape::DryRun, &dry_run),
+                OperationExample::typed("typed draft", &params, ResultShape::Draft, &draft),
+            ],
+        ))
+        .unwrap();
+
+    // The typed event: one JSON-authored example (the exposed payload, as a connector spec might paste
+    // it; the walk alone redacts it) and one pushed from the typed value.
+    let typed_payload = |tag: &str| TypedPayload {
+        viewer: "kept".into(),
+        session: typed_sentinel(&format!("{tag}_session")),
+        creds: TypedCreds {
+            user: "frank".into(),
+            token: typed_sentinel(&format!("{tag}_creds_token")),
+        },
+    };
+    let payload = catalog.schema_for::<TypedPayload>();
+    let mut event = EventDef {
+        r#type: EventType::new("stress.typed_happened").unwrap(),
+        title: "Stress".into(),
+        description: "Stress. A typed secret-bearing payload.".into(),
+        category: vec!["Stress".into()],
+        payload_version: 1,
+        payload,
+        filters: vec![],
+        high_volume: false,
+        critical: false,
+        examples: vec![expose_secrets(|| {
+            serde_json::to_value(typed_payload("event_json")).unwrap()
+        })],
+        authored_examples: vec![],
+    };
+    event.push_typed_example(&typed_payload("event_typed"));
+    catalog.register_event(event).unwrap();
     catalog
 }
 
@@ -976,6 +1280,8 @@ struct Report {
     type_instances: usize,
     /// Sentinels present in the shared-type instances.
     planted_types: usize,
+    /// Examples built from typed values (operation examples and event payloads).
+    typed_examples: usize,
 }
 
 /// Runs the real publication pipeline over `catalog` with planted examples, then checks every shared
@@ -1027,6 +1333,7 @@ fn run(catalog: Catalog, label: &str) -> Report {
                 params: params[i % params.len()].clone(),
                 shape: ResultShape::Normal,
                 result: results[i % results.len()].clone(),
+                authored: None,
             });
         }
         // A dry run plans a step per catalog operation, each with that operation's params planted:
@@ -1068,6 +1375,7 @@ fn run(catalog: Catalog, label: &str) -> Report {
                 params: dry_run_params,
                 shape: ResultShape::DryRun,
                 result: dry_run,
+                authored: None,
             });
         }
         if entry.draft_result.is_some() {
@@ -1082,6 +1390,7 @@ fn run(catalog: Catalog, label: &str) -> Report {
                 params: params[0].clone(),
                 shape: ResultShape::Draft,
                 result: draft,
+                authored: None,
             });
         }
     }
@@ -1104,14 +1413,106 @@ fn run(catalog: Catalog, label: &str) -> Report {
     let instances: Vec<&Value> = doc
         .operations
         .values()
-        .flat_map(|e| e.def.examples.iter().flat_map(|x| [&x.params, &x.result]))
-        .chain(doc.events.values().flat_map(|e| e.def.examples.iter()))
+        .flat_map(|e| {
+            e.def
+                .examples
+                .iter()
+                .flat_map(|x| [x.authored_params(), x.authored_result()])
+        })
+        .chain(
+            doc.events
+                .values()
+                .flat_map(|e| (0..e.def.examples.len()).map(|i| e.def.authored_example(i))),
+        )
         .collect();
     let present = planter.present_in(&instances);
+
+    // The value level (§3): an example built from typed values never held a secret in its published
+    // form, before any redaction walk runs. Collected now so the walk can be shown to leave it alone.
+    let holds_secret = |v: &Value| {
+        let text = v.to_string();
+        text.contains(SENTINEL_PREFIX) || text.contains(&TYPED_PIN.to_string())
+    };
+    let mut typed_before: Vec<(String, Value)> = Vec::new();
+    for (name, entry) in &doc.operations {
+        for example in &entry.def.examples {
+            if example.authored.is_none() {
+                continue;
+            }
+            for (what, value) in [("params", &example.params), ("result", &example.result)] {
+                let at = format!("operation:{name}/{:?}/{what}", example.title);
+                assert!(
+                    !holds_secret(value),
+                    "{label}: {at}: a typed example holds a secret in its published form before redaction"
+                );
+                typed_before.push((at, value.clone()));
+            }
+        }
+    }
+    for (r#type, entry) in &doc.events {
+        for (i, example) in entry.def.examples.iter().enumerate() {
+            if !entry.def.is_typed_example(i) {
+                continue;
+            }
+            let at = format!("event:{type}/{i}");
+            assert!(
+                !holds_secret(example),
+                "{label}: {at}: a typed payload holds a secret in its published form before redaction"
+            );
+            typed_before.push((at, example.clone()));
+        }
+    }
+    let typed_examples = typed_before.len();
 
     // The real pipeline, steps 2 and 3: redact, then serialise what goes to disk.
     doc.redact_examples();
     let text = doc.to_json_string();
+    assert!(
+        !text.contains(&TYPED_PIN.to_string()),
+        "{label}: the typed numeric secret reached protocol.json"
+    );
+    // The walk had nothing to change in a typed example, and the authored values are gone.
+    let mut typed_after = typed_before.iter();
+    for (name, entry) in &doc.operations {
+        for example in &entry.def.examples {
+            assert!(
+                example.authored.is_none(),
+                "{label}: operation:{name}: authored values survive publication"
+            );
+            if typed_after.as_slice().first().is_some_and(|(at, _)| {
+                at.starts_with(&format!("operation:{name}/{:?}/", example.title))
+            }) {
+                for value in [&example.params, &example.result] {
+                    let (at, before) = typed_after.next().expect("collected before redaction");
+                    assert_eq!(
+                        value, before,
+                        "{label}: {at}: the walk changed a typed example"
+                    );
+                }
+            }
+        }
+        assert!(
+            entry.def.examples.iter().all(|e| e.authored.is_none()),
+            "{label}: operation:{name}: authored values survive publication"
+        );
+    }
+    for entry in doc.events.values() {
+        assert!(
+            entry.def.authored_examples.is_empty(),
+            "{label}: event authored payloads survive publication"
+        );
+    }
+    for (at, before) in typed_after {
+        let (r#type, index) = at
+            .strip_prefix("event:")
+            .and_then(|rest| rest.split_once('/'))
+            .expect("an event position");
+        let published = &doc.events[r#type].def.examples[index.parse::<usize>().unwrap()];
+        assert_eq!(
+            published, before,
+            "{label}: {at}: the walk changed a typed payload"
+        );
+    }
     let leaked: Vec<&str> = present
         .iter()
         .filter(|(_, s)| text.contains(s))
@@ -1172,7 +1573,13 @@ fn run(catalog: Catalog, label: &str) -> Report {
         invalid_examples,
         type_instances,
         planted_types,
+        typed_examples,
     }
+}
+
+/// A validation failure without the instance (the authored values carry exposed sentinels).
+fn describe(e: &jsonschema::ValidationError<'_>) -> String {
+    format!("{:?} at {:?}", e.kind(), e.instance_path().as_str())
 }
 
 /// Validates every example the way `xtask` does (params against the invocation schema, the result
@@ -1209,14 +1616,14 @@ fn count_valid(doc: &ProtocolDocument) -> (usize, Vec<String>) {
         for example in &entry.def.examples {
             all += 1;
             let label = format!("operation {name}, example {:?}", example.title);
-            if let Err(e) = params.validate(&example.params) {
-                invalid.push(format!("{label}: params: {e}"));
+            if let Err(e) = params.validate(example.authored_params()) {
+                invalid.push(format!("{label}: params: {}", describe(&e)));
                 continue;
             }
             match shapes.iter().find(|(shape, _)| *shape == example.shape) {
                 Some((_, v)) => {
-                    if let Err(e) = v.validate(&example.result) {
-                        invalid.push(format!("{label}: result: {e}"));
+                    if let Err(e) = v.validate(example.authored_result()) {
+                        invalid.push(format!("{label}: result: {}", describe(&e)));
                     }
                 }
                 None => invalid.push(format!("{label}: no {:?} shape", example.shape)),
@@ -1226,10 +1633,10 @@ fn count_valid(doc: &ProtocolDocument) -> (usize, Vec<String>) {
     for (r#type, entry) in &doc.events {
         let payload = jsonschema::validator_for(&doc.schema_at(&format!("/events/{type}/payload")))
             .expect("payload schema compiles");
-        for (i, example) in entry.def.examples.iter().enumerate() {
+        for i in 0..entry.def.examples.len() {
             all += 1;
-            if let Err(e) = payload.validate(example) {
-                invalid.push(format!("event {type}, example {i}: {e}"));
+            if let Err(e) = payload.validate(entry.def.authored_example(i)) {
+                invalid.push(format!("event {type}, example {i}: {}", describe(&e)));
             }
         }
     }
@@ -1263,6 +1670,12 @@ fn planted_secrets_never_reach_a_published_artifact() {
         stress.invalid_examples.is_empty(),
         "every planted stress example validates as authored, so each is one an author could have written; these do not:\n  - {}",
         stress.invalid_examples.join("\n  - ")
+    );
+    assert_eq!(core.typed_examples, 2 * 2, "every core example is typed");
+    assert_eq!(
+        stress.typed_examples,
+        core.typed_examples + 3 * 2 + 1,
+        "the typed operation's three examples (params and result each) and the typed event payload"
     );
 
     // The other published artifacts carry no example and so no sentinel, whatever the catalog.

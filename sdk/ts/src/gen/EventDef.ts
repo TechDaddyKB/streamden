@@ -6,7 +6,8 @@ import type { L10nString } from "./L10nString";
 import type { JsonValue } from "./serde_json/JsonValue";
 
 /**
- * A known event type (§5.2): its payload schema, trigger filters and flags.
+ * A known event type (§5.2): its payload schema, trigger filters and flags. `Debug` shows the authored
+ * payloads only by count (AGENTS.md: secrets never reach logs).
  */
 export type EventDef = { 
 /**
@@ -48,6 +49,7 @@ highVolume: boolean,
 critical: boolean, 
 /**
  * At least one example payload; the first is also the "Test trigger" fixture. Published with every
- * `x-secret` position redacted to `"***"` (§3).
+ * `x-secret` position redacted to `"***"` (§3); an example built from the typed payload is published
+ * with its secrets withheld from the start.
  */
 examples: Array<JsonValue>, };

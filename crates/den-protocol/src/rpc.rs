@@ -10,6 +10,7 @@ use ts_rs::TS;
 use crate::auth::ClientInfo;
 use crate::events::Event;
 use crate::ids::{EventId, EventType, Scope, SessionId, TopicGlob};
+use crate::secret::Secret;
 use crate::timestamp::Timestamp;
 
 /// The JSON-RPC version literal `"2.0"`.
@@ -594,8 +595,9 @@ pub struct RpcVersionRange {
     pub max: u32,
 }
 
-/// Params of `session.identify` (§8.3). `Debug` redacts the token (AGENTS.md: secrets never reach logs).
-#[derive(Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+/// Params of `session.identify` (§8.3). The token is a `Secret`: `Debug` redacts it (AGENTS.md: secrets
+/// never reach logs) and it serializes as `"***"` unless the sender exposes secrets explicitly.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionIdentifyParams {
     /// The `rpcVersion` the client speaks.
@@ -603,8 +605,7 @@ pub struct SessionIdentifyParams {
     /// An API token (`sdt_…`). Absent only when pairing (spec 06).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    #[schemars(extend("x-secret" = true))]
-    pub token: Option<String>,
+    pub token: Option<Secret<String>>,
     /// The client's self-description.
     pub client: ClientInfo,
     /// Initial subscription topics (§8.4).
@@ -619,19 +620,6 @@ pub struct SessionIdentifyParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub since: Option<EventId>,
-}
-
-impl fmt::Debug for SessionIdentifyParams {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SessionIdentifyParams")
-            .field("rpc_version", &self.rpc_version)
-            .field("token", &self.token.as_ref().map(|_| "***"))
-            .field("client", &self.client)
-            .field("subscribe", &self.subscribe)
-            .field("high_volume", &self.high_volume)
-            .field("since", &self.since)
-            .finish()
-    }
 }
 
 /// Result of `session.identify` (§8.3).
@@ -776,7 +764,7 @@ mod tests {
     fn identify_debug_redacts_the_token() {
         let params = SessionIdentifyParams {
             rpc_version: 1,
-            token: Some("sdt_secret".into()),
+            token: Some(Secret::new("sdt_secret".into())),
             client: ClientInfo {
                 name: "t".into(),
                 version: "1".into(),
@@ -787,6 +775,14 @@ mod tests {
         };
         let dbg = format!("{params:?}");
         assert!(dbg.contains("***") && !dbg.contains("sdt_secret"), "{dbg}");
+        // And the wire form only carries the token inside an explicit exposure.
+        let json = serde_json::to_string(&params).unwrap();
+        assert!(
+            json.contains("\"token\":\"***\"") && !json.contains("sdt_secret"),
+            "{json}"
+        );
+        let json = crate::secret::expose_secrets(|| serde_json::to_string(&params).unwrap());
+        assert!(json.contains("\"token\":\"sdt_secret\""), "{json}");
     }
 
     #[test]

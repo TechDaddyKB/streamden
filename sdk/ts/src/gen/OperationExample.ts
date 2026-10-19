@@ -5,7 +5,9 @@ import type { JsonValue } from "./serde_json/JsonValue";
 
 /**
  * An operation example (§8.1). Examples are tests: CI validates `params` against the params schema and
- * `result` against the schema `shape` selects.
+ * `result` against the schema `shape` selects. Built from the operation's Rust types (`typed`) whenever
+ * a position holds a secret: the published `params` and `result` are then serialized with every
+ * `Secret` withheld, and the authored values the validator checks are kept aside, never serialized (§3).
  */
 export type OperationExample = { 
 /**
@@ -13,7 +15,7 @@ export type OperationExample = {
  */
 title: string, 
 /**
- * The params sent. For a dry-run example they include `dryRun: true`.
+ * The params sent, as published. For a dry-run example they include `dryRun: true`.
  */
 params: JsonValue, 
 /**
@@ -21,6 +23,6 @@ params: JsonValue,
  */
 shape: ResultShape, 
 /**
- * The result returned.
+ * The result returned, as published.
  */
 result: JsonValue, };

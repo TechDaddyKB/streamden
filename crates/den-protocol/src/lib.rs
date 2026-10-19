@@ -20,6 +20,7 @@ pub mod manifest;
 pub mod results;
 pub mod rpc;
 pub mod schema;
+pub mod secret;
 pub mod shared;
 pub mod template;
 pub mod timestamp;
@@ -49,6 +50,7 @@ pub use results::{
     ActionRevisionRef, DraftKind, DraftRef, DraftResult, DryRunResult, PlanStep, PluginCallParams,
     PluginCallResult,
 };
+pub use secret::{Secret, expose_secrets, withhold_secrets};
 pub use shared::{
     Badge, ChatText, ContributionRef, Fragment, ImageRef, Money, Os, RiskTier, UnknownEventPayload,
     UntrustedString, UserRef,

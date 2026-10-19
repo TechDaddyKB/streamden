@@ -20,6 +20,7 @@ use den_protocol::rpc::{
     RpcResponse, SessionIdentifyParams, SessionIdentifyResult, SessionReidentifyParams,
 };
 use den_protocol::schema::{root_schema_for, strict_root_schema_for};
+use den_protocol::secret::expose_secrets;
 use den_protocol::shared::Fragment;
 use schemars::JsonSchema;
 use serde::Serialize;
@@ -75,7 +76,8 @@ fn check_dir<T: Serialize + DeserializeOwned + JsonSchema>(dir: &str, strict: bo
         let fixture = load(&rel);
         let typed: T =
             serde_json::from_value(fixture.clone()).unwrap_or_else(|e| panic!("{rel}: {e}"));
-        let back = serde_json::to_value(&typed).expect("serialize");
+        // The wire form: a `Secret` carries its value only inside an explicit exposure (§3).
+        let back = expose_secrets(|| serde_json::to_value(&typed)).expect("serialize");
         assert_eq!(back, fixture, "{rel}: round trip changed the document");
         assert_valid(&wire, &fixture, &rel);
         if let Some(s) = &strict_v {
@@ -89,11 +91,35 @@ fn check_file<T: Serialize + DeserializeOwned + JsonSchema>(rel: &str) {
     let fixture = load(rel);
     let typed: T = serde_json::from_value(fixture.clone()).unwrap_or_else(|e| panic!("{rel}: {e}"));
     assert_eq!(
-        serde_json::to_value(&typed).expect("serialize"),
+        expose_secrets(|| serde_json::to_value(&typed)).expect("serialize"),
         fixture,
         "{rel}: round trip changed the document"
     );
     assert_valid(&wire, &fixture, rel);
+}
+
+/// Round 6: the token of `session.identify` is a `Secret<String>` (§3). Outside an explicit exposure the
+/// wire form withholds it, so a client library can never send or log it by accident; `Debug` never shows
+/// it; the fixture itself still round-trips inside `expose_secrets` (above).
+#[test]
+fn identify_params_withhold_the_token_unless_exposed() {
+    let fixture = load("rpc/identify_params.json");
+    let typed: SessionIdentifyParams = serde_json::from_value(fixture.clone()).unwrap();
+    assert!(
+        typed
+            .token
+            .as_ref()
+            .is_some_and(|t| t.expose().starts_with("sdt_"))
+    );
+    let withheld = serde_json::to_value(&typed).unwrap();
+    let mut expected = fixture.clone();
+    expected["token"] = Value::String("***".into());
+    assert_eq!(withheld, expected);
+    assert!(!format!("{typed:?}").contains("sdt_"));
+    assert_eq!(
+        expose_secrets(|| serde_json::to_value(&typed)).unwrap(),
+        fixture
+    );
 }
 
 #[test]

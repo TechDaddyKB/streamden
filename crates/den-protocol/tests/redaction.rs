@@ -3,16 +3,19 @@
 //! DEN-34 (overlapping named and pattern properties, conditional schemas), round 3 (a `$ref` sibling
 //! erasing the target's mark during inlining; pattern dialect drift between redactor and validator) and
 //! DEN-47 (long reference chains), round 4 (optional-null normalisation dropping the keys an optional
-//! property shares with its surviving branch), plus an exhaustive keyword-combination generator and a
+//! property shares with its surviving branch), round 5 (reference inlining moving a sibling applicator
+//! into the target's keyword scope), plus an exhaustive keyword-combination generator and a
 //! differential test of pattern applicability against the validator. Every value here is synthetic.
 
 use std::collections::BTreeMap;
 
 use den_protocol::catalog::{
-    ArgWrites, Catalog, Exposure, OperationDef, OperationExample, ResultShape,
+    ArgWrites, Catalog, EventDef, Exposure, OperationDef, OperationExample, ResultShape,
 };
-use den_protocol::codegen::{self, REDACTED, redact_secrets};
+use den_protocol::codegen::{self, REDACTED, merge_ref_target, redact_secrets};
+use den_protocol::ids::EventType;
 use den_protocol::ids::OperationName;
+use den_protocol::secret::Secret;
 use den_protocol::shared::RiskTier;
 use schemars::Schema;
 use serde_json::{Value, json};
@@ -51,6 +54,7 @@ fn op_at_tier(name: &str, tier: u8, params: Value, example: Value) -> OperationD
             params: example,
             shape: ResultShape::Normal,
             result: json!({}),
+            authored: None,
         }],
     }
 }
@@ -156,6 +160,7 @@ fn plan_steps_naming_outside_targets_fail_closed() {
         params: json!({ "dryRun": true, "key": SECRET }),
         shape: ResultShape::DryRun,
         result: plan_with(operation, step_params),
+        authored: None,
     };
     let catalog_with = |step: OperationExample| {
         let mut catalog = Catalog::new();
@@ -928,6 +933,456 @@ fn inlined_references_keep_the_targets_mark() {
     );
     assert_eq!(published, json!({ "whole": REDACTED, "name": "kept" }));
     assert!(!doc.contains(SECRET), "secret published:\n{doc}");
+}
+
+/// Codex round 5, P1: reference inlining keeps keyword scope. A `$ref` sibling `properties` beside a
+/// target whose `additionalProperties` is marked, or a sibling `prefixItems` beside a target whose
+/// `items` is marked, used to be laid into the target's schema object, where it exempted the very member
+/// the target marked, with no key collision and no false mark anywhere. Both shapes through the real
+/// pipeline (`Catalog::ref_for` → `register_operation` → `build_unredacted` → validate → `redact_examples`
+/// → `to_json_string`), the derived schema's shape and acceptance, and the merge itself.
+#[test]
+fn inlining_keeps_keyword_scope() {
+    #[derive(schemars::JsonSchema)]
+    #[allow(dead_code)]
+    struct SecretMap(BTreeMap<String, Secret<String>>);
+    #[derive(schemars::JsonSchema)]
+    #[allow(dead_code)]
+    struct SecretList(Vec<Secret<String>>);
+
+    // Object: the sibling `properties` names the member; the target's `additionalProperties` applies
+    // to it all the same, because the target never declared it.
+    let mut catalog = Catalog::new();
+    let mut creds = catalog.ref_for::<SecretMap>().to_value();
+    creds["properties"] = json!({ "token": { "type": "string" } });
+    let object_params = json!({ "type": "object", "properties": { "creds": creds } });
+    let (published, doc) = publish_from(
+        catalog,
+        object_params.clone(),
+        json!({ "creds": { "token": SECRET } }),
+    );
+    assert_eq!(published, json!({ "creds": { "token": REDACTED } }));
+    assert!(!doc.contains(SECRET), "secret published:\n{doc}");
+
+    // Array: the sibling `prefixItems` positions index 0; the target's `items` applies to it too.
+    let mut catalog = Catalog::new();
+    let mut creds = catalog.ref_for::<SecretList>().to_value();
+    creds["prefixItems"] = json!([{ "type": "string" }]);
+    let array_params = json!({ "type": "object", "properties": { "creds": creds } });
+    let (published, doc) =
+        publish_from(catalog, array_params.clone(), json!({ "creds": [SECRET] }));
+    assert_eq!(published, json!({ "creds": [REDACTED] }));
+    assert!(!doc.contains(SECRET), "secret published:\n{doc}");
+
+    // The derived schemas: the target kept whole under `allOf`, the sibling outside, nothing of the
+    // target beside it, and exactly the instances the authored schema accepted.
+    let types: BTreeMap<String, Value> = BTreeMap::from([
+        (
+            "SecretMap".to_string(),
+            json!({ "type": "object", "additionalProperties": { "type": "string", "x-secret": true } }),
+        ),
+        (
+            "SecretList".to_string(),
+            json!({ "type": "array", "items": { "type": "string", "x-secret": true } }),
+        ),
+    ]);
+    let cases = [
+        (
+            "object",
+            &object_params,
+            "additionalProperties",
+            "properties",
+            vec![
+                (json!({ "creds": { "token": "t", "other": "o" } }), true),
+                (json!({ "creds": { "token": 1 } }), false),
+                (json!({ "creds": { "other": 1 } }), false),
+            ],
+        ),
+        (
+            "array",
+            &array_params,
+            "items",
+            "prefixItems",
+            vec![
+                (json!({ "creds": ["a", "b"] }), true),
+                (json!({ "creds": [1] }), false),
+                (json!({ "creds": ["a", 1] }), false),
+            ],
+        ),
+    ];
+    for (label, params, targets_keyword, sibling_keyword, instances) in cases {
+        let (invocation, authoring) =
+            codegen::derive_param_schemas(&Schema::try_from(params.clone()).unwrap(), &types);
+        let authored = jsonschema::validator_for(&json!({ "allOf": [params], "types": types }))
+            .expect("the authored schema compiles");
+        for (which, schema) in [("params", invocation), ("paramsAuthoring", authoring)] {
+            let v = schema.to_value();
+            let creds = &v["properties"]["creds"];
+            assert!(
+                creds.get("$ref").is_none() && creds.get(targets_keyword).is_none(),
+                "{label}/{which}: the target is inlined whole, never laid beside the sibling: {creds}"
+            );
+            let branches = creds["allOf"].as_array().expect("allOf");
+            assert_eq!(branches.len(), 1, "{label}/{which}: {creds}");
+            assert_eq!(
+                branches[0][targets_keyword]["x-secret"],
+                json!(true),
+                "{label}/{which}: the target's mark stays in the target's object"
+            );
+            assert!(
+                creds.get(sibling_keyword).is_some(),
+                "{label}/{which}: the sibling stays in the property's object: {creds}"
+            );
+            let derived = jsonschema::validator_for(&json!({ "allOf": [v], "types": types }))
+                .expect("the derived schema compiles");
+            for (instance, valid) in &instances {
+                assert_eq!(
+                    authored.is_valid(instance),
+                    *valid,
+                    "{label}: authored: {instance}"
+                );
+                assert_eq!(
+                    derived.is_valid(instance),
+                    *valid,
+                    "{label}/{which}: the derived schema accepts exactly what the authored one did: {instance}"
+                );
+            }
+        }
+    }
+
+    // The merge itself: annotations alone are laid over the target (flat); any validation sibling
+    // keeps both schema objects, with the target's annotations lifted and the property's winning;
+    // the mark is joined monotonically either way.
+    let target = json!({
+        "type": "object",
+        "additionalProperties": { "type": "string", "x-secret": true },
+        "description": "Target",
+        "default": {}
+    });
+    let property = |v: Value| v.as_object().unwrap().clone();
+    assert_eq!(
+        Value::Object(merge_ref_target(
+            &property(
+                json!({ "$ref": "#/types/T", "description": "Local", "x-ui": { "widget": "json" } })
+            ),
+            &target
+        )),
+        json!({
+            "type": "object",
+            "additionalProperties": { "type": "string", "x-secret": true },
+            "description": "Local",
+            "default": {},
+            "x-ui": { "widget": "json" }
+        })
+    );
+    assert_eq!(
+        Value::Object(merge_ref_target(
+            &property(
+                json!({ "$ref": "#/types/T", "properties": { "token": { "type": "string" } }, "description": "Local" })
+            ),
+            &target
+        )),
+        json!({
+            "allOf": [target],
+            "properties": { "token": { "type": "string" } },
+            "description": "Local",
+            "default": {}
+        })
+    );
+    // A sibling `allOf` of the property's own (fresh-context review, round 6): the target becomes one
+    // more member of it, so a mark or a constraint that lives only in the sibling stays in force. A
+    // sibling `allOf` that is not an array keeps the `$ref` beside it (publication fails closed on the
+    // malformed keyword) and drops nothing.
+    #[derive(schemars::JsonSchema)]
+    #[allow(dead_code)]
+    struct Plain {
+        token: String,
+        other: Option<String>,
+    }
+    let mut catalog = Catalog::new();
+    let mut creds = catalog.ref_for::<Plain>().to_value();
+    creds["allOf"] = json!([{ "properties": { "token": { "type": "string", "x-secret": true } } }]);
+    let (published, doc) = publish_from(
+        catalog,
+        json!({ "type": "object", "properties": { "creds": creds } }),
+        json!({ "creds": { "token": SECRET, "other": "kept" } }),
+    );
+    assert_eq!(
+        published,
+        json!({ "creds": { "token": REDACTED, "other": "kept" } })
+    );
+    assert!(!doc.contains(SECRET), "secret published:\n{doc}");
+    let plain_types: BTreeMap<String, Value> = BTreeMap::from([(
+        "Plain".to_string(),
+        json!({ "type": "object", "properties": { "token": { "type": "string" } } }),
+    )]);
+    let params = json!({ "type": "object", "properties": { "creds": {
+        "$ref": "#/types/Plain",
+        "allOf": [{ "properties": { "token": { "type": "string", "maxLength": 3 } } }]
+    } } });
+    let (invocation, _) =
+        codegen::derive_param_schemas(&Schema::try_from(params).unwrap(), &plain_types);
+    let v = invocation.to_value();
+    assert_eq!(
+        v["properties"]["creds"]["allOf"].as_array().map(Vec::len),
+        Some(2),
+        "the target joins the sibling's allOf: {v}"
+    );
+    let derived =
+        jsonschema::validator_for(&json!({ "allOf": [v], "types": plain_types })).unwrap();
+    assert!(derived.is_valid(&json!({ "creds": { "token": "abc" } })));
+    assert!(
+        !derived.is_valid(&json!({ "creds": { "token": "too-long" } })),
+        "the sibling's constraint still applies after inlining"
+    );
+    let merged = merge_ref_target(
+        &property(json!({ "$ref": "#/types/T", "allOf": [{ "required": ["a"] }] })),
+        &target,
+    );
+    assert_eq!(merged["allOf"], json!([target, { "required": ["a"] }]));
+    let merged = merge_ref_target(
+        &property(json!({ "$ref": "#/types/T", "allOf": "garbage" })),
+        &target,
+    );
+    assert_eq!(
+        Value::Object(merged),
+        json!({ "$ref": "#/types/T", "allOf": "garbage", "description": "Target", "default": {} })
+    );
+    let mut published = json!({ "token": SECRET });
+    redact_secrets(
+        &mut published,
+        &json!({ "$ref": "#/types/T", "allOf": "garbage" }),
+        &BTreeMap::from([("T".to_string(), target.clone())]),
+    );
+    assert_eq!(published, json!(REDACTED), "a malformed allOf fails closed");
+
+    let marked_target = json!({ "type": "object", "x-secret": true });
+    for (sibling, expected) in [
+        (
+            json!({ "$ref": "#/types/T", "required": ["a"], "x-secret": false }),
+            json!(true),
+        ),
+        (
+            json!({ "$ref": "#/types/T", "required": ["a"] }),
+            json!(true),
+        ),
+        (
+            json!({ "$ref": "#/types/T", "required": ["a"], "x-secret": "yes" }),
+            json!("yes"),
+        ),
+    ] {
+        let merged = merge_ref_target(&property(sibling), &marked_target);
+        assert_eq!(merged["x-secret"], expected);
+        assert_eq!(merged["allOf"], json!([marked_target]));
+        assert_eq!(merged["required"], json!(["a"]));
+    }
+}
+
+/// The typed-example rule (§3, round 6): an example built from typed values must hold its secrets in
+/// `Secret<T>`, so that its published form never held them and the schema walk has nothing to do. A
+/// typed example the walk would change fails the build: a plain field with a hand-set `x-secret`, a
+/// pre-serialized exposed value passed as "typed", plan params rendered with secrets exposed, and a
+/// typed event payload with a hand-marked field.
+#[test]
+fn typed_examples_hold_their_secrets_in_secret_t() {
+    #[derive(serde::Serialize, schemars::JsonSchema)]
+    struct HandMarked {
+        #[schemars(extend("x-secret" = true))]
+        token: String,
+    }
+    #[derive(serde::Serialize, schemars::JsonSchema)]
+    struct Typed {
+        token: Secret<String>,
+    }
+    fn build_with(
+        register: impl FnOnce(&mut Catalog) -> (Schema, Vec<OperationExample>),
+    ) -> Result<String, String> {
+        let mut catalog = Catalog::new();
+        let (params, examples) = register(&mut catalog);
+        let mut def = op("demo.op", params.to_value(), json!({}));
+        def.examples = examples;
+        catalog.register_operation(def).unwrap();
+        codegen::build_unredacted(catalog)
+            .map(|doc| doc.to_json_string())
+            .map_err(|e| e.to_string())
+    }
+    let secret = || HandMarked {
+        token: SECRET.into(),
+    };
+
+    // Hand-marked plain field: the published form holds the secret; the build refuses it.
+    let err = build_with(|c| {
+        (
+            c.schema_for::<HandMarked>(),
+            vec![OperationExample::typed(
+                "t",
+                &secret(),
+                ResultShape::Normal,
+                &json!({}),
+            )],
+        )
+    })
+    .expect_err("a typed example whose secret is a plain String fails the build");
+    assert!(
+        err.contains("typed example \"t\"")
+            && err.contains("published params")
+            && err.contains("Secret<T>"),
+        "{err}"
+    );
+    // A pre-serialized exposed value passed as typed is caught the same way.
+    let err = build_with(|c| {
+        let exposed = den_protocol::secret::expose_secrets(|| {
+            serde_json::to_value(Typed {
+                token: Secret::new(SECRET.into()),
+            })
+            .unwrap()
+        });
+        (
+            c.schema_for::<Typed>(),
+            vec![OperationExample::typed(
+                "v",
+                &exposed,
+                ResultShape::Normal,
+                &json!({}),
+            )],
+        )
+    })
+    .expect_err("a pre-serialized exposed value is not typed");
+    assert!(err.contains("typed example \"v\""), "{err}");
+    // The same shape with `Secret<T>` builds, and the secret is nowhere in the document.
+    let doc = build_with(|c| {
+        (
+            c.schema_for::<Typed>(),
+            vec![OperationExample::typed(
+                "ok",
+                &Typed {
+                    token: Secret::new(SECRET.into()),
+                },
+                ResultShape::Normal,
+                &json!({}),
+            )],
+        )
+    })
+    .expect("Secret<T> builds");
+    assert!(!doc.contains(SECRET), "{doc}");
+    // JSON-authored examples are not held to the rule: the walk is their mechanism.
+    build_with(|c| {
+        (
+            c.schema_for::<HandMarked>(),
+            vec![OperationExample::json(
+                "j",
+                json!({ "token": SECRET }),
+                ResultShape::Normal,
+                json!({}),
+            )],
+        )
+    })
+    .expect("a JSON-authored example builds");
+
+    // Plan params of a typed dry-run example must be rendered withheld.
+    let err = build_with(|c| {
+        let params = c.schema_for::<Typed>();
+        let typed = Typed {
+            token: Secret::new(SECRET.into()),
+        };
+        let plan_params =
+            den_protocol::secret::expose_secrets(|| serde_json::to_value(&typed).unwrap());
+        let dry_run = json!({
+            "dryRun": true,
+            "plan": [{ "operation": "demo.op", "params": plan_params, "tier": 1, "description": "d" }],
+            "warnings": [], "wouldRequireApproval": false, "effectiveTier": 1
+        });
+        let mut def_examples = vec![OperationExample::typed(
+            "n",
+            &typed,
+            ResultShape::Normal,
+            &json!({}),
+        )];
+        def_examples.push(OperationExample::typed(
+            "d",
+            &typed,
+            ResultShape::DryRun,
+            &dry_run,
+        ));
+        (params, def_examples)
+    });
+    // `op` registers at tier 0, where a dry-run example fails the catalog lint first; the typed rule is
+    // checked at tier 1 below through the real catalog instead.
+    assert!(err.is_err());
+    let mut catalog = Catalog::new();
+    let params = catalog.schema_for::<Typed>();
+    let typed = Typed {
+        token: Secret::new(SECRET.into()),
+    };
+    let plan_params =
+        den_protocol::secret::expose_secrets(|| serde_json::to_value(&typed).unwrap());
+    let dry_run = json!({
+        "dryRun": true,
+        "plan": [{ "operation": "demo.op", "params": plan_params, "tier": 1, "description": "d" }],
+        "warnings": [], "wouldRequireApproval": false, "effectiveTier": 1
+    });
+    let mut def = op_at_tier("demo.op", 1, params.to_value(), json!({}));
+    def.examples = vec![
+        OperationExample::typed("n", &typed, ResultShape::Normal, &json!({})),
+        OperationExample::typed("d", &typed, ResultShape::DryRun, &dry_run),
+    ];
+    catalog.register_operation(def).unwrap();
+    let err = codegen::build_unredacted(catalog)
+        .expect_err("exposed plan params in a typed dry-run example fail the build")
+        .to_string();
+    assert!(
+        err.contains("typed example \"d\"") && err.contains("published result"),
+        "{err}"
+    );
+
+    // Events: a typed payload with a hand-marked field fails; with `Secret<T>` it builds.
+    let event_with = |typed_marked: bool| -> Result<String, String> {
+        let mut catalog = Catalog::new();
+        let payload = if typed_marked {
+            catalog.schema_for::<HandMarked>()
+        } else {
+            catalog.schema_for::<Typed>()
+        };
+        let mut def = EventDef {
+            r#type: EventType::new("demo.happened").unwrap(),
+            title: "T".into(),
+            description: "Test. An event.".into(),
+            category: vec!["Test".into()],
+            payload_version: 1,
+            payload,
+            filters: vec![],
+            high_volume: false,
+            critical: false,
+            examples: vec![],
+            authored_examples: vec![],
+        };
+        if typed_marked {
+            def.push_typed_example(&secret());
+        } else {
+            def.push_typed_example(&Typed {
+                token: Secret::new(SECRET.into()),
+            });
+        }
+        // `Debug` never prints the authored payloads; with `Secret<T>` the published form is withheld
+        // too (with the hand-marked plain field it is not, which is what the build rejects below).
+        let dbg = format!("{def:?}");
+        assert!(dbg.contains("authored_examples: <1 exposed>"), "{dbg}");
+        assert!(
+            typed_marked || !dbg.contains(SECRET),
+            "EventDef's Debug exposes a secret: {dbg}"
+        );
+        catalog.register_event(def).unwrap();
+        codegen::build_unredacted(catalog)
+            .map(|doc| doc.to_json_string())
+            .map_err(|e| e.to_string())
+    };
+    let err = event_with(true).expect_err("a hand-marked typed payload fails the build");
+    assert!(
+        err.contains("event:demo.happened") && err.contains("typed example 0"),
+        "{err}"
+    );
+    let doc = event_with(false).expect("Secret<T> payload builds");
+    assert!(!doc.contains(SECRET), "{doc}");
 }
 
 /// The lint on `x-secret` marks: a non-boolean mark anywhere and every `x-secret: false` are reported

@@ -104,8 +104,19 @@ fn lint_catalog() -> Result<()> {
     Ok(())
 }
 
+/// A validation failure without the instance: the values checked are the authored ones, secrets
+/// exposed, and the validator's `Display` would echo them into CI output.
+fn describe(e: &jsonschema::ValidationError<'_>) -> String {
+    format!(
+        "{:?} at instance path {:?}",
+        e.kind(),
+        e.instance_path().as_str()
+    )
+}
+
 /// Examples are tests (§8.1, §17.2): every example's params validate against the invocation schema and
-/// its result against exactly the shape it declares.
+/// its result against exactly the shape it declares. The values checked are the authored ones (a typed
+/// example keeps them aside with secrets exposed; its published form is already withheld, §3).
 fn validate_examples(doc: &ProtocolDocument) -> Result<()> {
     let mut failures = Vec::new();
     for (name, entry) in &doc.operations {
@@ -140,17 +151,18 @@ fn validate_examples(doc: &ProtocolDocument) -> Result<()> {
             .collect::<std::result::Result<_, _>>()?;
         for example in &entry.def.examples {
             let label = format!("operation {name}, example {:?}", example.title);
-            if let Err(e) = params_validator.validate(&example.params) {
-                failures.push(format!("{label}: params invalid: {e}"));
+            let (params, result) = (example.authored_params(), example.authored_result());
+            if let Err(e) = params_validator.validate(params) {
+                failures.push(format!("{label}: params invalid: {}", describe(&e)));
             }
             for (shape, validator) in &validators {
-                let valid = validator.is_valid(&example.result);
+                let valid = validator.is_valid(result);
                 let expected = *shape == example.shape;
                 if expected && !valid {
                     let e = validator
-                        .validate(&example.result)
+                        .validate(result)
                         .err()
-                        .map(|e| e.to_string())
+                        .map(|e| describe(&e))
                         .unwrap_or_default();
                     failures.push(format!(
                         "{label}: result does not match its {shape:?} shape: {e}"
@@ -168,9 +180,9 @@ fn validate_examples(doc: &ProtocolDocument) -> Result<()> {
         let schema = doc.schema_at(&format!("/events/{type}/payload"));
         let validator = jsonschema::validator_for(&schema)
             .map_err(|e| format!("event {type}: payload schema does not compile: {e}"))?;
-        for (i, example) in entry.def.examples.iter().enumerate() {
-            if let Err(e) = validator.validate(example) {
-                failures.push(format!("event {type}, example {i}: {e}"));
+        for i in 0..entry.def.examples.len() {
+            if let Err(e) = validator.validate(entry.def.authored_example(i)) {
+                failures.push(format!("event {type}, example {i}: {}", describe(&e)));
             }
         }
     }
