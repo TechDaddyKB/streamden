@@ -30,6 +30,7 @@ jobs:
         with:
           node-version: '22'
           cache: pnpm
+      - run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Select tracked Markdown
         # One NUL-delimited input for both tools: includes root, module rules,
         # tasks and hidden directories; omits dependencies and generated output.
@@ -42,7 +43,7 @@ jobs:
             ':(glob,exclude)**/dist/**' \
             ':(glob,exclude)**/build/**' > "$RUNNER_TEMP/markdown-files"
       - name: Markdown lint
-        run: xargs -0 -r pnpm dlx markdownlint-cli2@0.18.1 < "$RUNNER_TEMP/markdown-files"
+        run: xargs -0 -r pnpm exec markdownlint-cli2 < "$RUNNER_TEMP/markdown-files"
       - name: Install lychee 0.24.2 (verified release archive)
         run: |
           curl --fail --location --retry 3 \
