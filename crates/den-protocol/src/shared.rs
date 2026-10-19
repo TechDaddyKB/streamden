@@ -194,10 +194,11 @@ pub struct ChatText {
     pub fragments: Vec<Fragment>,
 }
 
+crate::tagged::string_kind! { "Fragment";
 /// One fragment of a chat message, tagged by `kind` (§5.3). The union is extensible: a `kind` this build
 /// does not know decodes as [`Fragment::Unknown`], which keeps the raw object and exposes its `text`, so
 /// a newer server never breaks an older client's chat rendering (§7.2).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema, TS)]
 #[serde(
     tag = "kind",
     rename_all = "snake_case",
@@ -260,6 +261,7 @@ pub enum Fragment {
     #[serde(untagged)]
     #[ts(untagged)]
     Unknown(UnknownFragment),
+}
 }
 
 impl Fragment {

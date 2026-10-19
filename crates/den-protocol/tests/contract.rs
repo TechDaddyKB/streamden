@@ -12,7 +12,7 @@ use den_protocol::domain::{
     StoredDocument, SubAction, Trigger, UpdatedBy, VariableRecord,
 };
 use den_protocol::events::Event;
-use den_protocol::manifest::{ManifestError, PluginManifest};
+use den_protocol::manifest::{ManifestError, PluginManifest, Runtime};
 use den_protocol::records::{Command, CommandMode, Run, Timer};
 use den_protocol::results::{DraftResult, DryRunResult, PluginCallParams, PluginCallResult};
 use den_protocol::rpc::{
@@ -866,4 +866,148 @@ fn typescript_bindings_on_disk_are_current() {
         response.contains("result: JsonValue") && response.contains("error: RpcError"),
         "RpcResponse is a union of the two outcomes (§8.2): {response}"
     );
+}
+
+// Exercise the real wire deserializers, including serde's buffered `from_value` path.
+fn check_string_tag<T: DeserializeOwned + JsonSchema>(name: &str, kind: &str) {
+    let rel = format!("invalid/{name}_integer_kind.json");
+    let fixture = load(&rel);
+    let wire = validator(root_schema_for::<T>().to_value());
+    let strict = validator(strict_root_schema_for::<T>().to_value());
+    let mut valid = fixture.clone();
+    valid["kind"] = Value::String(kind.into());
+    assert_valid(&wire, &valid, &rel);
+    assert_valid(&strict, &valid, &rel);
+    serde_json::from_str::<T>(&valid.to_string()).unwrap_or_else(|e| panic!("{rel}: {e}"));
+    serde_json::from_value::<T>(valid).unwrap_or_else(|e| panic!("{rel}: {e}"));
+    let mut missing = fixture.clone();
+    missing.as_object_mut().unwrap().remove("kind");
+    assert!(!wire.is_valid(&missing));
+    assert!(!strict.is_valid(&missing));
+    assert!(serde_json::from_str::<T>(&missing.to_string()).is_err());
+    assert!(serde_json::from_value::<T>(missing).is_err());
+    for tag in [
+        serde_json::json!(0),
+        serde_json::json!(999),
+        serde_json::json!(-1),
+        serde_json::json!(1.0),
+        serde_json::json!(true),
+        Value::Null,
+        serde_json::json!([]),
+        serde_json::json!({}),
+        fixture["kind"].clone(),
+    ] {
+        let mut bad = fixture.clone();
+        bad["kind"] = tag;
+        assert!(
+            !wire.is_valid(&bad),
+            "{rel}: wire schema accepted non-string tag"
+        );
+        assert!(
+            !strict.is_valid(&bad),
+            "{rel}: strict schema accepted non-string tag"
+        );
+        assert!(
+            serde_json::from_str::<T>(&bad.to_string()).is_err(),
+            "{rel}: wire serde accepted non-string tag"
+        );
+        assert!(
+            serde_json::from_value::<T>(bad).is_err(),
+            "{rel}: buffered serde accepted non-string tag"
+        );
+    }
+}
+
+macro_rules! string_tag_test {
+    ($test:ident, $ty:ty, $fixture:literal, $kind:literal) => {
+        #[test]
+        fn $test() {
+            check_string_tag::<$ty>($fixture, $kind);
+        }
+    };
+}
+string_tag_test!(node_requires_string_kind, Node, "node", "break_loop");
+string_tag_test!(fragment_requires_string_kind, Fragment, "fragment", "text");
+string_tag_test!(origin_requires_string_kind, Origin, "origin", "user");
+string_tag_test!(
+    updated_by_requires_string_kind,
+    UpdatedBy,
+    "updated_by",
+    "user"
+);
+string_tag_test!(
+    action_ref_requires_string_kind,
+    ActionRef,
+    "action_ref",
+    "name"
+);
+string_tag_test!(
+    code_source_requires_string_kind,
+    CodeSource,
+    "code_source",
+    "inline"
+);
+string_tag_test!(
+    principal_requires_string_kind,
+    Principal,
+    "principal",
+    "system"
+);
+string_tag_test!(
+    arg_writes_requires_string_kind,
+    ArgWrites,
+    "arg_writes",
+    "none"
+);
+string_tag_test!(
+    command_mode_requires_string_kind,
+    CommandMode,
+    "command_mode",
+    "regex"
+);
+string_tag_test!(
+    runtime_requires_string_kind,
+    Runtime,
+    "runtime",
+    "declarative"
+);
+
+#[test]
+fn string_tag_guard_covers_nested_wire_values_and_direct_deserialization() {
+    use serde::Deserialize;
+    let bad = load("invalid/fragment_integer_kind.json");
+    assert!(
+        Fragment::deserialize(&mut serde_json::Deserializer::from_str(&bad.to_string())).is_err()
+    );
+    let chat = serde_json::json!({"text": "t", "fragments": [bad]});
+    assert!(serde_json::from_value::<den_protocol::ChatText>(chat.clone()).is_err());
+    assert!(serde_json::from_str::<den_protocol::ChatText>(&chat.to_string()).is_err());
+
+    let mut bad = load("sub_action/break_loop.json");
+    bad["kind"] = serde_json::json!(6);
+    assert!(Node::deserialize(&mut serde_json::Deserializer::from_str(&bad.to_string())).is_err());
+    assert!(serde_json::from_value::<SubAction>(bad.clone()).is_err());
+    assert!(serde_json::from_str::<SubAction>(&bad.to_string()).is_err());
+    let mut action = load("action/cheer_alert.json");
+    action["nodes"] = serde_json::json!([bad]);
+    assert!(serde_json::from_value::<Action>(action.clone()).is_err());
+    assert!(serde_json::from_str::<Action>(&action.to_string()).is_err());
+
+    // Do not rewrite opaque future fields, and preserve unknown-string fallbacks on both paths.
+    let future = serde_json::json!({"kind": "future", "text": "t", "payload": {"kind": 0}});
+    for value in [
+        serde_json::to_value(serde_json::from_str::<Fragment>(&future.to_string()).unwrap())
+            .unwrap(),
+        serde_json::to_value(serde_json::from_value::<Fragment>(future.clone()).unwrap()).unwrap(),
+        serde_json::to_value(serde_json::from_str::<Node>(&future.to_string()).unwrap()).unwrap(),
+        serde_json::to_value(serde_json::from_value::<Node>(future.clone()).unwrap()).unwrap(),
+    ] {
+        assert_eq!(value, future);
+    }
+    for raw in [
+        r#"{"kind":0,"kind":"text","text":"t"}"#,
+        r#"{"kind":"text","kind":0,"text":"t"}"#,
+    ] {
+        assert!(serde_json::from_str::<Fragment>(raw).is_err());
+    }
 }
