@@ -1,9 +1,10 @@
 # Spec 02: Protocol and contracts (WS-02)
 
-- **Status:** Revision 5. r4 was approved by the reviewer (Codex Astra, 2026-10-19; history in §19) and
+- **Status:** Revision 6. r4 was approved by the reviewer (Codex Astra, 2026-10-19; history in §19) and
   provisionally approved by the coordinator on the owner's delegation (2026-10-19); owner confirmation pending.
-  r5 is the DEN-30 follow-up (`plugins.call` classification) plus the DEN-31 tier-0 MCP outputSchema fix, pending
-  review. Card: DEN-14.
+  r5 (DEN-30 `plugins.call` classification, DEN-31 tier-0 MCP outputSchema) is on `main`. r6 folds in the contract
+  amendments spec 03 §23 requested (A1–A13 and the two scopes, card DEN-33) and the shapes `den-protocol` v0 had to
+  assume (DEN-34, card DEN-38 folded into DEN-33), pending review. Card: DEN-33.
 - **Owns:** `crates/den-protocol` (single-writer), the codegen pipeline (`cargo xtask codegen`), and every generated
   artifact (`protocol.json`, OpenAPI, AsyncAPI, TS, Python, plugin manifest schema, MCP tool catalog).
 - **Builds on:** [architecture.md](../architecture.md) §2–4, [plugin-sdk-and-api.md](../research/plugin-sdk-and-api.md)
@@ -16,7 +17,8 @@
 ## 1. Scope and non-goals
 
 **In scope:** the wire and storage shapes every other subsystem builds against: the event envelope and naming;
-the domain types (Action, Trigger, Sub-action, Variable, Queue); the ID scheme; versioning and migrations; the
+the domain types (Action, Trigger, Sub-action, Variable, Queue) and the engine's records (Run, Command, Timer,
+§6.5); the ID scheme; versioning and migrations; the
 operation catalog; the authorization context every call and run carries; the WebSocket JSON-RPC envelope,
 handshake, subscriptions and errors; stdio framing for workers and sidecars; plugin manifest schema v0; template
 syntax; codegen and its CI checks.
@@ -48,28 +50,28 @@ translates to and from this protocol and never extends it).
 | Rust derives | Every public type derives `Serialize, Deserialize, JsonSchema, TS` (ts-rs, §9.2) and has a doc comment on the type and on every field. Doc comments become schema `description`s. |
 | Field names | `camelCase` on the wire (`#[serde(rename_all = "camelCase")]`). |
 | Enum values | `snake_case` strings. **Open enums** (platforms, tiers of other services) are strings with documented known values, never closed Rust enums, so new values don't break old clients. |
-| Tagged unions | Internally tagged: `kind` for domain unions, `type` only for the event type. No `untagged` unions on the wire (they make schemas ambiguous), with the single exception in the Unions row. `#[serde(flatten)]` inside a struct variant (`Node::Op`, §6.4) is covered by the round-trip and ts-rs tests in §17.1. |
+| Tagged unions | Internally tagged: `kind` for domain unions, `type` only for the event type. No `untagged` unions on the wire (they make schemas ambiguous), with the single exception in the Unions row. `#[serde(flatten)]` inside a struct variant (`Node::Op`, §6.4) is covered by the round-trip and ts-rs tests in §17.1. `Node` and `Fragment` are **extensible** (§7.2): generated receivers decode an unknown `kind` into a receiving-only variant instead of failing. |
 | Identifiers in namespaces | Dotted, `lower_snake_case` segments, `^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`: event types `twitch.channel_point_redemption`, operations `obs.set_scene`, methods `actions.run`. |
 | Time | RFC 3339 UTC with milliseconds and `Z` (`2026-10-18T20:15:03.120Z`). Durations are integer milliseconds in fields ending `Ms`. |
 | Money | `Money { amountMinor: i64, currency: String /* ISO 4217 or a platform unit like "bits" */, exponent: u8 }`. Floats are never used for money. The run context also exposes a derived `amount` number for templates (§6.3). |
 | Unknown fields | Wire types **ignore** unknown fields (forward compatibility). Manifests and persisted documents validate strictly, except keys starting with `x-`. Strictness is enforced by the JSON Schema validator, not serde's `deny_unknown_fields`, which doesn't work with `flatten`. Types using `#[serde(flatten)]` (e.g. `SubAction`, §6.4) get `unevaluatedProperties: false` (2020-12) instead of `additionalProperties: false` per branch, via a schemars transform; a test validates every fixture against it. |
 | Unions | No `untagged` unions, with one exception: `TemplateOr<T>` (§6.4, §10.1) is the Rust form of a value-mode template field. Its schema is `{ "anyOf": [T, { "type": "string", "x-den-template": "value" }] }`, never at a root, decoded by a hand-written deserializer (a string that is exactly one `{…}` form → template, anything else → `T`). The same derivation produces every operation's authoring schema (§10.1). |
-| Optional vs null | Absent means "not provided". `null` is only used where a value can be explicitly cleared; the schema says so. |
+| Optional vs null | Absent means "not provided". `null` is only used where a value can be explicitly cleared or is a defined state, and the schema says so: a **required-nullable** field is `anyOf: [T, { "type": "null" }]` marked `x-den-nullable: true` (`RpcResponse.id`, §8.2; `old`, `oldUntrusted`, `new`, `untrusted` in `variables.*_updated`, §6.3). `RpcResponse.result` is the one **optional** field that may also be `null` (present and `null` for a null result, absent on error, §8.2), marked the same way. Every other `Option<T>` field is optional with `null` stripped from its schema, so sending `null` there is `INVALID_PARAMS`. |
 | Sizes | One WS message ≤ 1 MiB by default (configurable, spec 06). Max JSON nesting depth 32 for anything coming from plugins or clients. |
-| Untrusted text | Fields that carry viewer- or third-party-controlled text (chat text, usernames, titles, plugin outputs) are marked `x-den-untrusted: true`. MCP and the AI layer wrap these values (§9.6). |
-| Secrets | Fields marked `x-secret: true` are never emitted in events, history snapshots, logs, exports or `protocol.json` examples. They are redacted to `"***"`. |
+| Untrusted text | Fields that carry viewer- or third-party-controlled text (chat text, usernames, titles, plugin outputs) are marked `x-den-untrusted: true`. MCP and the AI layer wrap these values (§9.6). A field whose provenance is decided **per value** (a stored variable read back, §6.3) is marked `x-den-untrusted: "conditional"` and names the sibling boolean that gates it in `x-den-untrusted-flag` (default `"untrusted"`; `"oldUntrusted"` for `old` in `variables.*_updated`); MCP wraps the field exactly when that sibling is `true`, the engine seeds taint on the same flag (spec 03 §11.2 readback rule, §21), and `lint-catalog` fails the marking when the named sibling is not a boolean (or required-nullable boolean) property of the same object (§9.7). |
+| Secrets | Fields marked `x-secret: true` are never emitted in events, history snapshots, logs, exports or `protocol.json` examples. They are redacted to `"***"`. `lint-catalog` fails an example whose value at an `x-secret` field (including fields reached through a `$ref`) is anything but `"***"`, and schema derivation keeps the marking on every path (§9.7, §10.1). |
 
 ## 4. IDs
 
 | Thing | Format | Notes |
 |---|---|---|
-| Entity IDs (action, trigger, sub-action node, queue, command, timer, connection, overlay) | UUID, lowercase hyphenated string. New IDs are **UUIDv7** (time-ordered, good SQLite index locality). | Any UUID version is accepted, so imported Streamer.bot GUIDs (v4) keep their identity (user story 5). Rust newtypes per kind: `ActionId(Uuid)`, `QueueId(Uuid)`… |
+| Entity IDs (action, trigger, sub-action node, queue, command, timer, connection, overlay, user group) | UUID, lowercase hyphenated string. New IDs are **UUIDv7** (time-ordered, good SQLite index locality). | Any UUID version is accepted, so imported Streamer.bot GUIDs (v4) keep their identity (user story 5). Rust newtypes per kind: `ActionId(Uuid)`, `QueueId(Uuid)`… `EntityId(Uuid)` is the kind-agnostic form used where the kind travels separately (`DraftRef`, `PendingChange`, §6.1). `TokenId(Uuid)` names an API token **record** (`Principal`, §8.8); the token value is the secret below and never appears on the wire. `GroupId(Uuid)` names a user group (defined by spec 08; reserved here for `Command.permissions`, §6.5). |
 | Default queue | The nil UUID `00000000-0000-0000-0000-000000000000` | Matches Streamer.bot's export convention, so import is a straight mapping. |
 | Event IDs, run IDs | UUIDv7 | Monotonic per process, used for replay cursors (§8.4) and history. |
 | Plugin ID | Reverse-DNS, `^[a-z0-9]+(\.[a-z0-9-]+)+$`, ≤ 128 chars (`io.github.alice.acmelive`) | Namespace verification is the registry's job (spec 12, Q-K3). |
 | Slug | `^[a-z][a-z0-9_]{1,23}$`, unique per installation | Prefix for every event type, operation and variable namespace the plugin contributes. Reserved for core: `core`, `system`, `session`, `auth`, `actions`, `triggers`, `queues`, `variables`, `events`, `chat`, `tts`, `audio`, `plugins`, `obs`, `twitch`, `youtube`, `kick`, `x`, `bluesky`, `discord`, `vts`, `vmc`, `mcp`, `ai`, `code`, `ui`, `overlay`, `deck`, `util`, `batch`, `global`, `globals`, `user`, `event`, `run`, `trigger`, `action`. |
 | Contribution IDs | `<slug>.<localId>` (`acme.gift`, `acme.send_chat`) | `localId` is `lower_snake_case`. Persisted references to a contribution are the shared type `ContributionRef { type, plugin? }` (§5.3), flattened into `Trigger` (§6.2) and `Node::Op` (§6.4): `plugin` (the plugin ID) is **required** when the slug is not reserved for core and **forbidden** when it is. The derive emits `plugin` as optional; codegen adds a generated `if/then/else` clause from the reserved-slug list to every schema that embeds a `ContributionRef` (`if type matches ^(core|system|…)\. then plugin is not allowed, else plugin is required`), and the save-time and import validators enforce the same rule in code, so the pair is part of the generated types and survives strict validation and round-trips. Installing a plugin whose slug is already used by a different plugin ID is refused locally (the registry also keeps slugs unique, spec 12). Import re-binds by `plugin`: if that plugin is installed but its current manifest uses a different slug (the author renamed it in a later version), `type` is rewritten to the installed slug; if it is not installed, an `Op` becomes `placeholder` and a `Trigger` is kept verbatim but `unresolved` (§6.2) until the plugin is installed; a non-reserved `type` without `plugin` cannot be re-bound safely and becomes `placeholder` with an import-report entry. |
-| API tokens | `sdt_` + 43 chars base64url (256 random bits) | The prefix lets secret scanners find leaked tokens. Stored as SHA-256 hashes and compared in constant time (spec 06). |
+| API tokens | `sdt_` + 43 chars base64url (256 random bits) | The prefix lets secret scanners find leaked tokens. Stored as SHA-256 hashes and compared in constant time (spec 06). The protocol refers to a token only by its `TokenId` (above). |
 | Approval handles | `apr_` + 22 chars base64url | MCP approval flow, 120 s TTL. |
 | Session IDs | `ses_` + 22 chars base64url | Per WS connection. |
 
@@ -109,8 +111,9 @@ The architecture's `{ id, source, type, ts, platform?, user?, payload }` is kept
   `platform` and is what multichat, overlays and TTS consume. Platform-specific events (`twitch.cheer`) carry the
   full detail. A connector MAY emit both for one upstream message, linked by `correlationId`.
 - Each known event type has a Rust payload struct registered in the catalog with: title, description, category
-  path, `payloadVersion`, payload schema, trigger filters (§6.2), `highVolume` and `critical` flags (§8.4), and at least one example
-  (the example is also the "Test trigger" fixture). Example:
+  path, `payloadVersion`, payload schema (object root; no top-level field may use a reserved run-context root name
+  or the reserved filter path `platform`, §6.3), trigger filters (§6.2), `highVolume` and `critical` flags (§8.4),
+  and at least one example (the example is also the "Test trigger" fixture). Example:
 
 ```rust
 /// A new or renewed Twitch subscription (not a gift; see twitch.gift_subscription).
@@ -145,7 +148,7 @@ pub struct TwitchSubscription {
   event type, published in `protocol.json` as `events.<type>.payloadVersions: { "1": 1, "2": 2 }` with one
   payload schema per version. The session's negotiated `rpcVersion` (§8.3) is therefore the only negotiation knob:
   the engine emits, and replays (§8.4), the payload version that the session's `rpcVersion` maps to, through a
-  registered downgrade function keyed `(type, from, to)`, for the deprecation window (§7.4), and
+  registered **downgrade** function keyed `(type, from, to)`, for the deprecation window (§7.4), and
   `meta.payloadVersion` always states the shape actually delivered. Two sessions on `rpcVersion` 1 and 2 receiving
   the same upstream event get different shapes (§17.10). Per-event negotiation in `identify`/`subscribe` was
   rejected: it adds a second knob that generated SDKs, which are pinned to one `rpcVersion`, cannot use. Breaking
@@ -153,19 +156,45 @@ pub struct TwitchSubscription {
   declares `payloadVersion` per event in its manifest (§11), a breaking change there is a plugin major version
   bump, the host never downgrades plugin payloads, and clients consuming plugin events check
   `meta.payloadVersion`. Stored events (history, exports) are immutable and keep the version they were emitted
-  with; readers use `meta.payloadVersion`, not §7.3 migrations.
+  with; readers use `meta.payloadVersion`, not §7.3 migrations. A core `payloadVersion` bump also registers the
+  **upgrade** function keyed the same way `(type, from, to)`, so a stored event of the older version can be
+  re-published through the current matcher (`events.replay`, spec 03 §12.5); `lint-catalog` fails a core event
+  whose `payloadVersions` table has a step without both functions registered (§9.7, A13). Upgrades are pure like
+  migrations (§7.3); a stored event an upgrade cannot map fails the replay with `INVALID_STATE`
+  (`details.reason = "payload_version"`).
+- **Engine events and operations (A3).** Spec 03 §15 registers the engine's own operations and events through
+  the same explicit `register(&mut Catalog)` (§9.1): the operations and events of `actions.*`, `triggers.*`,
+  `events.*`, `runs.*`, `queues.*`, `variables.*`, `signals.*`, `commands.*`, `timers.*`, `schedule.*`,
+  `system.*`, `core.test` and `core.custom`, with the flags it states (`highVolume` on
+  `runs.node_started`, `runs.node_completed` and `variables.user_updated`; `critical` on `system.stopping`,
+  `system.subscriber_stalled` and `system.storage_*`; `writesArgs: Named { nameParam: "name" }` on
+  `variables.set_arg` and `Any` on `signals.wait`). `core.custom { name, data }` is the user-defined event
+  published by `events.emit`, with the filter field `name` at `specificity` 4 (§6.2). Spec 03 owns those
+  payload shapes; the catalog lint applies to them like to any core event, and §17.2 validates their examples.
 
 ### 5.3 Shared core types (referenced by every connector and plugin)
 
 `UserRef { platform, id, login, displayName, avatarUrl?, color?, roles: Vec<String> /* broadcaster, moderator,
 vip, subscriber, founder, member… open */, badges: Vec<Badge>, pronouns? }` ·
-`ChatText { text, fragments: Vec<Fragment> }` where `Fragment` is `kind`-tagged `text | emote | mention | link |
-cheermote` · `Money` · `ImageRef { url, width?, height?, scale? }` · `Duration` (ms) · `PlatformId` (open string) ·
+`Badge { id /* the badge set on the platform: "subscriber" */, version? /* "12" for a 12-month badge */, title?,
+image?: ImageRef }` ·
+`ChatText { text, fragments: Vec<Fragment> }` where `Fragment` is `kind`-tagged and **every kind carries `text`**,
+the fragment's source text as typed, so an unknown kind renders as its text (§7.2): `text { text }` ·
+`emote { text, id /* the platform's emote ID */, provider? /* "twitch", "7tv", "bttv"… when not the platform
+itself */, image?: ImageRef }` · `mention { text /* including the "@" */, userId?, login? }` · `link { text, url }`
+· `cheermote { text /* "Cheer100" */, prefix /* "Cheer" */, bits: u32, tier: u32 }` ·
+`Money` · `ImageRef { url, width?, height?, scale? }` · `Duration` (ms) · `PlatformId` (open string) ·
 `ContributionRef { type: String /* "twitch.cheer", "acme.gift" */, plugin: Option<PluginId> /* required for a
-non-core slug, forbidden for a core slug (§4) */ }` · `RiskTier` (integer 0–4, §8.1) · `DryRunResult`, `PlanStep`
-(§8.1) · `AuthContext`, `Principal`, `ApprovalBinding` (§8.8).
+non-core slug, forbidden for a core slug (§4) */ }` · `UnknownEventPayload` (§5.2) · `RiskTier` (integer 0–4,
+§8.1) · `UpdatedBy` (§6.1) · `OnError` (§6.4) · the engine records `Run`, `RunState`, `CancelReason`, `RunError`,
+`RunWarning`, `Command`, `Timer` (§6.5) · `DryRunResult`, `PlanStep`, `DraftResult` (§8.1) · `AuthContext`,
+`Principal`, `ApprovalBinding` (§8.8).
+**Untrusted text** (§3) inside them: `UserRef.login`, `UserRef.displayName`, `Badge.title`, `ChatText.text`, every
+`Fragment.text`, `mention.login` and `link.url` are marked `x-den-untrusted: true`; IDs, `prefix`, `bits`, `tier`,
+`provider` and image URLs are not.
 Plugin manifests reference them as `den://schemas/v0/<Name>.json` (resolved offline from the bundled catalog), so
-`{user.displayName}` means the same thing everywhere.
+`{user.displayName}` means the same thing everywhere; in `protocol.json` every shared type lives under
+`#/types/<Name>` (§9.1).
 
 ## 6. Domain types
 
@@ -190,14 +219,15 @@ pub struct Action {
     pub nodes: Vec<SubAction>,         // the sub-action tree, §6.4
     pub description: Option<String>,
     pub tags: Vec<String>,             // also used by scopes like actions:run:<tag>
-    pub origin: Origin,                // user | imported { from: "streamerbot", trusted: false } | ai_draft { draftOf?: ActionId } | plugin_template
+    pub origin: Origin,                // user | imported { from: "streamerbot", trusted: false } | ai_draft { draftOf?: ActionId } | plugin_template { plugin: PluginId, template: String }
 }
 pub struct Queue {
     pub id: QueueId, pub name: String,
     pub blocking: bool,                // FIFO, one run at a time
-    pub paused: bool,
+    pub paused: bool,                  // persisted runtime state, see below (A4)
     pub max_pending: Option<u32>,      // bound; None = engine default (spec 03)
     pub overflow: Overflow,            // reject_new | drop_oldest
+    pub max_run_ms: Option<u64>,       // a run exceeding it is cancelled (cancelReason: timeout, spec 03 §9.11); None = no limit; capped by engine.queue.maxRunCeilingMs (A9)
 }
 ```
 
@@ -207,8 +237,23 @@ applies them). **`origin` is server-assigned and read-only on the wire**: it is 
 (`readOnly: true`), ignored on `actions.create`/`actions.update` input, and set from the caller's identity (MCP
 session → `ai_draft`, importer → `imported`, UI or user token → `user`). It changes only through in-app user
 actions: *Apply* on an AI draft sets `user`; *Trust this action* on an imported one sets `imported { trusted:
-true }` after the consent screen. Editing an imported action does not change its trust. The same rule applies to
+true }` after the consent screen. Editing an imported action does not change its trust. `plugin_template { plugin,
+template }` names the plugin and the `localId` of the template contribution (spec 12) an action was created from, so
+the UI can show its provenance and D-029 treats it like imported content. The same rule applies to
 `updatedBy` on variables (§6.3) and to `revision`, which the server bumps on every write.
+
+**`UpdatedBy`** (A7) is the server-assigned writer identity on everything that records one (`VariableRecord.updatedBy`,
+§6.3; the `variables.*_updated` payloads; audit rows): `kind`-tagged `user | imported | mcp | plugin { pluginId } |
+system`, derived from the writing context's origin principal (§8.8 rule 5): `Token` → `user`, `Mcp` → `mcp`,
+`Plugin` → `plugin`, `System` → `system`, `Trigger` (an event-started run with no `causedBy` chain) → `user`,
+because the write comes from the user's own stored automation; with a chain the `chain.originPrincipal` decides,
+so an MCP-caused chain writes `mcp`; the importer → `imported`. It is distinct from `Origin`, which describes
+where a *document* came from and carries trust and draft state, and from `Principal`, which is who acts.
+
+**`Queue.paused` is persisted runtime state (A4).** `queues.pause`, `queues.resume` and their `_all` forms (tier 1,
+never draft-first) write it back into the stored queue document attributed to `system` in the audit log, without
+bumping any action revision: an approval bound to an action survives pausing its queue, and the paused state
+survives a restart. `queues.update` (tier 2) may also set it as part of a configuration write.
 
 **Draft-first under MCP (tier-2 policy, §8.1).** A tier-2 configuration operation called under a context whose
 origin principal is `Mcp` (§8.8 rule 5) never mutates a live document and never reports that it did. There are two
@@ -217,8 +262,11 @@ creates a new action `ai_draft { draftOf: <target> }` holding the proposed conte
 which is why uniqueness is checked among non-draft actions only) and leaves the target untouched. *Apply* in the
 "Pending AI changes" panel replaces the target's content (bumping its `revision`), sets `origin: user`, and deletes
 the draft; *Discard* deletes it. **Every other configuration write, including `actions.delete`** and the
-queue, command, overlay and settings operations, becomes a `PendingChange { id, kind, draftOf?: EntityId,
-operation, params, createdBy: Principal }` document (§7.3, its own `schemaVersion`) that *Apply* replays under the
+queue, command, timer, overlay and settings operations, becomes a `PendingChange { id: EntityId, targetKind: String
+/* the entity kind the change targets: "action", "queue", "command", "timer", "overlay", "settings" (open) */,
+draftOf?: EntityId, operation, params /* object */, createdBy: Principal }` document (§7.3, stored as kind
+`pending_change` with its own `schemaVersion`; the field was `kind` in r5 and is renamed before any contract
+ships, because the stored envelope's own `kind` is `pending_change`) that *Apply* replays under the
 user's context (for `actions.delete` that is one `actions.delete` call; applying it also discards `ai_draft`
 actions whose `draftOf` is the target) and *Discard* deletes. A call executed draft-first returns the generated
 **draft result** `DraftResult { draft: DraftRef { id, kind: "action" | "pending_change", draftOf?: EntityId,
@@ -240,7 +288,7 @@ pub struct Trigger {
     pub unresolved: bool,              // read-only, derived: `plugin` isn't installed; the trigger never fires until it is
     pub always_run: bool,              // fire even when a more specific trigger matched (Streamer.bot semantics)
     pub filters: Vec<Filter>,          // AND-ed
-    pub config: serde_json::Value,     // type-specific settings (e.g. command text, timer interval), schema from the catalog
+    pub config: Map<String, Value>,    // type-specific settings (e.g. command text, timer interval): an object validated against the catalog's config schema, always literal (§10.1)
 }
 pub struct Filter {
     pub field: String,                 // dotted path into the payload: "amount", "user.roles"
@@ -249,16 +297,22 @@ pub struct Filter {
 }
 ```
 
-The catalog entry for each filterable field lists its allowed `ops`, an `optionsFrom` source for pickers, and a
-`specificity` rank, which spec 03 uses for "specific beats any" precedence.
+The catalog entry for each filterable field is `FilterableField { field, ops: Vec<FilterOp>, optionsFrom?:
+OperationName /* feeds the value picker */, specificity: u32 /* default 1 */, caseInsensitive: bool /* default
+false */ }` (A5). `specificity` is the rank spec 03 §6.3 multiplies by the operator weight for "specific beats any"
+precedence (`core.custom.name` is 4, §5.2); `caseInsensitive` makes `eq`, `ne`, `in` and `not_in` compare strings
+case-insensitively for that field (spec 03 §6.2; `contains` is case-insensitive by default regardless). `field` is a
+dotted path into `event.payload`, plus the **reserved filter paths** `user.*` and `platform`, which resolve against
+the envelope's normalized user and platform; a payload therefore never declares a top-level `platform` field (§6.3,
+A12).
 
 ### 6.3 Variables and the run context
 
 | Scope | Key | Lifetime | Template path |
 |---|---|---|---|
 | **Run args** | name | one run (flows into inline `run_action` children and back) | `{name}` |
-| **Global** | name + `persisted: bool` | app-wide; persisted survives restart, temp is cleared at shutdown | `{globals.name}` |
-| **User** | `(platform, userId)` + name + `persisted` | per platform user (cross-platform identity in P5) | `{user.vars.name}` for the event's user |
+| **Global** | name, unique across the persisted and temp stores; `persisted` is an attribute of the entry, not part of the key (A11) | app-wide; persisted survives restart, temp is cleared at shutdown; writing an existing name with the other `persisted` flag **moves** it (spec 03 §11.1) | `{globals.name}` |
+| **User** | `(platform, userId)` + name; `persisted` an attribute as for globals | per platform user (cross-platform identity in P5) | `{user.vars.name}` for the event's user |
 | **Plugin** | `<slug>.<id>` | maintained by the plugin; read-only to others unless granted | `{plugins.<slug>.<id>}` |
 
 - **Values are JSON values** (`null`, bool, number, string, array, object). Unlike Streamer.bot there is no
@@ -267,16 +321,34 @@ The catalog entry for each filterable field lists its allowed `ops`, an `options
 - **Names:** `^[A-Za-z_][A-Za-z0-9_]{0,63}$`, case-sensitive.
 - **Run context root** (what `{…}` resolves against). Reserved root names, which always resolve to the
   engine's value: `event` (full envelope), `user` (the event's `UserRef` plus `vars`), `trigger` (`id`,
-  `type`), `action` (`id`, `name`), `run` (`id`, `queuedAt`, `queue`, `isTest`, `principal`, `surface`, `maxTier`,
-  `chain`; §8.8),
-  `globals`, `plugins`, `match`
-  (last regex captures), `args` (the whole args map), and `now`. Other names resolve against the args map,
+  `type`), `action` (`id`, `name`), `run` (`id`, `queuedAt`, `queue`, `queueName`, `isTest`, `principal`,
+  `surface`, `maxTier`, `chain` (§8.8), and `lastError: RunError | null`, the last node failure recorded under
+  `onError: continue`, §6.4; A1), `globals`, `plugins`, `match` (last regex captures; for a run fired by
+  `commands.triggered` the command's own `captures` unless the winning trigger has a `regex` filter, spec 03 §7.1;
+  A12), `args` (the whole args map), and `now`. Other names resolve against the args map,
   which is seeded with the event's top-level payload fields at run start; args set by later nodes overwrite
   earlier values, including seeded payload fields (`event.payload` keeps the original). Codegen and manifest
-  validation fail when an event payload declares a top-level field with a reserved name, and `Set argument`
-  refuses reserved names.
-- Stored variables carry `{ value, updatedAt, updatedBy: Origin }`. Change events: `variables.global_updated`,
-  `variables.user_updated` (with `old` and `new`).
+  validation fail when an event payload declares a top-level field with a reserved root name **or the reserved
+  filter path `platform`** (§6.2; the user and platform an event is *about* live in the envelope, A12), and `Set
+  argument`, `saveAs`, `ForEach.itemVar`/`indexVar` (§6.4) and `core.test` variable keys refuse reserved names at
+  save time.
+- Stored variables are `VariableRecord { value, persisted, untrusted, updatedAt, updatedBy: UpdatedBy }` (A7,
+  A10). **`untrusted`** is the provenance flag spec 03 §21 writes (chat-derived, plugin-written, MCP-written or
+  imported-without-flag values); it is never a client input: a write replaces value and flag together. Results:
+  `variables.get` returns the record; `variables.list` pages records with their `name`; `variables.set` returns
+  `{ value, created, untrusted }` describing the **stored entry after the call** (`mode: default` on an existing
+  entry returns the existing value with its flag, writes nothing and emits nothing); `variables.delete` returns
+  `{ deleted }` and `variables.clear_temp` `{ count }`, never a value. Change events `variables.global_updated`
+  and `variables.user_updated` carry `{ name, old, oldUntrusted, new, untrusted, persisted, updatedBy }`: `old:
+  null` (created) goes with `oldUntrusted: null`, `new: null` (deleted) with `untrusted: null`, otherwise each
+  flag describes its own value **independently** (all four are required-nullable, §3). `variables.user_updated` is
+  `highVolume` and puts the variable's user in the **envelope** (`platform`, `user`), never in the payload: `user`
+  is the engine's cached `UserRef` for `(platform, userId)` when it has one, otherwise the minimal `UserRef {
+  platform, id, login: id, displayName: id, roles: [], badges: [] }`. The `export` document (§7.3) carries
+  `globals[]` entries `{ name, value, persisted, untrusted, updatedAt }` (spec 03 §13.4), so the flag survives
+  export; an imported entry without it is stored `untrusted: true`. Every
+  value-carrying field above is catalogued `x-den-untrusted: "conditional"` on its sibling flag (§3, §9.6):
+  `value` on `untrusted`, `old` on `oldUntrusted`, `new` on `untrusted`.
 
 ### 6.4 Sub-action tree
 
@@ -286,14 +358,17 @@ pub struct SubAction {
     pub enabled: bool,
     pub weight: Option<f32>,           // used when the parent is random
     pub note: Option<String>,
+    pub on_error: OnError,             // stop (default) | continue: what a failure of this node does to the run (A1)
     #[serde(flatten)] pub node: Node,  // internally tagged by "kind"
 }
+pub enum OnError { Stop, Continue }    // snake_case strings; serde default Stop
 pub enum Node {                        // #[serde(tag = "kind", rename_all = "snake_case")]
-    Op { #[serde(flatten)] contribution: ContributionRef, params: Value, save_as: Option<String> }, // any sub-action-exposed operation (§8.1); wire: { "kind": "op", "type": "acme.send_chat", "plugin": "io.github…", "params": {…} }
+    Op { #[serde(flatten)] contribution: ContributionRef, params: Map<String, Value>, save_as: Option<String> }, // any sub-action-exposed operation (§8.1); params is an object; wire: { "kind": "op", "type": "acme.send_chat", "plugin": "io.github…", "params": {…} }
     Group { name: String, color: Option<String>, random: bool, children: Vec<SubAction> },
     If { condition: Condition, then: Vec<SubAction>, r#else: Vec<SubAction> },
     Switch { value: Template, auto_type: bool, cases: Vec<Case>, default: Vec<SubAction> },
     While { condition: Condition, max_iterations: Option<u32>, children: Vec<SubAction> },
+    ForEach { items: TemplateOr<Value>, item_var: String, index_var: Option<String>, max_iterations: Option<u32>, children: Vec<SubAction> }, // A2; semantics spec 03 §9.5, writer contract §8.8
     BreakLoop, ContinueLoop, Stop,     // Stop = Streamer.bot "Break": end the run
     Parallel { branches: Vec<Vec<SubAction>> },  // D-028; joins when all branches finish
     Delay { ms: TemplateOr<u64> },
@@ -302,6 +377,9 @@ pub enum Node {                        // #[serde(tag = "kind", rename_all = "sn
     Placeholder { origin: String, original: Value }, // unknown imported type; never runs; kept verbatim (WS-15 rule)
 }
 pub struct Condition { pub left: Template, pub op: CompareOp, pub right: Template, pub auto_type: bool, pub ignore_case: bool }
+pub struct Case { pub values: Vec<Template>, pub children: Vec<SubAction> }   // at least one value; matches when any renders equal to the switch value (eq with autoType)
+pub enum ActionRef { Id { id: ActionId }, Name { name: String }, Template { template: Template } }  // kind-tagged id | name | template; a template target is unresolvable at check time and counts as tier 4 (§8.8 rule 2)
+pub enum CodeSource { Inline { source: String }, ScriptRef { path: String /* relative to the app's scripts directory */ } }  // kind-tagged inline | script_ref
 ```
 
 `CompareOp` covers the Streamer.bot set (`eq`, `ne`, `contains`, `regex`, `lt`, `gt`, `lte`, `gte`, `not_exists`,
@@ -312,6 +390,85 @@ validated twice, against two generated schemas (§10.1): at save time against th
 ranges and enums). `Template` fields are strings in the §10 syntax; `TemplateOr<T>` is a value-mode field (§10.1)
 that accepts a literal `T` or one whole `{…}` form. Every node executes under the run's authorization context
 (§8.8): a node whose tier or scopes exceed that context fails before it runs.
+
+- **`onError` (A1)** applies to node failures only (an operation error, rendered params or a result that do not
+  validate, a timeout, an unavailable `RunAction` target, a raising `Code` node); authorization and approval
+  failures always stop the run (§8.8 rule 3). `stop` ends the run `Failed { error }`; `continue` records the
+  failure as a `RunWarning`, sets `run.lastError` (§6.3) and goes on with the next sibling (spec 03 §9.10; the
+  importer sets `continue` where Streamer.bot exposed a `success` output).
+- **`ForEach` (A2)** writes `itemVar` and `indexVar` (0-based) as ordinary run args; reserved roots are refused at
+  save time like *Set argument*. `items` renders once per loop to an array (element order) or an object (`{ key,
+  value }` pairs in sorted key order); `null` or a missing value is zero iterations (the node then deletes both
+  names); any other scalar fails the node with `INVALID_PARAMS` (`details.reason = "not_iterable"`, `onError`
+  applies); the cap is `maxIterations` or the engine default. The node is a **writer** for the binding hash and
+  its iterations are expanded in plans (§8.8). Adding the variant is non-breaking because `Node` is extensible
+  (§7.2).
+- **Deferred (A6):** `Op` nodes with structured branch children (`x-ui.branches`, research Part B §3.5) are not
+  in v0; spec 12 may only add them with an ADR.
+
+### 6.5 Engine records (A3)
+
+Persisted documents and history records the engine owns. Spec 03 (§3, §7, §8, §9, §12) defines their behaviour;
+the shapes live here so `den-protocol` carries them and clients get generated types.
+
+```rust
+/// Chat command (spec 03 §7). Persisted document, kind "command"; configuration writes are tier 2.
+pub struct Command {
+    pub id: CommandId, pub revision: u64, pub name: String, pub group: Option<String>, pub enabled: bool,
+    pub listed: bool,                    // shown by commands.list_public
+    pub aliases: Vec<String>,            // at least one
+    pub mode: CommandMode,               // kind-tagged: basic { location: start | exact | anywhere } | regex { pattern }
+    pub case_sensitive: bool,
+    pub sources: Vec<EventType>,         // "chat.message", "chat.whisper", "chat.sub_message"… (open); empty = chat.message
+    pub platforms: Vec<PlatformId>,      // empty = all
+    pub ignore_bot_account: bool, pub ignore_internal: bool,
+    pub cooldown: Cooldown,              // { globalMs: u32, userMs: u32, exemptRoles: Vec<String> /* default ["broadcaster"] */ }
+    pub permissions: Permissions,        // { mode: allow | deny, users: Vec<UserKey>, roles: Vec<String>, groups: Vec<GroupId> }
+    pub counters: CounterPolicy,         // { persistGlobal: bool, persistUser: bool }
+    pub origin: Origin,
+}
+pub struct UserKey { pub platform: PlatformId, pub user_id: String }   // a platform user without the volatile UserRef fields
+
+/// Interval timer (spec 03 §8). Persisted document, kind "timer"; configuration writes are tier 2.
+pub struct Timer {
+    pub id: TimerId, pub revision: u64, pub name: String, pub enabled: bool,
+    pub interval_ms: u64,                // ≥ 1000
+    pub random_upper_ms: Option<u64>,    // if set, each delay is uniform in [intervalMs, randomUpperMs]
+    pub repeat: bool,                    // false: fire once, then set enabled = false
+    pub min_chat_lines: Option<u32>,     // fire only if ≥ n chat.message events since the last fire
+    pub origin: Origin,
+}
+
+/// One execution of an action (spec 03 §9, §12). Returned by runs.get and runs.list; stored in Action History.
+pub struct Run {
+    pub id: RunId,
+    pub action: ActionId, pub action_name: String, pub action_revision: u64,
+    pub trigger: Option<TriggerId>,      // None for actions.run and RunAction children; a replay copies the replayed run's trigger (spec 03 §12.3)
+    pub event: Option<EventId>,          // the event that fired the trigger, or the replayed event
+    pub queue: QueueId,
+    pub state: RunState, pub cancel_reason: Option<CancelReason>, // cancelReason only when state is cancelled
+    pub queued_at: Timestamp, pub started_at: Option<Timestamp>, pub completed_at: Option<Timestamp>,
+    pub duration_ms: Option<u64>,        // started → completed
+    pub principal_kind: String, pub surface: Surface, pub chain: Option<ChainOrigin>, // from the AuthContext (§8.8 rule 7)
+    pub parent: Option<RunId>,           // the run whose RunAction node started this one
+    pub inline: bool,                    // an inline RunAction child (shares the parent's task)
+    pub test: bool, pub replay_of: Option<RunId>,
+    pub event_snapshot: Option<Event>,   // the firing or replayed event, secrets redacted
+    pub untrusted_args_queued: Vec<String>, pub untrusted_args_after: Vec<String>, // taint set of each snapshot (spec 03 §21)
+    pub error: Option<RunError>,         // when state is failed, rejected or dropped
+    pub stopped_by: Option<NodeId>,      // the Stop node or Code node that ended the run early
+    pub warnings: Vec<RunWarning>,
+}
+pub enum RunState { Queued, Running, Completed, Failed, Cancelled, Rejected, Dropped }   // snake_case strings
+pub enum CancelReason { User, Cleared, Shutdown, Timeout, Parent }                      // snake_case strings; Parent = a Parallel sibling or the parent run stopped it
+pub struct RunError { pub code: ErrorCode /* §8.5 data.code */, pub node: Option<NodeId>, pub message: String, pub details: Option<Value> }
+pub struct RunWarning { pub node: Option<NodeId>, pub code: String /* loop_cap, missing_value, break_outside_loop… open */, pub message: String }
+```
+
+`Command` and `Timer` are configuration documents: `revision` and `origin` are server-assigned like `Action`'s, their
+writes are tier 2 and draft-first under MCP (`PendingChange.targetKind` `command` / `timer`). `Run` is read-only on
+the wire. Counters, cooldown state and the two args snapshots are spec 03 storage; `runs.get` returns the snapshots
+as plain objects next to the record.
 
 ## 7. Versioning
 
@@ -345,13 +502,19 @@ condition. Adding optional request fields, response fields, methods, event types
 breaking. Adding a variant to a **closed** union that clients receive (`Node`, `Fragment`, `FilterOp`) **is**
 breaking, unless the union is documented as extensible with a fallback (clients render an unknown `Node` as a
 read-only placeholder and an unknown `Fragment` as its text). `Node` and `Fragment` are documented that way;
-other closed enums are not. A breaking diff without an `rpcVersion` bump fails CI, and so does a core
+other closed enums are not. The fallback is part of the generated types, not left to each client: the Rust and TS
+receivers decode an unknown `kind` into a receiving-only variant (`Node::Unknown(UnknownNode { kind, …members })`,
+`Fragment::Unknown(UnknownFragment { kind, text, …members })`, `kind` constrained to any string outside the build's
+known kinds). It is published in `protocol.json` as the last branch of `#/types/Node` and `#/types/Fragment` so
+generated TS and Python receivers accept it, but the save-time validator and `lint-catalog` reject a document or
+example whose `kind` is not a known kind (a producer never emits it), and it re-serializes the original object
+verbatim, so round-tripping a document from a newer engine loses nothing (§17.1 fixtures). A breaking diff without an `rpcVersion` bump fails CI, and so does a core
 `payloadVersion` bump without an `rpcVersion` bump (§5.2).
 
 ### 7.3 Persisted documents and migrations
 
-- Every stored document (action, queue, settings, export bundle, designer document, plugin data envelope) is
-  wrapped as `{ "kind": "action", "schemaVersion": N, "data": {...} }`.
+- Every stored document (kinds `action`, `queue`, `command`, `timer`, `pending_change`, `settings`, `export`,
+  `export_meta`, `design`, `view_state`, `plugin_data`; spec 03 §13.2 stores the engine's kinds) is wrapped as `{ "kind": "action", "schemaVersion": N, "data": {...} }`.
 - Migrations are pure Rust functions `fn(Value) -> Result<Value>` from N to N+1, registered per kind and chained
   on load. Each step has before and after golden fixtures. Migrations are never lossy: fields a step can't map go
   to `data.x-migrated` and a warning is logged.
@@ -387,7 +550,7 @@ pub struct OperationDef {
     pub platforms: Option<Vec<Os>>,   // OS gate: ["windows"] for Windows-only apps; hidden elsewhere with a reason
     pub high_volume_result: bool,
     pub since: String, pub deprecated: Option<Deprecation>,
-    pub examples: Vec<OperationExample>,  // at least one; CI validates every example against the schemas
+    pub examples: Vec<OperationExample>,  // at least one; { title, params, shape: normal | dry_run | draft, result }; CI validates params against the params schema and result against the shape's schema
 }
 ```
 
@@ -402,7 +565,9 @@ pub struct OperationDef {
   `queues.pause`) are tier 1. Control-flow nodes are not operations.
 - **Reserved, codegen-added params.** `dryRun: bool` on every tier ≥ 1 operation (below), and `approvalId?:
   ApprovalId` on every operation that can require approval: tier 3, plus the operations whose effective tier is
-  dynamic (`actions.run`, `plugins.call`, §8.8). A client that received `APPROVAL_REQUIRED` repeats the identical
+  dynamic (`actions.run`, `plugins.call`, `runs.replay`; §8.8, A8). The dynamic set is a **constant list** in
+  `den-protocol`, published as `protocol.json` `dynamicTierOperations`, not an `OperationDef` field, so a plugin
+  cannot declare one. A client that received `APPROVAL_REQUIRED` repeats the identical
   call with `approvalId` set; both names are rejected in author-defined params and in results by `lint-catalog`.
 - **Dry run and the three result shapes.** Tier ≥ 1 operations get an optional `dryRun: bool` param added by
   codegen, and their result root MUST be `type: object` (so `actions.delete` returns `{ deleted: true }` when it
@@ -412,8 +577,11 @@ pub struct OperationDef {
   Vec<PlanStep>, actions?: Vec<ActionRevisionRef>, diff?: Value, warnings: Vec<String>, wouldRequireApproval:
   bool, effectiveTier: RiskTier }` with `PlanStep { operation, params /* rendered, secrets redacted */, tier,
   action?: ActionId, node?: NodeId, argsHash?: Sha256 /* binding hash, §8.8, on tier ≥ 3 steps */, dynamicFields?:
-  Vec<String> /* params paths that take run-produced values, §8.8 rule 4, on tier ≥ 3 steps */, target?: String,
-  description }`; and `operations.<name>.draftResult` (tier-2 configuration operations), always the shared
+  Vec<String> /* params paths that take run-produced values, §8.8 rule 4, on tier ≥ 3 steps */, untrustedFields?:
+  Vec<String> /* params paths whose render references a tainted source, spec 03 §21; shown inside the untrusted
+  wrapper, not part of the plan identity (A10) */, target?: String, description }`; and
+  `operations.<name>.draftResult` (every tier-2 operation: tier 2 **means** configuration operation, so
+  `lint-catalog` requires the draft example and codegen emits `draftResult` for every tier-2 operation), always the shared
   type `DraftResult` (§6.1), meaning the call was deferred into a draft and nothing live changed. For a composite
   call `actions` pins every action the run can reach to its revision and `plan` lists every operation it would
   execute, repeats included; together they are exactly what an approval of that call binds to (§8.8 rule 4). The
@@ -467,7 +635,10 @@ pub struct OperationDef {
 ### 8.2 Envelope (WebSocket and REST `POST /api/v1/rpc`)
 
 JSON-RPC 2.0, unchanged: requests `{ jsonrpc, id, method, params }`, responses `{ jsonrpc, id, result | error }`,
-notifications without `id`. `params` is always an object (never positional). WS subprotocol
+notifications without `id`. `params` is always an object (never positional). A response carries **exactly one** of
+`result` and `error`; a successful `null` result is sent as `"result": null` (key present), so generated types
+distinguish an absent `result` from a null one and reject a response with neither or both. `id` is required and
+nullable (`null` only when the request could not be parsed), marked `x-den-nullable: true` (§3). WS subprotocol
 `streamden.v1.json`; `streamden.v1.msgpack` is reserved for later and not required in v1. Endpoint paths and port
 are in spec 06.
 
@@ -529,6 +700,7 @@ invalid params, -32603 internal). Application errors use **-32000** with a stabl
 | `UNSUPPORTED_ON_PLATFORM` | OS-gated operation (`details.platforms`) |
 | `PAYLOAD_TOO_LARGE` | Size limit exceeded |
 | `UNSUPPORTED_VERSION` | Unsupported `rpcVersion` on REST (WS closes with 4002); `details.supported` gives the range |
+| `INTERNAL` | Engine fault that is not the caller's doing (storage error, lost worker, bug; `details.reason`); the call or run fails, nothing is retried, the audit log records it (A8). Sent with -32000 like every application error; -32603 stays reserved for envelope-level faults, a response the server could not form |
 
 New codes are additive. Clients MUST treat an unknown `data.code` as a generic failure.
 
@@ -547,7 +719,8 @@ turns `\n` into `\r\n`). The worker and sidecar SDKs set binary mode (in Python,
 
 Format `<area>:<verb>[:<qualifier>]`: `actions:read`, `actions:run[:<actionId|tag>]`, `actions:write`,
 `variables:read`, `variables:write[:<namespace>]`, `events:read[:<glob>]`, `chat:send`, `chat:moderate`,
-`obs:control`, `tts:speak`, `plugins:call[:<pluginId>]`, `plugins:manage`, `admin`. Overlay tokens are limited to
+`obs:control`, `tts:speak`, `plugins:call[:<pluginId>]`, `plugins:manage`, `events:simulate` (`triggers.test`,
+`events.simulate`, `events.replay`; spec 03 §6.5, §12.5), `events:emit` (`events.emit`), `admin`. Overlay tokens are limited to
 `events:read:<globs>` plus `variables:read:<names>`. Each operation lists its scopes in the catalog; the server
 checks them on every surface (WS, REST, MCP, plugin host calls).
 
@@ -594,6 +767,7 @@ pub struct PlannedCall {
     pub plugin: Option<PluginId>,                           // a host call a plugin's dry run declared (spec 12); exactly one identity form is set
     pub operation: OperationName, pub args_hash: Sha256,
     pub dynamic_fields: Vec<String>,                        // params paths (as in `fieldErrors.path`) whose binding render references any sentinel; part of the plan identity and shown to the approver (rule 4)
+    pub untrusted_fields: Vec<String>,                      // params paths whose render references a tainted source (spec 03 §21); shown to the approver inside the untrusted wrapper, not part of the plan identity (A10)
 }
 ```
 
@@ -605,11 +779,13 @@ enabled nodes that can put a value into a run arg (a disabled node is not a writ
 changes the revision): an `Op` whose operation has `writes_args` (§8.1: `Named` writes the one arg whose name is
 the literal value of its `name_param`, as *Set argument* does; `Any`, or `Named` with a templated name, can write
 any arg, as *Split* does), an `Op` with `save_as` (writes that name), a `RunAction` (its `args` map seeds the
-child's args), and a `Code` node (which can write any arg). The *args scope* of a node is the action it is in plus every inline `RunAction` target
+child's args), a `ForEach` node (a writer of its `itemVar` and `indexVar`, static names, A2), and a `Code` node
+(which can write any arg). The *args scope* of a node is the action it is in plus every inline `RunAction` target
 reachable from it (args flow into inline children and back, §6.3); a queued `RunAction` target is its own scope,
 seeded only by that node's `args`. *Tree order* is a pre-order walk of the stored document: children in array
-order, `If` then-arm before else-arm, `Switch` cases in order then `default`, `Parallel` branches in order, an
-inline target's tree at the position of its `RunAction` node, a cycle walked once. A path that reads an arg name
+order, `If` then-arm before else-arm, `Switch` cases in order then `default`, `While` and `ForEach` bodies in
+order, `Parallel` branches in order, an inline target's tree at the position of its `RunAction` node, a cycle
+walked once. A path that reads an arg name
 resolves to a list, in tree order, of one entry per writer of that name in the scope (an any-name writer counts
 for every name, which is why *Set argument* declares its target: one `Set argument ts = {now}` must not make every
 field in the scope dynamic), preceded by the value that `actions.run.args`, or the seeding
@@ -618,7 +794,10 @@ is the binding render of its own source: for `writes_args`, its rendered params;
 "run_value", "node": <NodeId>, "operation": <name>, "params": <binding render of the producer's params> }`, so the
 inputs of an operation whose result flows into a tier-3 call are bound even though its result is not; for
 `RunAction.args`, the rendered template; for `Code`, `{ "$den": "code", "node": <NodeId> }` (its source is pinned
-by the revision). The render is recursive (a writer's source that reads a written arg expands the same way) and a
+by the revision); for `ForEach`, `{ "$den": "foreach", "node": <NodeId>, "items": <binding render of the items
+template>, "index": i }` for iteration *i* (the same record with `"field": "index"` for `indexVar`), which is a
+writer entry, not a sentinel: a body read of `{item}` binds to the collection as consumed and is dynamic only when
+the `items` render itself references a sentinel (a collection that is a `saveAs` result). The render is recursive (a writer's source that reads a written arg expands the same way) and a
 name already on the recursion stack renders as `{ "$den": "cycle" }`. Only values that genuinely do not exist
 before the run executes are sentinels, each naming its source: the volatile roots and functions (`now`, `run.*`,
 `random(…)`), the roots that only exist once a run executes (`event`, `match`), and the `run_value`, `code` and
@@ -667,7 +846,7 @@ them.
    static target → `effectiveTier(target)` (a cycle counts once); `RunAction` whose target is a template or is
    otherwise unresolvable at check time → 4 ("unknown is dangerous"); `Placeholder`, control flow, disabled nodes
    and disabled targets → 0. `actions.run` is tier 1 in the catalog, but a call's effective tier is
-   `max(1, effectiveTier(target))` (for `plugins.call`, `max(1, catalog tier of the target)`, host classification included, §8.1, §11), and tier policy (MCP exclusion, approval, draft-first) applies to the
+   `max(1, effectiveTier(target))` (for `plugins.call`, `max(1, catalog tier of the target)`, host classification included, §8.1, §11; for `runs.replay`, the replayed run's action at its **current** revision, A8), and tier policy (MCP exclusion, approval, draft-first) applies to the
    **effective** tier. The same computation is exposed as `actions.effective_tier` (tier 0) and in every dry-run
    `plan` (§8.1). Under an MCP context, `actions.run` on an action with effective tier 4 is refused with
    `PERMISSION_DENIED` (`tier_exceeds_context`) before anything runs; effective tier 3 requires approval. The two
@@ -684,7 +863,15 @@ them.
    an `ApprovedPlan`, which the server computes itself at approval time with the dry-run algorithm, never from
    client-supplied data: the revision of every action the run can reach, and one `PlannedCall` per tier-3 node
    occurrence (repeats are separate entries; both arms of an `If`/`Switch` are planned, so the plan is a superset
-   of what runs; a cycle is planned once). Enforcement happens at three points. (a) **At the call:** the plan is
+   of what runs; a cycle is planned once). A `ForEach` body is expanded at plan time to `min(len, cap)` iterations
+   when the `items` binding render is **concrete** (one `PlannedCall` per tier-3 body node per iteration, each with
+   the `foreach` record for its index in its binding render; the plan shows "*N* × `chat.send`"), and planned
+   **once** when it is dynamic, like a `While`, so a second iteration reaching a tier-3 node stops with
+   `unplanned_call` and the dry-run `warnings` say so in advance; execution consumes the entries in iteration
+   order. A read of `itemVar` after the loop binds to the node's last recorded render (the record with index
+   `min(len, cap) − 1`, a `missing` render for an empty collection, dynamic otherwise), which is what execution
+   records. A session grant exempts the body's hashes like any other but still pins the iteration count, because
+   it is part of the call multiset (A2). Enforcement happens at three points. (a) **At the call:** the plan is
    recomputed and must be identical (same action set and revisions, same multiset of calls, each with the same
    `dynamic_fields`), or the call gets
    `APPROVAL_REQUIRED` with `details.reason = "binding_mismatch"`, `details.mismatch ∈ { "args", "revision",
@@ -766,7 +953,7 @@ crates/den-protocol (types + catalog registration: fn register(&mut Catalog))
        ├─ schema/plugin.schema.json   manifest schema (§11)
        ├─ schema/openapi.json         OpenAPI 3.1 via aide (REST resources + POST /api/v1/rpc)
        ├─ schema/asyncapi.yaml        AsyncAPI 3.0, emitted by xtask from protocol.json (WS events)
-       ├─ sdk/ts/src/gen/             ts-rs types + client methods generated from protocol.json
+       ├─ sdk/ts/src/gen/             ts-rs types (one file per type plus index.ts) + client methods generated from protocol.json
        ├─ sdk/python/streamden/_gen/  pydantic v2 models (datamodel-code-generator) + async client + api.pyi
        ├─ schema/mcp-tools.json       MCP tool definitions per profile (§9.6)
        └─ docs/reference/             generated reference pages
@@ -774,6 +961,15 @@ crates/den-protocol (types + catalog registration: fn register(&mut Catalog))
 
 - **Registration is explicit** (`fn register(&mut Catalog)` called from each crate's entry point), not
   link-time magic like `inventory`, because that breaks on some targets and hides missing registrations.
+- **`protocol.json` layout** (v0 as generated by DEN-34, plus `dynamicTierOperations`, which r6 adds): `{
+  $comment, protocolVersion, rpcVersion, rpcVersions, operations: { <name>:
+  { …OperationDef, paramsAuthoring, dryRunResult?, draftResult?, mcpToolName? } }, events: { <type>: { …EventDef,
+  payloadVersions } }, types: { <Name>: Schema }, errors, closeCodes, protocolMethods, scopes, reservedSlugs,
+  reservedRunContextRoots, dynamicTierOperations, deprecations }`. Every shared type is referenced as
+  `#/types/<Name>`; operation params, results and event payloads are inline objects whose nested `$ref`s point
+  there. The v0 generator (`xtask/`, invoked as `cargo xtask codegen`) writes the repo-root paths
+  `schema/protocol.json`, `schema/plugin.schema.json` and `sdk/ts/src/gen/` (the tree above is rooted at the repo,
+  not at the crate); OpenAPI, AsyncAPI, `mcp-tools.json`, `docs/reference/` and Python follow (DEN-40).
 - `protocol.json` is the canonical artifact. Every downstream generator reads it, except ts-rs (which reads the
   Rust types). A CI test validates every example and fixture against both the JSON Schema and the TS types.
 - `cargo xtask codegen --check` regenerates into a temp dir and diffs. CI runs it on every PR, plus `git diff
@@ -837,8 +1033,11 @@ Per tool:
 - **inputSchema** = params schema. Codegen **fails** if the root isn't `type: object` or has root
   `oneOf`/`anyOf`/`allOf` (rejected by the Claude API, flattened by Claude Code). Enums go inside a property.
   Small `$ref`s are inlined. Property names must match `^[A-Za-z0-9_.-]{1,64}$`.
-- **outputSchema** = the result schema **after** MCP transforms: `x-den-untrusted` string fields are replaced
-  by the wrapper schema `{ untrusted: true, source, text }`, and tier ≥ 1 tools get the `oneOf`-free envelope
+- **outputSchema** = the result schema **after** MCP transforms: `x-den-untrusted: true` fields are replaced
+  by the wrapper schema `{ untrusted: true, source, text }`, `x-den-untrusted: "conditional"` fields (§3) by
+  `anyOf: [<field>, <wrapper>]` and are wrapped at run time exactly when the named sibling flag is `true`
+  (`source` is `"variable:<scope>:<name>"` for variable readbacks; a non-string value is wrapped as its canonical
+  JSON text), and tier ≥ 1 tools get the `oneOf`-free envelope
   `{ result?: <result>, dryRun?: DryRunResult, draft?: DraftResult }` (the same types as §8.1 and §6.1, wrapped so
   that `structuredContent` always validates without a root union; exactly one key is set). Tier-0 tools get
   `{ result: <result> }` with `result` required, whatever the result root (object, array, scalar or `null`, the
@@ -848,7 +1047,7 @@ Per tool:
 - **annotations**, all four always set explicitly (MCP defaults `destructiveHint` to true when not read-only):
   tier 0 → `readOnlyHint: true`; tiers 1–2 → `readOnlyHint: false, destructiveHint: false`; tier 3 →
   `destructiveHint: true` plus `_meta["anthropic/requiresUserInteraction"]`. Operations whose effective tier is
-  dynamic (`actions.run`, `plugins.call`, the `invoke_operation` meta-tool, §8.8) are annotated like tier 3,
+  dynamic (`actions.run`, `plugins.call`, `runs.replay`, the `invoke_operation` meta-tool, §8.8) are annotated like tier 3,
   because a given call may need approval; the dry-run plan tells the client in advance. `idempotentHint` comes
   from the catalog. `openWorldHint: true` when the operation talks to an external platform or app (catalog flag
   `external`), otherwise false.
@@ -873,7 +1072,7 @@ Per tool:
 |---|---|
 | `cargo xtask codegen --check` | Any generated artifact drifts |
 | `cargo xtask schema-compat --base <last-tag>` | Breaking change without a version bump (§7.2) |
-| `cargo xtask lint-catalog` | Missing doc comment/description/example; bad identifier; reserved run-context name; MCP name/schema rule violated; a result schema defining `dryRun` or `draft`, or an author param named `dryRun` or `approvalId`; a tier ≥ 1 operation whose result root isn't `type: object` or that lacks a dry-run example; a tier-2 configuration operation that lacks a draft example; a leaf param without a resolved template mode, or a value-mode enum member starting with `{` (§10.1); a protocol method registered as an operation; a core tier-4 operation marked `mcp` |
+| `cargo xtask lint-catalog` | Missing doc comment/description/example; bad identifier; reserved run-context name; MCP name/schema rule violated; a result schema defining `dryRun` or `draft`, or an author param named `dryRun` or `approvalId`; a tier ≥ 1 operation whose result root isn't `type: object` or that lacks a dry-run example; a tier-2 configuration operation that lacks a draft example; a leaf param without a resolved template mode, or a value-mode enum member starting with `{` (§10.1); a protocol method registered as an operation; a core tier-4 operation marked `mcp`; an event payload with a top-level `platform` field (§6.2); an `x-den-untrusted: "conditional"` field whose named sibling flag is missing or not a boolean (§3); an example carrying a non-redacted value at an `x-secret` field (§3); a core `payloadVersion` step without both its upgrade and downgrade function (§5.2); a `Node` or `Fragment` example whose `kind` is not one of the build's known kinds (it would decode into the receiving-only fallback, §7.2) |
 | `cargo nextest run -p den-protocol` | Round-trip, golden fixture or migration test fails |
 | `pnpm -C sdk/ts typecheck && pnpm -C sdk/ts test` | Generated TS doesn't compile or rejects fixtures |
 | `uv run pytest sdk/python` (plus pyright) | Generated models reject fixtures |
@@ -930,7 +1129,11 @@ construction, and `text` mode is the place for literal braces (`{{`).
   `value`-mode leaf becomes `anyOf: [<concrete>, TemplateString]` where `TemplateString` is `{ "type": "string",
   "pattern": "^\\{(=|[A-Za-z_]).*\\}$", "x-den-template": "value" }`; `text` leaves stay strings; `false`
   leaves stay concrete. Required-ness, nesting and `additionalProperties` are unchanged, and the `anyOf` is never
-  at the root (§9.6 is unaffected because MCP tools use the invocation schema). The same derivation gives
+  at the root (§9.6 is unaffected because MCP tools use the invocation schema). The derivation follows `$ref`s
+  into shared types (resolving the referenced type's own leaves, inside tagged unions, array items and
+  `additionalProperties` alike, with cycle protection) while keeping every sibling keyword of the reference
+  (`x-secret`, `x-ui`, constraints), so a referenced string newtype on a field with `x-ui.variables: true`
+  resolves to `text` mode and a `$ref` with `x-secret: true` stays secret in both schemas. The same derivation gives
   `TemplateOr<T>` for Rust-typed domain fields such as `Delay.ms` (§6.4).
 - **Save time:** `Op.params` validate against `paramsAuthoring`, and every template string must parse (§10). A
   stored document therefore never holds a value the engine cannot type.
@@ -959,17 +1162,18 @@ construction, and `text` mode is the place for literal braces (`{{`).
 | Key | v0 rule |
 |---|---|
 | `$schema`, `manifestVersion: 0` | v0 is pre-stable. Breaking changes are allowed until `manifestVersion: 1` ships with v1.0 of the SDK. |
-| `id`, `slug`, `name`, `version` (SemVer), `description`, `author`, `license` (SPDX), `repository`, `icon`, `categories`, `keywords` | Required: `id`, `slug`, `name`, `version`, `license`. Rules in §4. |
+| `id`, `slug`, `name`, `version` (SemVer), `description`, `author`, `license` (SPDX), `repository`, `homepage`, `icon`, `categories`, `keywords` | Required: `id`, `slug`, `name`, `version`, `license`. Rules in §4. `author` is `{ name, url?, email? }`. |
 | `engines` | `{ streamden: SemverRange, pluginApi: "^0.1" }` |
-| `runtime.kind` | `declarative` · `js` · `sidecar`. `wasm` is reserved and rejected in v0. |
-| `activation`, `permissions`, `connection`, `settings` | As in B2. `settings` is JSON Schema with `x-ui` hints (B2.4) and `x-secret`. |
-| `contributes.events` | Replaces B2 `triggers` (a trigger type **is** an event type, §6.2). Each: `id`, title, description, category, `payloadVersion` (starts at 1; a breaking change bumps it and the plugin's major version, §5.2), `payload` schema, `filters`, `highVolume`, `testPayload`. Becomes event type `<slug>.<id>`. |
+| `runtime` | `kind`-tagged: `declarative` · `js { entry, isolation?: "process" \| "dedicated" }` · `sidecar { command?: { windows?, macos?, linux? }, interpreter?, entry?, requirements? }` (the B2 fields). `wasm` is reserved and rejected in v0. |
+| `activation`, `permissions`, `connection`, `settings` | `activation` is `string[]` (activation events, B2). `permissions`, `connection` and `l10n` are **opaque JSON in v0** (accepted as any JSON value, typed when spec 12 fixes them). `settings` is JSON Schema with `x-ui` hints (B2.4) and `x-secret`, always literal (§10.1). |
+| `contributes.events` | Replaces B2 `triggers` (a trigger type **is** an event type, §6.2). Each: `id`, title, description, category, `payloadVersion` (starts at 1; a breaking change bumps it and the plugin's major version, §5.2), `payload` schema, `filters` (`FilterableField`, §6.2), `highVolume`, `testPayload` (the path of a JSON fixture inside the package). Becomes event type `<slug>.<id>`. |
 | `contributes.operations` | Replaces B2 `subActions` **and** `requests` (one catalog, §8.1). Each: `id`, title, `sentence`, category, `params`, `result`, `tier`, `scopes`, `expose: { rpc, subAction, mcp }`, `timeoutMs`, `platforms`. Becomes method `<slug>.<id>`. A declared tier lower than the host's classification of the permissions it uses is raised (e.g. any `process` permission makes it tier 4). Leaf fields of `params` may carry `x-den-template` (§10.1); the host resolves defaults and generates the authoring schema. |
-| `contributes.conditions`, `variables`, `chatSources`, `ttsVoices`, `overlayWidgets`, `panels`, `commands`, `templates` | As in B2; schemas fixed in spec 12. |
+| `contributes.conditions`, `variables`, `chatSources`, `ttsVoices`, `overlayWidgets`, `panels`, `commands`, `templates` | As in B2; schemas fixed in spec 12; **opaque JSON arrays in v0**. |
 | `definitions` | Local JSON Schema definitions, referenced as `#/definitions/<Name>`. Shared types are referenced as `den://schemas/v0/<Name>.json`. |
 | `l10n` | `%key%` placeholders in **manifest strings only** (VS Code style). These are not templates and are never evaluated at run time. |
 
-Validation is strict (`additionalProperties: false` outside `x-*`), so typos fail loudly at `den validate`. The
+Validation is strict (`additionalProperties: false` outside `x-*`), so typos fail loudly at `den validate`; `x-*`
+keys pass validation but the typed manifest does not retain them (they are for tooling, never read by the host). The
 package is a zip named `.denplugin` (B2.3 layout). `$schema` URLs use the host asked about in Q-B7, and the app
 always validates against its bundled copy, never the network.
 
@@ -1061,11 +1265,17 @@ import-originated data is.
 
 1. **Round-trip and golden tests** (`den-protocol`): every type serializes to its committed fixture and back
    unchanged (property tests with `proptest` for the tree types), including `#[serde(flatten)]` inside the
-   `Node::Op` variant through serde, schemars (`unevaluatedProperties`) and ts-rs; if ts-rs can't express it,
-   `ContributionRef` is written out as two fields and this test is what catches the drift. Every variant of every
+   `Node::Op` variant through serde, schemars (`unevaluatedProperties`) and ts-rs (the fallback, had ts-rs not
+   expressed it, would have been writing `ContributionRef` out as two fields; this test is what catches the
+   drift either way). Every variant of every
    internally tagged union (all five `Principal` variants, every `Node`, `Origin` and `Filter` kind) has a fixture;
    a variant field named like its tag (`kind`) is a serde compile error, which is why `Principal::Token` carries
-   `tokenKind`.
+   `tokenKind`. ts-rs expresses the flattened `ContributionRef` as an intersection type (DEN-34). Fixtures also
+   cover: `onError` on a node; a `ForEach` with a literal and with a
+   templated `items`; every `ActionRef`, `CodeSource`, `UpdatedBy` and `CommandMode` kind; a `Case` with two
+   `values`; an unknown `Node` kind and an unknown `Fragment` kind decoding into the receiving-only variant and
+   re-serializing verbatim (§7.2); an `RpcResponse` with `"result": null` round-tripping with the key present, and
+   responses with neither or both of `result`/`error` rejected (§8.2); a `Run`, a `Command` and a `Timer`.
 2. **Examples are tests:** every catalog example and `testPayload` validates against its JSON Schema, its TS type
    (tsc) and its pydantic model.
 3. **Catalog lint, codegen drift and schema-compat** as in §9.7.
@@ -1108,7 +1318,15 @@ import-originated data is.
    bound); a second writer of `message` added in another branch → `revision`; an approval whose
    plan did not list `/message` as dynamic presented to a call whose recomputed plan does → `args`; B queued and
    executed minutes later with nothing changed → runs; a session grant: changed args pass, changed B revision fails,
-   B executed after the grant's `expires_at` → `expired`. **Chains** (rule 5): the MCP run executes
+   B executed after the grant's `expires_at` → `expired`. **`ForEach`** (A2): a body `chat.send { message: {item} }`
+   over `{globals.list}` of three elements plans three calls with distinct `foreach` records; one element changed
+   after approval → `args` at the first body call; the list grown to four → `args` at the call (the recomputed
+   multiset and hashes differ) and, under a session grant, `unplanned_call` (the count is pinned); shrunk to two
+   → runs (fewer consumed than planned); `items` from a `saveAs` of `http.request` → the body is planned once with
+   `/message` dynamic, the warning names the loop, and a second iteration reaching `chat.send` stops with
+   `unplanned_call`; a post-loop `chat.send { message: {item} }` → bound to the last record, and changing the
+   last element after approval → `args`; an empty collection → the post-loop node's `{item}` is a `missing` render
+   and a later `Set argument item` is its own writer entry. **Chains** (rule 5): the MCP run executes
    `variables.set`, `variables.global_updated` fires a user trigger whose action has a `Code` node → that node fails
    with `tier_exceeds_context` and `details.chain`, the run stops, and the audit links both runs through
    `causedBy`; the same with `variables.set` called **directly** as the native `variables_set` tool, through
@@ -1242,3 +1460,29 @@ protocol design choice made here, not a product decision, and is open to reviewe
   target is unknown statically, and requiring object roots everywhere would contradict §8.1's tier-0 targets
   returning arrays or scalars and burden plugin authors. Always wrapping, rather than only non-object roots, gives
   one rule with no root-union edge cases and matches the tier ≥ 1 envelope's `result` key.
+- **r6** (DEN-33, with DEN-38 folded in): the contract amendments spec 03 §23 requested, plus the shapes
+  `den-protocol` v0 (DEN-34) had to assume, written as decided text. All additive or clarifications; no ADR
+  (`Node` is documented extensible with a fallback, §7.2; the two renames below land before any contract ships).
+  Spec 03 A1 `SubAction.onError`, `OnError`, `run.lastError`, `run.queueName` (§6.3, §6.4). A2 `Node::ForEach`
+  with its writer record, plan-time expansion, post-loop binding and session-grant rule (§6.4, §8.8, §17.9). A3
+  §6.5 engine records (`Run`, `RunState`, `CancelReason`, `RunError`, `RunWarning`, `Command`, `Timer`,
+  `UserKey`, `GroupId`) and the engine's catalog registrations (§5.2). A4 `Queue.paused` as persisted runtime
+  state (§6.1). A5 `FilterableField.specificity` default 1 and `caseInsensitive` (§6.2). A6 recorded as deferred
+  (§6.4). A7 `UpdatedBy` (§6.1, §6.3). A8 `INTERNAL` (§8.5) and `runs.replay` in the constant dynamic-tier set
+  (§8.1, §8.8, §9.6). A9 `Queue.maxRunMs` (§6.1). A10 `VariableRecord.untrusted`, the `variables.*` result and
+  event shapes with independent flags, `x-den-untrusted: "conditional"` naming its sibling flag, MCP conditional
+  wrapping, `PlanStep.untrustedFields` / `PlannedCall.untrustedFields` (§3, §6.3, §8.1, §8.8, §9.6, §9.7). A11
+  the variable key (§6.3). A12 the reserved filter path `platform` in the payload rule and lint, `match` seeded
+  from `captures` (§5.2, §6.2, §6.3, §9.7). A13 upgrade functions (§5.2, §9.7). Scopes `events:simulate`,
+  `events:emit` (§8.7). DEN-38: `Badge` and per-kind `Fragment` fields with `text` on every kind and the untrusted
+  markings (§5.3); `Case { values: Vec<Template> }` (spec 03 §9.5 wording, replacing the crate's `value`),
+  `ActionRef` and `CodeSource` as `kind`-tagged unions, `Trigger.config` and `Node::Op.params` as objects (§6.2,
+  §6.4); `Origin::plugin_template { plugin, template }` (§6.1); `PendingChange.kind` renamed `targetKind` (§6.1);
+  `OperationExample` shape, tier 2 ⇔ configuration operation (§8.1); required-nullable fields and `x-den-nullable`
+  (§3), `RpcResponse` exactly-one rule and `"result": null` (§8.2); `TokenId`, `EntityId`, `GroupId` (§4); manifest
+  v0 `author`, `homepage`, `runtime` union, `activation: string[]`, opaque spec-12 keys, `testPayload` path, `x-*`
+  retention (§11); generated-file locations, `protocol.json` layout and `#/types/<Name>` (§9.1); the ts-rs
+  intersection note (§17.1). From the Codex review of DEN-34, folded in as contract text: the receiving-only
+  `unknown` variants of `Node` and `Fragment` (§7.2), `$ref` sibling preservation and union traversal in template
+  derivation (§10.1), and the secret-example lint (§3, §9.7). Document kinds `command`, `timer`, `pending_change`,
+  `view_state` (§7.3).
