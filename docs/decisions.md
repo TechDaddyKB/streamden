@@ -5,6 +5,7 @@ Only record decisions the **owner** made or approved. Proposals live in ADRs wit
 
 | Date | ID | Decision | Source |
 |---|---|---|---|
+| 2026-10-19 | D-044 | Agent routing: Codex (GPT-6.1 Sol, medium effort) implements backend, engine, connectors, server, tooling and CI; Claude implements UI/UX (`web/ui`, `web/kit`, designer, overlay visuals, UX copy); Grok 4.7 QAs all implementation (findings plus suggested patches, never pushed to the author's branch). Contract and security-critical changes also get a Claude review. Specs, ADRs and contract design are unchanged (Claude writes, Codex Astra reviews). Reason: Codex is more efficient at backend work, the owner prefers the Anthropic look for UI, and the split spreads usage across subscription quotas. | Owner (chat 2026-10-19) |
 | 2026-10-19 | D-043 | The coordinator may move merged cards to Done on the owner's behalf while the owner has delegated; outside a delegation only the owner moves cards to Done. | Owner (chat 2026-10-19) |
 | 2026-10-19 | D-042 | Linux package name is `streamden` (display name StreamDen); Tauri's derived `stream-den` is overridden. | Owner (chat 2026-10-19) |
 | 2026-10-19 | D-041 | Design-token accent colour is amber; it may be revisited later. | Owner (chat 2026-10-19) |

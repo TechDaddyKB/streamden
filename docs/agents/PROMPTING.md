@@ -64,7 +64,8 @@ only if every Done-when passes; commit per AGENTS.md (D-037): subject ending in 
 - **Codex shape:** behaviour, then location (files or repro), then how to verify. For example: "Reproduce the
   failing golden test, fix the parser, run `cargo nextest run -p den-twitch`, and report the commands and
   results."
-- **Effort:** start with **Sol at medium** (or Astra at Light). Raise it only when a task actually fails at the
+- **Effort:** **Sol at medium is the default for all implementation (D-044)**; `scripts/dispatch.sh` sets it with
+  `-c model_reasoning_effort="medium"`. Use Astra at Light only as a fallback. Raise it only when a task actually fails at the
   lower level. Check first that the prompt has a success criterion.
 - **Use `/plan` then `/goal`** for multi-step work. Split big refactors into milestones and review each diff.
 - **Astra-specific counter-prompts:**
@@ -85,6 +86,8 @@ only if every Done-when passes; commit per AGENTS.md (D-037): subject ending in 
 - **Keep rules short.** Grok loads rules files in full with no cap. Check with `grok inspect`.
 - **Research prompts must demand citations:** "Every claim needs an official URL or an X post link; mark
   anything you couldn't verify as (unverified)."
+- **QA role (D-044):** Grok reviews and tests implementation and suggests fixes as findings with patch diffs; use
+  the QA reviewer prompt in §4. It does not push to the author's branch.
 - **Never merge Grok output without a Claude or Codex review.**
 
 ## 4. Role prompts (prepend to the universal template when relevant)
@@ -112,6 +115,15 @@ examples. Add stub implementations and failing contract tests. Write or amend th
 Write tests for <module> against docs/spec/<NN>.md §<x>, not against the implementation's current behaviour.
 Use crates/den-testkit fixtures and golden payloads. If the implementation disagrees with the spec, report it;
 don't change either.
+```
+
+**QA reviewer** (Grok 4.7, effort `high`; reviews Codex and Claude implementation, D-044)
+```
+QA the diff of branch <branch> against board card DEN-<n> and docs/spec/<NN>.md. Run the Done-when commands and
+try to break the change (edge cases, concurrency, cross-platform). Findings first, ordered by severity. For each:
+file:line, the failure scenario, and a suggested fix as a unified diff. Do not edit or push to the branch; append
+the findings to the card. Flag only correctness, security, cross-platform, performance-budget or requirement gaps.
+For UI changes include before/after screenshots. Mark anything you could not verify as (unverified).
 ```
 
 **Reviewer** (a different vendor from the author)
