@@ -101,6 +101,11 @@ pub struct PlanStep {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub dynamic_fields: Option<Vec<String>>,
+    /// Params paths whose render references a tainted source (spec 03 §21): shown to the approver inside
+    /// the untrusted wrapper, not part of the plan identity (A10).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub untrusted_fields: Option<Vec<String>>,
     /// A short description of the target (a scene name, a channel), when the operation has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

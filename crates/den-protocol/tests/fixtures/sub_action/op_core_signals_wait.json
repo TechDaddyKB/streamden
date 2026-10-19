@@ -1,0 +1,11 @@
+{
+  "id": "018f7a8c-0000-7000-8000-000000000019",
+  "enabled": true,
+  "kind": "op",
+  "type": "signals.wait",
+  "params": {
+    "name": "ready",
+    "timeoutMs": 5000
+  },
+  "saveAs": "signal"
+}

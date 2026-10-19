@@ -1,0 +1,15 @@
+{
+  "id": "018f7a8c-1111-7000-8000-000000000003",
+  "type": "commands.triggered",
+  "enabled": true,
+  "unresolved": false,
+  "alwaysRun": false,
+  "filters": [
+    {
+      "field": "command",
+      "op": "eq",
+      "value": "018f7a8c-9999-7000-8000-000000000001"
+    }
+  ],
+  "config": {}
+}

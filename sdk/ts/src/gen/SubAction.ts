@@ -6,6 +6,7 @@ import type { CodeLang } from "./CodeLang";
 import type { CodeSource } from "./CodeSource";
 import type { Condition } from "./Condition";
 import type { NodeId } from "./NodeId";
+import type { OnError } from "./OnError";
 import type { PluginId } from "./PluginId";
 import type { RunMode } from "./RunMode";
 import type { Template } from "./Template";
@@ -32,7 +33,12 @@ weight?: number,
 /**
  * Author's note.
  */
-note?: string, } & ({ "kind": "op", 
+note?: string, 
+/**
+ * What a failure of this node does to the run (A1); default `stop`. Authorization and approval
+ * failures always stop the run whatever this says (§8.8 rule 3).
+ */
+onError?: OnError, } & ({ "kind": "op", 
 /**
  * Parameters, validated against the operation's authoring schema at save time and its invocation
  * schema after rendering (§10.1).
@@ -98,6 +104,28 @@ default: Array<SubAction>, } | { "kind": "while",
  * The condition, evaluated before every iteration.
  */
 condition: Condition, 
+/**
+ * Safety bound on iterations; absent means the engine default (spec 03).
+ */
+maxIterations?: number, 
+/**
+ * The loop body.
+ */
+children: Array<SubAction>, } | { "kind": "for_each", 
+/**
+ * The collection: a literal, or one `{…}` form rendered once per loop to an array (element
+ * order) or an object (`{ key, value }` pairs in sorted key order). `null` or a missing value is
+ * zero iterations; any other scalar fails the node with `INVALID_PARAMS` (`not_iterable`).
+ */
+items: TemplateOr<JsonValue>, 
+/**
+ * The run arg that receives the current element.
+ */
+itemVar: string, 
+/**
+ * The run arg that receives the 0-based index, when wanted.
+ */
+indexVar?: string, 
 /**
  * Safety bound on iterations; absent means the engine default (spec 03).
  */

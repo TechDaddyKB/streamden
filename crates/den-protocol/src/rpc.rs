@@ -450,6 +450,8 @@ error_codes! {
     PAYLOAD_TOO_LARGE = "PAYLOAD_TOO_LARGE", JSONRPC_APPLICATION_ERROR, "Size limit exceeded.";
     /// Unsupported `rpcVersion` on REST (WS closes with 4002); `details.supported` gives the range.
     UNSUPPORTED_VERSION = "UNSUPPORTED_VERSION", JSONRPC_APPLICATION_ERROR, "Unsupported rpcVersion on REST (WS closes with 4002); details.supported gives the range.";
+    /// Engine fault that is not the caller's doing (`details.reason`); nothing is retried, the audit log records it (A8).
+    INTERNAL = "INTERNAL", JSONRPC_APPLICATION_ERROR, "Engine fault that is not the caller's doing (storage error, lost worker, bug; details.reason); the call or run fails, nothing is retried, the audit log records it. Sent with -32000; -32603 stays reserved for envelope-level faults.";
 }
 
 impl ErrorCode {
@@ -799,6 +801,11 @@ mod tests {
             ErrorCode::new("SOMETHING_NEW").jsonrpc_code(),
             JSONRPC_APPLICATION_ERROR
         );
-        assert_eq!(ErrorCode::TABLE.len(), 17);
+        assert_eq!(ErrorCode::TABLE.len(), 18);
+        assert_eq!(
+            ErrorCode::new(ErrorCode::INTERNAL).jsonrpc_code(),
+            JSONRPC_APPLICATION_ERROR,
+            "INTERNAL is an application error, not the -32603 envelope fault (§8.5)"
+        );
     }
 }

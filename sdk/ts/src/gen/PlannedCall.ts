@@ -35,4 +35,9 @@ argsHash: Sha256,
  * Params paths (as in `fieldErrors.path`) whose binding render references any sentinel; part of the plan
  * identity and shown to the approver.
  */
-dynamicFields: Array<string>, };
+dynamicFields: Array<string>, 
+/**
+ * Params paths whose render references a tainted source (spec 03 §21); shown to the approver inside
+ * the untrusted wrapper, not part of the plan identity (A10).
+ */
+untrustedFields: Array<string>, };

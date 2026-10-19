@@ -14,7 +14,7 @@ use std::error::Error;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use den_protocol::catalog::{Catalog, ResultShape};
+use den_protocol::catalog::Catalog;
 use den_protocol::codegen::{self, ProtocolDocument};
 use serde_json::Value;
 
@@ -104,97 +104,17 @@ fn lint_catalog() -> Result<()> {
     Ok(())
 }
 
-/// A validation failure without the instance: the values checked are the authored ones, secrets
-/// exposed, and the validator's `Display` would echo them into CI output.
-fn describe(e: &jsonschema::ValidationError<'_>) -> String {
-    format!(
-        "{:?} at instance path {:?}",
-        e.kind(),
-        e.instance_path().as_str()
-    )
-}
-
-/// Examples are tests (§8.1, §17.2): every example's params validate against the invocation schema and
-/// its result against exactly the shape it declares. The values checked are the authored ones (a typed
-/// example keeps them aside with secrets exposed; its published form is already withheld, §3).
+/// Examples are tests (§8.1, §17.2); the validator lives in `den_protocol::codegen` so the crate's tests
+/// and this binary check the same thing and describe failures the same way (without the instance: the
+/// values checked are the authored ones, secrets exposed; DEN-53).
 fn validate_examples(doc: &ProtocolDocument) -> Result<()> {
-    let mut failures = Vec::new();
-    for (name, entry) in &doc.operations {
-        let params_schema = doc.schema_at(&format!("/operations/{name}/params"));
-        let params_validator = jsonschema::validator_for(&params_schema)
-            .map_err(|e| format!("operation {name}: params schema does not compile: {e}"))?;
-        let shapes: Vec<(ResultShape, String)> = [
-            (ResultShape::Normal, format!("/operations/{name}/result")),
-            (
-                ResultShape::DryRun,
-                format!("/operations/{name}/dryRunResult"),
-            ),
-            (
-                ResultShape::Draft,
-                format!("/operations/{name}/draftResult"),
-            ),
-        ]
-        .into_iter()
-        .filter(|(shape, _)| match shape {
-            ResultShape::Normal => true,
-            ResultShape::DryRun => entry.dry_run_result.is_some(),
-            ResultShape::Draft => entry.draft_result.is_some(),
-        })
-        .collect();
-        let validators: Vec<(ResultShape, jsonschema::Validator)> = shapes
-            .iter()
-            .map(|(shape, pointer)| {
-                jsonschema::validator_for(&doc.schema_at(pointer))
-                    .map(|v| (*shape, v))
-                    .map_err(|e| format!("operation {name}: {pointer} does not compile: {e}"))
-            })
-            .collect::<std::result::Result<_, _>>()?;
-        for example in &entry.def.examples {
-            let label = format!("operation {name}, example {:?}", example.title);
-            let (params, result) = (example.authored_params(), example.authored_result());
-            if let Err(e) = params_validator.validate(params) {
-                failures.push(format!("{label}: params invalid: {}", describe(&e)));
-            }
-            for (shape, validator) in &validators {
-                let valid = validator.is_valid(result);
-                let expected = *shape == example.shape;
-                if expected && !valid {
-                    let e = validator
-                        .validate(result)
-                        .err()
-                        .map(|e| describe(&e))
-                        .unwrap_or_default();
-                    failures.push(format!(
-                        "{label}: result does not match its {shape:?} shape: {e}"
-                    ));
-                }
-                if !expected && valid && entry.dry_run_result.is_some() {
-                    failures.push(format!(
-                        "{label}: result also matches the {shape:?} shape; shapes must be disjoint"
-                    ));
-                }
-            }
-        }
-    }
-    for (r#type, entry) in &doc.events {
-        let schema = doc.schema_at(&format!("/events/{type}/payload"));
-        let validator = jsonschema::validator_for(&schema)
-            .map_err(|e| format!("event {type}: payload schema does not compile: {e}"))?;
-        for i in 0..entry.def.examples.len() {
-            if let Err(e) = validator.validate(entry.def.authored_example(i)) {
-                failures.push(format!("event {type}, example {i}: {}", describe(&e)));
-            }
-        }
-    }
-    if failures.is_empty() {
-        Ok(())
-    } else {
-        Err(format!(
+    codegen::validate_examples(doc).map_err(|failures| {
+        format!(
             "example validation failed:\n  - {}",
             failures.join("\n  - ")
         )
-        .into())
-    }
+        .into()
+    })
 }
 
 fn codegen_write() -> Result<()> {

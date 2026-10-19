@@ -5,6 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::ops::RangeInclusive;
 
 use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
@@ -15,6 +16,7 @@ use crate::domain::FilterOp;
 use crate::ids::{EventType, OperationName, Scope};
 use crate::shared::{Os, RiskTier};
 use crate::version::is_protocol_method;
+use crate::version::{RPC_VERSION, RPC_VERSION_MIN};
 
 /// A user-facing string. In plugin manifests it may hold `%key%` placeholders resolved from the plugin's
 /// localisation files (§11); these are never templates.
@@ -387,13 +389,100 @@ pub struct FilterableField {
     pub field: String,
     /// Allowed operators.
     pub ops: Vec<FilterOp>,
-    /// An operation name whose result feeds the value picker, when the field has known values.
+    /// An operation whose result feeds the value picker, when the field has known values.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub options_from: Option<String>,
-    /// Rank used by spec 03's "specific beats any" precedence; higher is more specific.
-    #[serde(default)]
+    pub options_from: Option<OperationName>,
+    /// Rank spec 03 §6.3 multiplies by the operator weight for "specific beats any" precedence; higher is
+    /// more specific. Default 1 (A5); `core.custom.name` is 4 (§5.2).
+    #[serde(default = "FilterableField::default_specificity")]
     pub specificity: u32,
+    /// `eq`, `ne`, `in` and `not_in` compare strings case-insensitively for this field (A5; `contains`
+    /// is case-insensitive regardless, spec 03 §6.2).
+    #[serde(default)]
+    pub case_insensitive: bool,
+}
+
+impl FilterableField {
+    /// The default `specificity` (A5).
+    pub const DEFAULT_SPECIFICITY: u32 = 1;
+
+    fn default_specificity() -> u32 {
+        Self::DEFAULT_SPECIFICITY
+    }
+
+    /// A field with the default `specificity` and no picker.
+    pub fn new(field: impl Into<String>, ops: Vec<FilterOp>) -> Self {
+        Self {
+            field: field.into(),
+            ops,
+            options_from: None,
+            specificity: Self::DEFAULT_SPECIFICITY,
+            case_insensitive: false,
+        }
+    }
+}
+
+/// A pure payload version function (§5.2, A13): an upgrade `(type, from, to)` with `from < to` maps a
+/// stored payload of the older version to the newer shape, a downgrade maps the other way. Like §7.3
+/// migrations they never do I/O; a payload a function cannot map is an `Err` the caller turns into
+/// `INVALID_STATE` (`details.reason = "payload_version"`).
+pub type PayloadVersionFn = fn(Value) -> Result<Value, String>;
+
+/// The registered upgrade and downgrade of one payload version step `from → to` (`from < to`).
+#[derive(Clone, Copy, Default)]
+pub struct PayloadVersionStep {
+    /// Maps a payload of version `from` to version `to`.
+    pub upgrade: Option<PayloadVersionFn>,
+    /// Maps a payload of version `to` back to version `from`.
+    pub downgrade: Option<PayloadVersionFn>,
+}
+
+impl fmt::Debug for PayloadVersionStep {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PayloadVersionStep")
+            .field("upgrade", &self.upgrade.is_some())
+            .field("downgrade", &self.downgrade.is_some())
+            .finish()
+    }
+}
+
+/// Which payload version each `rpcVersion` delivers for one core event type, and the functions that
+/// move a payload between those versions (§5.2). Each `rpcVersion` fixes exactly one payload version;
+/// consecutive distinct versions in the table are the steps that need both functions (§9.7, A13).
+#[derive(Debug, Clone, Default)]
+pub struct PayloadVersions {
+    /// `rpcVersion` → `payloadVersion`, for every served `rpcVersion`. Empty means every served
+    /// `rpcVersion` delivers the event's current `payloadVersion`.
+    pub by_rpc_version: BTreeMap<u32, u32>,
+    /// Registered functions keyed `(from, to)` with `from < to`.
+    pub steps: BTreeMap<(u32, u32), PayloadVersionStep>,
+}
+
+impl PayloadVersions {
+    /// The table `protocol.json` publishes under `events.<type>.payloadVersions`: every served
+    /// `rpcVersion` mapped to the payload version it delivers (`current` where none was registered).
+    pub fn table(&self, current: u32) -> BTreeMap<u32, u32> {
+        self.table_for(RPC_VERSION_MIN..=RPC_VERSION, current)
+    }
+
+    /// [`PayloadVersions::table`] for an explicit range of served `rpcVersion`s.
+    pub fn table_for(&self, served: RangeInclusive<u32>, current: u32) -> BTreeMap<u32, u32> {
+        served
+            .map(|rpc| {
+                (
+                    rpc,
+                    self.by_rpc_version.get(&rpc).copied().unwrap_or(current),
+                )
+            })
+            .collect()
+    }
+
+    /// The distinct payload versions a table delivers, ascending.
+    pub fn delivered(table: &BTreeMap<u32, u32>) -> Vec<u32> {
+        let set: BTreeSet<u32> = table.values().copied().collect();
+        set.into_iter().collect()
+    }
 }
 
 /// Why a registration was refused.
@@ -405,6 +494,15 @@ pub enum CatalogError {
     DuplicateEvent(String),
     /// The name is a protocol method (§12), which is never a catalog operation.
     ProtocolMethod(String),
+    /// A payload version step must go from a lower to a higher version.
+    InvalidPayloadStep {
+        /// The event type.
+        r#type: String,
+        /// The lower version.
+        from: u32,
+        /// The higher version.
+        to: u32,
+    },
 }
 
 impl fmt::Display for CatalogError {
@@ -415,6 +513,10 @@ impl fmt::Display for CatalogError {
             Self::ProtocolMethod(n) => write!(
                 f,
                 "{n:?} is a protocol method and cannot be a catalog operation"
+            ),
+            Self::InvalidPayloadStep { r#type, from, to } => write!(
+                f,
+                "event {type:?}: a payload version step needs from < to, got {from} → {to}"
             ),
         }
     }
@@ -431,6 +533,7 @@ pub struct Catalog {
     operations: BTreeMap<OperationName, OperationDef>,
     events: BTreeMap<EventType, EventDef>,
     types: BTreeSet<String>,
+    payload_versions: BTreeMap<EventType, PayloadVersions>,
 }
 
 impl Default for Catalog {
@@ -445,6 +548,7 @@ impl fmt::Debug for Catalog {
             .field("operations", &self.operations.keys().collect::<Vec<_>>())
             .field("events", &self.events.keys().collect::<Vec<_>>())
             .field("types", &self.types)
+            .field("payload_versions", &self.payload_versions)
             .finish()
     }
 }
@@ -457,6 +561,7 @@ impl Catalog {
             operations: BTreeMap::new(),
             events: BTreeMap::new(),
             types: BTreeSet::new(),
+            payload_versions: BTreeMap::new(),
         }
     }
 
@@ -507,6 +612,85 @@ impl Catalog {
         }
         self.events.insert(def.r#type.clone(), def);
         Ok(())
+    }
+
+    /// Declares which payload version `rpc_version` delivers for `type` (§5.2): each `rpcVersion`
+    /// fixes exactly one payload version per core event type. Unregistered `rpcVersion`s deliver the
+    /// event's current `payloadVersion`. The event itself may be registered before or after.
+    pub fn register_payload_version(
+        &mut self,
+        r#type: EventType,
+        rpc_version: u32,
+        payload_version: u32,
+    ) {
+        self.payload_versions
+            .entry(r#type)
+            .or_default()
+            .by_rpc_version
+            .insert(rpc_version, payload_version);
+    }
+
+    /// Registers the upgrade function of the payload version step `from → to` (`from < to`) of
+    /// `type` (§5.2, A13): what `events.replay` runs to re-publish a stored payload of version `from`
+    /// through the current matcher.
+    pub fn register_payload_upgrade(
+        &mut self,
+        r#type: EventType,
+        from: u32,
+        to: u32,
+        f: PayloadVersionFn,
+    ) -> Result<(), CatalogError> {
+        self.payload_step(r#type, from, to)?.upgrade = Some(f);
+        Ok(())
+    }
+
+    /// Registers the downgrade function of the payload version step `from → to` (`from < to`) of
+    /// `type` (§5.2): what the engine runs to deliver a payload of version `to` to a session whose
+    /// `rpcVersion` maps to `from`.
+    pub fn register_payload_downgrade(
+        &mut self,
+        r#type: EventType,
+        from: u32,
+        to: u32,
+        f: PayloadVersionFn,
+    ) -> Result<(), CatalogError> {
+        self.payload_step(r#type, from, to)?.downgrade = Some(f);
+        Ok(())
+    }
+
+    fn payload_step(
+        &mut self,
+        r#type: EventType,
+        from: u32,
+        to: u32,
+    ) -> Result<&mut PayloadVersionStep, CatalogError> {
+        if from >= to {
+            return Err(CatalogError::InvalidPayloadStep {
+                r#type: r#type.to_string(),
+                from,
+                to,
+            });
+        }
+        Ok(self
+            .payload_versions
+            .entry(r#type)
+            .or_default()
+            .steps
+            .entry((from, to))
+            .or_default())
+    }
+
+    /// The payload version table and functions of `type`, as registered (empty when nothing was).
+    pub fn payload_versions(&self, r#type: &EventType) -> PayloadVersions {
+        self.payload_versions
+            .get(r#type)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Every event type with registered payload versions or functions.
+    pub fn payload_versions_registered(&self) -> &BTreeMap<EventType, PayloadVersions> {
+        &self.payload_versions
     }
 
     /// The registered operations, by name.

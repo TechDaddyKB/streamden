@@ -204,4 +204,8 @@ pub struct PlannedCall {
     /// identity and shown to the approver.
     #[serde(default)]
     pub dynamic_fields: Vec<String>,
+    /// Params paths whose render references a tainted source (spec 03 §21); shown to the approver inside
+    /// the untrusted wrapper, not part of the plan identity (A10).
+    #[serde(default)]
+    pub untrusted_fields: Vec<String>,
 }

@@ -1,0 +1,8 @@
+{
+  "id": "018f7a8c-0000-7000-8000-000000000017",
+  "enabled": true,
+  "kind": "for_each",
+  "items": "{globals.raiders}",
+  "itemVar": "item",
+  "children": []
+}

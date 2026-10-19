@@ -13,6 +13,9 @@
       "dynamicFields": [
         "/message"
       ],
+      "untrustedFields": [
+        "/message"
+      ],
       "target": "twitch:dallas",
       "description": "Send a chat message"
     }

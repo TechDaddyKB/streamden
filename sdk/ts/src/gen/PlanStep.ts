@@ -40,6 +40,11 @@ argsHash?: Sha256,
  */
 dynamicFields?: Array<string>, 
 /**
+ * Params paths whose render references a tainted source (spec 03 §21): shown to the approver inside
+ * the untrusted wrapper, not part of the plan identity (A10).
+ */
+untrustedFields?: Array<string>, 
+/**
  * A short description of the target (a scene name, a channel), when the operation has one.
  */
 target?: string, 

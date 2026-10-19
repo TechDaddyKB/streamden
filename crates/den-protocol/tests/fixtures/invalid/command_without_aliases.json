@@ -1,0 +1,37 @@
+{
+  "id": "018f7a8c-9999-7000-8000-000000000003",
+  "revision": 1,
+  "name": "Nameless",
+  "enabled": true,
+  "listed": false,
+  "aliases": [],
+  "mode": {
+    "kind": "basic",
+    "location": "exact"
+  },
+  "caseSensitive": false,
+  "sources": [],
+  "platforms": [],
+  "ignoreBotAccount": false,
+  "ignoreInternal": false,
+  "cooldown": {
+    "globalMs": 0,
+    "userMs": 0,
+    "exemptRoles": [
+      "broadcaster"
+    ]
+  },
+  "permissions": {
+    "mode": "allow",
+    "users": [],
+    "roles": [],
+    "groups": []
+  },
+  "counters": {
+    "persistGlobal": false,
+    "persistUser": false
+  },
+  "origin": {
+    "kind": "user"
+  }
+}

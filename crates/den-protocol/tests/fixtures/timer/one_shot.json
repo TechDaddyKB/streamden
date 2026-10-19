@@ -1,0 +1,11 @@
+{
+  "id": "018f7a8c-8888-7000-8000-000000000002",
+  "revision": 4,
+  "name": "Raid follow-up",
+  "enabled": false,
+  "intervalMs": 1000,
+  "repeat": false,
+  "origin": {
+    "kind": "user"
+  }
+}

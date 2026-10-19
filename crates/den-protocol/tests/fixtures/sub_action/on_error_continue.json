@@ -1,0 +1,11 @@
+{
+  "id": "018f7a8c-0000-7000-8000-000000000018",
+  "enabled": true,
+  "note": "Best effort",
+  "onError": "continue",
+  "kind": "op",
+  "type": "obs.set_scene",
+  "params": {
+    "scene": "BRB"
+  }
+}

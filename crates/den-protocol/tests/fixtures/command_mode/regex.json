@@ -1,0 +1,4 @@
+{
+  "kind": "regex",
+  "pattern": "^!so\\s+@?(?<target>\\w+)"
+}
