@@ -23,6 +23,15 @@ crate rules.
   `patternProperties` and `additionalProperties` are allowed on purpose: schemars emits `additionalProperties`
   for `HashMap<String, T>` (a map of named secrets is a common shape), and applicability there is the
   validator's own verdict, so forbidding them would cost expressiveness without adding safety.
+- `x-secret: false` is rejected by the lint everywhere: §3 marks with `true` only, and a `false` can only
+  hide a mark. `#[schemars(extend(...))]` on a field *replaces* top-level keys of that field's schema,
+  including everything an `#[schemars(inline)]` type brought with it, before any transform of this crate
+  runs: use `extend` for `x-` annotations only, never to set `x-secret: false` or a validation keyword
+  (`properties`, `required`, …) beside an inline type. The `DenyNullForOptional` transform lifts an
+  optional's surviving branch into the property only when the property holds nothing but annotations
+  (`x-secret` joined monotonically) and keeps it whole in `allOf` otherwise; a transform must never take
+  "the keys the other side lacks" and drop the rest. `tests/secret_invariant.rs` plants a sentinel at every
+  marked position of the authored schemas and runs the real pipeline; it is the net for this whole class.
 - Fixtures live in `tests/fixtures/<type>/*.json`: one per tagged-union variant, round-tripped and schema-validated
   by `tests/contract.rs`. Add a fixture for every new variant (Spec 02 §17.1). `schema/protocol.json` and
   `schema/plugin.schema.json` are golden snapshots: a type change fails `cargo test -p den-protocol` until you run

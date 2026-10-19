@@ -417,10 +417,13 @@ fn for_each_subschema(schema: &Value, path: &str, f: &mut impl FnMut(&str, &Map<
     }
 }
 
-/// Lints the `x-secret` marks of a schema (§3). A mark must be a boolean (publication fails closed on
-/// anything else, but the author should hear about it first). `x-secret: false` beside a `$ref` whose
-/// target is marked secret is a contradiction: secrecy is monotonic, nothing clears a mark the
-/// referenced type carries, and a `false` there would only mislead whoever reads the schema.
+/// Lints the `x-secret` marks of a schema (§3). A mark must be the boolean `true` (publication fails
+/// closed on anything else, but the author should hear about it first). `x-secret: false` is rejected
+/// wherever it appears: §3 defines the mark only as `true`, secrecy is monotonic so a `false` clears
+/// nothing, and the one effect it can have is to hide a mark, by misleading a reader when it sits
+/// beside a `$ref` to a marked type, or by erasing one outright when `#[schemars(extend(...))]` on a
+/// field replaces the keys an `#[schemars(inline)]` type's schema carried, before this crate sees the
+/// schema at all.
 fn lint_secret_marks(
     schema: &Value,
     path: &str,
@@ -430,12 +433,14 @@ fn lint_secret_marks(
     for_each_subschema(schema, path, &mut |at, obj| match obj.get("x-secret") {
         None | Some(Value::Bool(true)) => {}
         Some(Value::Bool(false)) => {
-            if let Some(name) = ref_name(obj)
-                && let Some(marked) = referenced_secret_type(&name, types)
-            {
-                err(format!(
+            let marked = ref_name(obj).and_then(|name| referenced_secret_type(&name, types));
+            match marked {
+                Some(marked) => err(format!(
                     "{at}: `x-secret: false` beside a $ref to `{marked}`, which is marked secret; secrecy is monotonic (§3) and the mark cannot be cleared here: drop the sibling"
-                ));
+                )),
+                None => err(format!(
+                    "{at}: `x-secret: false` has no effect (§3 marks with `true` only; secrecy is monotonic) and a field-level `extend` can erase an inline type's mark with it: drop it"
+                )),
             }
         }
         Some(other) => err(format!("{at}: x-secret must be a boolean, got {other}")),
@@ -698,7 +703,7 @@ fn resolve_ref<'a>(
 }
 
 /// Keys that annotate a schema rather than constrain it (plus every `x-` extension).
-fn is_annotation_key(key: &str) -> bool {
+pub(crate) fn is_annotation_key(key: &str) -> bool {
     matches!(
         key,
         "description"
@@ -750,7 +755,7 @@ pub fn merge_ref_target(property: &Map<String, Value>, target: &Value) -> Map<St
 /// monotonic: `true` on either side wins over `false`, and a malformed (non-boolean) mark on either
 /// side is kept as it is, so the publication walk still fails closed on it instead of seeing a clean
 /// boolean. `None` only when neither side carries a mark.
-fn merged_secret_mark(a: Option<&Value>, b: Option<&Value>) -> Option<Value> {
+pub(crate) fn merged_secret_mark(a: Option<&Value>, b: Option<&Value>) -> Option<Value> {
     let marks: Vec<&Value> = [a, b].into_iter().flatten().collect();
     if let Some(malformed) = marks.iter().find(|m| !m.is_boolean()) {
         return Some((*malformed).clone());
