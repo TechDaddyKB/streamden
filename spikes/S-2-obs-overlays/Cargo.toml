@@ -1,0 +1,15 @@
+[package]
+name = "s2-obs-overlays"
+version = "0.0.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+description = "Throwaway spike S-2 (DEN-3): overlays, docks and per-widget origins served to OBS"
+
+# Standalone: not part of any future workspace.
+[workspace]
+
+[dependencies]
+axum = { version = "0.8", features = ["ws"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }

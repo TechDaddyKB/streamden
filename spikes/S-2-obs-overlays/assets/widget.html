@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>S-2 widget origin probe</title>
+<style>
+  html, body { background: transparent; margin: 0; overflow: hidden; font: 600 26px/1.35 monospace; color: #fff; }
+  #card { margin: 12px; padding: 14px 18px; border-radius: 14px; background: rgba(0,0,0,.6); border-left: 14px solid var(--c); }
+  #card h1 { margin: 0 0 6px; font-size: 34px; color: var(--c); }
+  .bad { color: #f87171; } .ok { color: #4ade80; }
+</style>
+</head>
+<body>
+<div id="card"><h1 id="title">widget</h1><div id="out">running…</div></div>
+<script>
+'use strict';
+const params = new URLSearchParams(location.search);
+// Two origin schemes under test: http://w-<id>.localhost:<app-port>/ and http://127.0.0.1:<widget-port>/
+const id = location.hostname.endsWith('.localhost') ? location.hostname.split('.')[0].replace(/^w-/, '') : 'p' + location.port;
+const appPort = params.get('app') || location.port;
+const ctx = window.top === window ? 'top' : 'iframe';
+const run = params.get('run') || 'r0';
+const colors = { a: '#2dd4bf', b: '#fbbf24', c: '#f87171' };
+document.documentElement.style.setProperty('--c', colors[id] || '#a78bfa');
+document.getElementById('title').textContent = `w-${id} (${ctx})`;
+
+const errors = [];
+addEventListener('error', e => errors.push(String(e.message || (e.target && (e.target.src || e.target.href)))), true);
+addEventListener('unhandledrejection', e => errors.push('unhandled: ' + e.reason));
+addEventListener('securitypolicyviolation', e => errors.push('csp: ' + e.violatedDirective + ' ' + e.blockedURI));
+
+function report(kind, data) {
+  // text/plain keeps it a CORS "simple" request, so it also works from an opaque (sandboxed) origin.
+  return fetch('/report', { method: 'POST', headers: { 'content-type': 'text/plain' }, keepalive: true,
+    body: JSON.stringify({ kind, widget: id, ctx, run, page: location.pathname, t: Date.now(), ...data }) })
+    .catch(e => errors.push('report failed: ' + e));
+}
+
+function storageProbe() {
+  try {
+    const keysBefore = Object.keys(localStorage).sort();
+    const history = JSON.parse(localStorage.getItem('den.s2.loads') || '[]');
+    const ownerBefore = localStorage.getItem('den.s2.owner');
+    history.push({ run, ctx, t: Date.now() });
+    localStorage.setItem('den.s2.loads', JSON.stringify(history));
+    localStorage.setItem('den.s2.owner', id);
+    localStorage.setItem('den.s2.marker.' + id, String(Date.now()));
+    const foreignMarkers = keysBefore.filter(k => k.startsWith('den.s2.marker.') && k !== 'den.s2.marker.' + id);
+    return { ok: true, loadsBefore: history.length - 1, history, ownerBefore, keysBefore, foreignMarkers,
+      ownerConflict: ownerBefore !== null && ownerBefore !== id };
+  } catch (e) { return { ok: false, error: String(e) }; }
+}
+function sessionProbe() {
+  try { const n = Number(sessionStorage.getItem('den.s2.n') || 0) + 1; sessionStorage.setItem('den.s2.n', n); return { ok: true, n }; }
+  catch (e) { return { ok: false, error: String(e) }; }
+}
+function cookieProbe() {
+  try {
+    const before = document.cookie;
+    document.cookie = `den_s2_${id}=${Date.now()}; Max-Age=86400; Path=/; SameSite=Lax`;
+    return { ok: true, before, after: document.cookie };
+  } catch (e) { return { ok: false, error: String(e) }; }
+}
+function idbProbe() {
+  return new Promise(resolve => {
+    try {
+      const req = indexedDB.open('den-s2', 1);
+      req.onupgradeneeded = () => req.result.createObjectStore('kv');
+      req.onerror = () => resolve({ ok: false, error: String(req.error) });
+      req.onsuccess = () => {
+        const db = req.result, tx = db.transaction('kv', 'readwrite'), store = tx.objectStore('kv');
+        const get = store.get('n');
+        get.onsuccess = () => { const n = (get.result || 0) + 1; store.put(n, 'n'); tx.oncomplete = () => resolve({ ok: true, n }); };
+        tx.onerror = () => resolve({ ok: false, error: String(tx.error) });
+      };
+    } catch (e) { resolve({ ok: false, error: String(e) }); }
+  });
+}
+async function crossOriginPing() {
+  // Non-simple request (JSON) to the app origin: forces a CORS preflight, logged server-side.
+  const app = `http://127.0.0.1:${appPort}`;
+  try {
+    const r = await fetch(`${app}/probe/ping-from-w-${id}-${ctx}.json`, { method: 'POST',
+      headers: { 'content-type': 'application/json' }, body: '{}' });
+    return { ok: r.ok, status: r.status };
+  } catch (e) { return { ok: false, error: String(e) }; }
+}
+function wsProbe() {
+  return new Promise(resolve => {
+    const started = performance.now();
+    let ws;
+    try { ws = new WebSocket(`ws://${location.host}/ws?client=widget-${id}-${ctx}`); }
+    catch (e) { resolve({ ok: false, error: String(e) }); return; }
+    const timer = setTimeout(() => resolve({ ok: false, error: 'timeout' }), 4000);
+    ws.onmessage = m => { clearTimeout(timer); resolve({ ok: true, first: JSON.parse(m.data).type, ms: Math.round(performance.now() - started) }); ws.close(); };
+    ws.onerror = () => { clearTimeout(timer); resolve({ ok: false, error: 'ws error' }); };
+  });
+}
+
+(async () => {
+  const ls = storageProbe();
+  const res = {
+    origin: location.origin, href: location.href, isSecureContext, ua: navigator.userAgent,
+    obsstudio: !!window.obsstudio, localStorage: ls, sessionStorage: sessionProbe(), cookie: cookieProbe(),
+    indexedDB: await idbProbe(), crossOriginPing: await crossOriginPing(), ws: await wsProbe(),
+    storageEstimate: await (navigator.storage && navigator.storage.estimate ? navigator.storage.estimate().catch(e => String(e)) : null),
+  };
+  res.errors = errors;
+  await report('widget.result', res);
+  const f = (b) => b ? '<span class="ok">ok</span>' : '<span class="bad">FAIL</span>';
+  document.getElementById('out').innerHTML =
+    `origin ${location.origin}<br>` +
+    `localStorage ${f(ls.ok)} · loads before: ${ls.ok ? ls.loadsBefore : '-'} · foreign keys: ${ls.ok ? (ls.foreignMarkers.length || 'none') : ls.error}<br>` +
+    `cookie ${f(res.cookie.ok && res.cookie.after.includes('den_s2_' + id))} · idb ${f(res.indexedDB.ok)} · ws ${f(res.ws.ok)} · x-origin fetch ${f(res.crossOriginPing.ok)}<br>` +
+    `run ${run} · secure ctx ${isSecureContext}`;
+})();
+</script>
+<!-- control probe: cross-origin loopback image (widget origin -> app origin) -->
+<img alt="" id="xprobe" width="1" height="1" style="position:absolute;opacity:0">
+<script>document.getElementById('xprobe').src = `http://127.0.0.1:${appPort}/probe/img-from-w-${id}`;</script>
+</body>
+</html>

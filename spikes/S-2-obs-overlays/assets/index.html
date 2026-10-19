@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>S-2 spike server</title></head>
+<body style="font-family:system-ui;background:#111;color:#eee">
+<h1>StreamDen spike S-2</h1>
+<ul>
+  <li><a href="/o/alerts?debug=1">/o/alerts</a> transparent overlay (WebSocket events)</li>
+  <li><a href="/o/widgets">/o/widgets</a> overlay that iframes per-widget origins</li>
+  <li><a href="/dock/chat">/dock/chat</a> chat dock</li>
+  <li><a id="wa">w-a.localhost</a> · <a id="wb">w-b.localhost</a> per-widget origin probes</li>
+  <li><a id="se">w-se.localhost/sew/se-sample/</a> StreamElements-style sample</li>
+  <li><a href="/report">/report</a> machine-readable log</li>
+</ul>
+<script>
+const p = location.port;
+document.getElementById('wa').href = `http://w-a.localhost:${p}/`;
+document.getElementById('wb').href = `http://w-b.localhost:${p}/`;
+document.getElementById('se').href = `http://w-se.localhost:${p}/sew/se-sample/`;
+</script>
+</body>
+</html>
