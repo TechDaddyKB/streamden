@@ -1,0 +1,181 @@
+.picker {
+  --bg: #16171d;
+  --panel: #1e2028;
+  --border: #2e313d;
+  --text: #e4e6ee;
+  --muted: #9095a6;
+  --accent: #8b7cf6;
+  --accent-bg: #2c2750;
+  --mark: #f5c451;
+
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 34rem;
+  height: 32rem;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgb(0 0 0 / 45%);
+  font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
+  overflow: hidden;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.6rem 0.8rem 0.4rem;
+}
+
+.title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.close {
+  background: none;
+  border: 0;
+  color: var(--muted);
+  font-size: 1.3rem;
+  line-height: 1;
+  border-radius: 4px;
+  padding: 0.1rem 0.4rem;
+  cursor: pointer;
+}
+
+.close:hover,
+.close:focus-visible {
+  color: var(--text);
+  background: var(--border);
+}
+
+.search {
+  margin: 0 0.8rem;
+  padding: 0.45rem 0.6rem;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font: inherit;
+}
+
+.search:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.status {
+  min-height: 1.3rem;
+  padding: 0.2rem 0.9rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.tree {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 0.4rem 0.4rem;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 1.75rem;
+  padding-right: 0.5rem;
+  border-radius: 5px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.row:hover {
+  background: #262934;
+}
+
+.row:focus {
+  outline: none;
+}
+
+.current {
+  background: var(--accent-bg);
+}
+
+.tree:focus-within .current {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.branch {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.leaf {
+  color: var(--text);
+}
+
+.chevron {
+  flex: none;
+  width: 0.9rem;
+  color: var(--muted);
+  text-align: center;
+}
+
+.label {
+  flex: 0 1 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.star {
+  margin-left: auto;
+  color: var(--muted);
+  opacity: 0;
+  padding: 0 0.2rem;
+  font-size: 1rem;
+}
+
+.row:hover .star,
+.current .star,
+.starOn {
+  opacity: 1;
+}
+
+.starOn {
+  color: var(--mark);
+}
+
+.mark {
+  background: none;
+  color: var(--mark);
+  font-weight: 700;
+}
+
+.footer {
+  border-top: 1px solid var(--border);
+  padding: 0.45rem 0.8rem 0.55rem;
+  background: var(--bg);
+}
+
+.description {
+  margin: 0 0 0.2rem;
+  font-size: 0.85rem;
+}
+
+.hint {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

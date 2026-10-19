@@ -1,0 +1,1643 @@
+{
+  "version": 1,
+  "items": [
+    {
+      "id": "core.logic.if-else",
+      "name": "If / Else",
+      "category": "Core",
+      "group": "Logic",
+      "description": "If / Else (Core · Logic).",
+      "keywords": []
+    },
+    {
+      "id": "core.logic.switch",
+      "name": "Switch",
+      "category": "Core",
+      "group": "Logic",
+      "description": "Switch (Core · Logic).",
+      "keywords": []
+    },
+    {
+      "id": "core.logic.break",
+      "name": "Break",
+      "category": "Core",
+      "group": "Logic",
+      "description": "Break (Core · Logic).",
+      "keywords": []
+    },
+    {
+      "id": "core.logic.wait-for-condition",
+      "name": "Wait for Condition",
+      "category": "Core",
+      "group": "Logic",
+      "description": "Wait for Condition (Core · Logic).",
+      "keywords": []
+    },
+    {
+      "id": "core.logic.run-action",
+      "name": "Run Action",
+      "category": "Core",
+      "group": "Logic",
+      "description": "Run Action (Core · Logic).",
+      "keywords": []
+    },
+    {
+      "id": "core.logic.run-action-by-name",
+      "name": "Run Action by Name",
+      "category": "Core",
+      "group": "Logic",
+      "description": "Run Action by Name (Core · Logic).",
+      "keywords": []
+    },
+    {
+      "id": "core.logic.enable-action",
+      "name": "Enable Action",
+      "category": "Core",
+      "group": "Logic",
+      "description": "Enable Action (Core · Logic).",
+      "keywords": []
+    },
+    {
+      "id": "core.logic.disable-action",
+      "name": "Disable Action",
+      "category": "Core",
+      "group": "Logic",
+      "description": "Disable Action (Core · Logic).",
+      "keywords": []
+    },
+    {
+      "id": "core.logic.set-action-queue-state",
+      "name": "Set Action Queue State",
+      "category": "Core",
+      "group": "Logic",
+      "description": "Set Action Queue State (Core · Logic).",
+      "keywords": []
+    },
+    {
+      "id": "core.logic.comment",
+      "name": "Comment",
+      "category": "Core",
+      "group": "Logic",
+      "description": "Comment (Core · Logic).",
+      "keywords": []
+    },
+    {
+      "id": "core.variables.set-argument",
+      "name": "Set Argument",
+      "category": "Core",
+      "group": "Variables",
+      "description": "Set Argument (Core · Variables).",
+      "keywords": []
+    },
+    {
+      "id": "core.variables.set-global-variable",
+      "name": "Set Global Variable",
+      "category": "Core",
+      "group": "Variables",
+      "description": "Set Global Variable (Core · Variables).",
+      "keywords": []
+    },
+    {
+      "id": "core.variables.get-global-variable",
+      "name": "Get Global Variable",
+      "category": "Core",
+      "group": "Variables",
+      "description": "Get Global Variable (Core · Variables).",
+      "keywords": []
+    },
+    {
+      "id": "core.variables.unset-global-variable",
+      "name": "Unset Global Variable",
+      "category": "Core",
+      "group": "Variables",
+      "description": "Unset Global Variable (Core · Variables).",
+      "keywords": []
+    },
+    {
+      "id": "core.variables.increment-variable",
+      "name": "Increment Variable",
+      "category": "Core",
+      "group": "Variables",
+      "description": "Increment Variable (Core · Variables).",
+      "keywords": []
+    },
+    {
+      "id": "core.variables.set-user-variable",
+      "name": "Set User Variable",
+      "category": "Core",
+      "group": "Variables",
+      "description": "Set User Variable (Core · Variables).",
+      "keywords": []
+    },
+    {
+      "id": "core.variables.get-user-variable",
+      "name": "Get User Variable",
+      "category": "Core",
+      "group": "Variables",
+      "description": "Get User Variable (Core · Variables).",
+      "keywords": []
+    },
+    {
+      "id": "core.variables.clear-user-variables",
+      "name": "Clear User Variables",
+      "category": "Core",
+      "group": "Variables",
+      "description": "Clear User Variables (Core · Variables).",
+      "keywords": []
+    },
+    {
+      "id": "core.delays.delay",
+      "name": "Delay",
+      "category": "Core",
+      "group": "Delays",
+      "description": "Delay (Core · Delays).",
+      "keywords": [
+        "wait",
+        "sleep",
+        "pause"
+      ]
+    },
+    {
+      "id": "core.delays.random-delay",
+      "name": "Random Delay",
+      "category": "Core",
+      "group": "Delays",
+      "description": "Random Delay (Core · Delays).",
+      "keywords": []
+    },
+    {
+      "id": "core.delays.wait-until-time",
+      "name": "Wait Until Time",
+      "category": "Core",
+      "group": "Delays",
+      "description": "Wait Until Time (Core · Delays).",
+      "keywords": []
+    },
+    {
+      "id": "core.files.read-line-from-file",
+      "name": "Read Line From File",
+      "category": "Core",
+      "group": "Files",
+      "description": "Read Line From File (Core · Files).",
+      "keywords": []
+    },
+    {
+      "id": "core.files.write-to-file",
+      "name": "Write To File",
+      "category": "Core",
+      "group": "Files",
+      "description": "Write To File (Core · Files).",
+      "keywords": []
+    },
+    {
+      "id": "core.files.append-to-file",
+      "name": "Append To File",
+      "category": "Core",
+      "group": "Files",
+      "description": "Append To File (Core · Files).",
+      "keywords": []
+    },
+    {
+      "id": "core.files.delete-file",
+      "name": "Delete File",
+      "category": "Core",
+      "group": "Files",
+      "description": "Delete File (Core · Files).",
+      "keywords": []
+    },
+    {
+      "id": "core.files.read-random-line",
+      "name": "Read Random Line",
+      "category": "Core",
+      "group": "Files",
+      "description": "Read Random Line (Core · Files).",
+      "keywords": []
+    },
+    {
+      "id": "core.network.fetch-url",
+      "name": "Fetch URL",
+      "category": "Core",
+      "group": "Network",
+      "description": "Fetch URL (Core · Network).",
+      "keywords": [
+        "http get",
+        "request",
+        "api"
+      ]
+    },
+    {
+      "id": "core.network.http-post",
+      "name": "HTTP POST",
+      "category": "Core",
+      "group": "Network",
+      "description": "HTTP POST (Core · Network).",
+      "keywords": []
+    },
+    {
+      "id": "core.network.websocket-send",
+      "name": "WebSocket Send",
+      "category": "Core",
+      "group": "Network",
+      "description": "WebSocket Send (Core · Network).",
+      "keywords": []
+    },
+    {
+      "id": "core.network.udp-send",
+      "name": "UDP Send",
+      "category": "Core",
+      "group": "Network",
+      "description": "UDP Send (Core · Network).",
+      "keywords": []
+    },
+    {
+      "id": "core.network.open-url-in-browser",
+      "name": "Open URL in Browser",
+      "category": "Core",
+      "group": "Network",
+      "description": "Open URL in Browser (Core · Network).",
+      "keywords": []
+    },
+    {
+      "id": "core.system.run-program",
+      "name": "Run Program",
+      "category": "Core",
+      "group": "System",
+      "description": "Run Program (Core · System).",
+      "keywords": []
+    },
+    {
+      "id": "core.system.send-keystroke",
+      "name": "Send Keystroke",
+      "category": "Core",
+      "group": "System",
+      "description": "Send Keystroke (Core · System).",
+      "keywords": []
+    },
+    {
+      "id": "core.system.play-sound",
+      "name": "Play Sound",
+      "category": "Core",
+      "group": "System",
+      "description": "Play Sound (Core · System).",
+      "keywords": []
+    },
+    {
+      "id": "core.system.show-desktop-notification",
+      "name": "Show Desktop Notification",
+      "category": "Core",
+      "group": "System",
+      "description": "Show Desktop Notification (Core · System).",
+      "keywords": []
+    },
+    {
+      "id": "core.system.set-clipboard",
+      "name": "Set Clipboard",
+      "category": "Core",
+      "group": "System",
+      "description": "Set Clipboard (Core · System).",
+      "keywords": []
+    },
+    {
+      "id": "core.system.log-message",
+      "name": "Log Message",
+      "category": "Core",
+      "group": "System",
+      "description": "Log Message (Core · System).",
+      "keywords": []
+    },
+    {
+      "id": "core.scripting.execute-javascript",
+      "name": "Execute JavaScript",
+      "category": "Core",
+      "group": "Scripting",
+      "description": "Execute JavaScript (Core · Scripting).",
+      "keywords": [
+        "js",
+        "code",
+        "script"
+      ]
+    },
+    {
+      "id": "core.scripting.execute-python",
+      "name": "Execute Python",
+      "category": "Core",
+      "group": "Scripting",
+      "description": "Execute Python (Core · Scripting).",
+      "keywords": [
+        "py",
+        "code",
+        "script"
+      ]
+    },
+    {
+      "id": "core.scripting.evaluate-expression",
+      "name": "Evaluate Expression",
+      "category": "Core",
+      "group": "Scripting",
+      "description": "Evaluate Expression (Core · Scripting).",
+      "keywords": []
+    },
+    {
+      "id": "core.math.random-number",
+      "name": "Random Number",
+      "category": "Core",
+      "group": "Math",
+      "description": "Random Number (Core · Math).",
+      "keywords": []
+    },
+    {
+      "id": "core.math.round-number",
+      "name": "Round Number",
+      "category": "Core",
+      "group": "Math",
+      "description": "Round Number (Core · Math).",
+      "keywords": []
+    },
+    {
+      "id": "core.math.calculate",
+      "name": "Calculate",
+      "category": "Core",
+      "group": "Math",
+      "description": "Calculate (Core · Math).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.chat.send-message",
+      "name": "Send Message",
+      "category": "Twitch",
+      "group": "Chat",
+      "description": "Send Message (Twitch · Chat).",
+      "keywords": [
+        "chat",
+        "say",
+        "post"
+      ]
+    },
+    {
+      "id": "twitch.chat.send-reply",
+      "name": "Send Reply",
+      "category": "Twitch",
+      "group": "Chat",
+      "description": "Send Reply (Twitch · Chat).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.chat.send-announcement",
+      "name": "Send Announcement",
+      "category": "Twitch",
+      "group": "Chat",
+      "description": "Send Announcement (Twitch · Chat).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.chat.delete-message",
+      "name": "Delete Message",
+      "category": "Twitch",
+      "group": "Chat",
+      "description": "Delete Message (Twitch · Chat).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.chat.clear-chat",
+      "name": "Clear Chat",
+      "category": "Twitch",
+      "group": "Chat",
+      "description": "Clear Chat (Twitch · Chat).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.chat.set-emote-only-mode",
+      "name": "Set Emote-Only Mode",
+      "category": "Twitch",
+      "group": "Chat",
+      "description": "Set Emote-Only Mode (Twitch · Chat).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.chat.set-follower-only-mode",
+      "name": "Set Follower-Only Mode",
+      "category": "Twitch",
+      "group": "Chat",
+      "description": "Set Follower-Only Mode (Twitch · Chat).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.chat.set-slow-mode",
+      "name": "Set Slow Mode",
+      "category": "Twitch",
+      "group": "Chat",
+      "description": "Set Slow Mode (Twitch · Chat).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.chat.set-subscriber-only-mode",
+      "name": "Set Subscriber-Only Mode",
+      "category": "Twitch",
+      "group": "Chat",
+      "description": "Set Subscriber-Only Mode (Twitch · Chat).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.chat.send-whisper",
+      "name": "Send Whisper",
+      "category": "Twitch",
+      "group": "Chat",
+      "description": "Send Whisper (Twitch · Chat).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.chat.shoutout-user",
+      "name": "Shoutout User",
+      "category": "Twitch",
+      "group": "Chat",
+      "description": "Shoutout User (Twitch · Chat).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.moderation.timeout-user",
+      "name": "Timeout User",
+      "category": "Twitch",
+      "group": "Moderation",
+      "description": "Timeout User (Twitch · Moderation).",
+      "keywords": [
+        "mute",
+        "purge"
+      ]
+    },
+    {
+      "id": "twitch.moderation.ban-user",
+      "name": "Ban User",
+      "category": "Twitch",
+      "group": "Moderation",
+      "description": "Ban User (Twitch · Moderation).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.moderation.unban-user",
+      "name": "Unban User",
+      "category": "Twitch",
+      "group": "Moderation",
+      "description": "Unban User (Twitch · Moderation).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.moderation.add-moderator",
+      "name": "Add Moderator",
+      "category": "Twitch",
+      "group": "Moderation",
+      "description": "Add Moderator (Twitch · Moderation).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.moderation.remove-moderator",
+      "name": "Remove Moderator",
+      "category": "Twitch",
+      "group": "Moderation",
+      "description": "Remove Moderator (Twitch · Moderation).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.moderation.add-vip",
+      "name": "Add VIP",
+      "category": "Twitch",
+      "group": "Moderation",
+      "description": "Add VIP (Twitch · Moderation).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.moderation.remove-vip",
+      "name": "Remove VIP",
+      "category": "Twitch",
+      "group": "Moderation",
+      "description": "Remove VIP (Twitch · Moderation).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.moderation.warn-user",
+      "name": "Warn User",
+      "category": "Twitch",
+      "group": "Moderation",
+      "description": "Warn User (Twitch · Moderation).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.moderation.add-blocked-term",
+      "name": "Add Blocked Term",
+      "category": "Twitch",
+      "group": "Moderation",
+      "description": "Add Blocked Term (Twitch · Moderation).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.channel.set-title",
+      "name": "Set Title",
+      "category": "Twitch",
+      "group": "Channel",
+      "description": "Set Title (Twitch · Channel).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.channel.set-category",
+      "name": "Set Category",
+      "category": "Twitch",
+      "group": "Channel",
+      "description": "Set Category (Twitch · Channel).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.channel.add-stream-marker",
+      "name": "Add Stream Marker",
+      "category": "Twitch",
+      "group": "Channel",
+      "description": "Add Stream Marker (Twitch · Channel).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.channel.create-clip",
+      "name": "Create Clip",
+      "category": "Twitch",
+      "group": "Channel",
+      "description": "Create Clip (Twitch · Channel).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.channel.run-commercial",
+      "name": "Run Commercial",
+      "category": "Twitch",
+      "group": "Channel",
+      "description": "Run Commercial (Twitch · Channel).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.channel.start-raid",
+      "name": "Start Raid",
+      "category": "Twitch",
+      "group": "Channel",
+      "description": "Start Raid (Twitch · Channel).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.channel.cancel-raid",
+      "name": "Cancel Raid",
+      "category": "Twitch",
+      "group": "Channel",
+      "description": "Cancel Raid (Twitch · Channel).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.channel.set-tags",
+      "name": "Set Tags",
+      "category": "Twitch",
+      "group": "Channel",
+      "description": "Set Tags (Twitch · Channel).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.channel-points.create-reward",
+      "name": "Create Reward",
+      "category": "Twitch",
+      "group": "Channel Points",
+      "description": "Create Reward (Twitch · Channel Points).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.channel-points.enable-reward",
+      "name": "Enable Reward",
+      "category": "Twitch",
+      "group": "Channel Points",
+      "description": "Enable Reward (Twitch · Channel Points).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.channel-points.disable-reward",
+      "name": "Disable Reward",
+      "category": "Twitch",
+      "group": "Channel Points",
+      "description": "Disable Reward (Twitch · Channel Points).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.channel-points.pause-reward",
+      "name": "Pause Reward",
+      "category": "Twitch",
+      "group": "Channel Points",
+      "description": "Pause Reward (Twitch · Channel Points).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.channel-points.update-reward-cost",
+      "name": "Update Reward Cost",
+      "category": "Twitch",
+      "group": "Channel Points",
+      "description": "Update Reward Cost (Twitch · Channel Points).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.channel-points.fulfil-redemption",
+      "name": "Fulfil Redemption",
+      "category": "Twitch",
+      "group": "Channel Points",
+      "description": "Fulfil Redemption (Twitch · Channel Points).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.channel-points.refund-redemption",
+      "name": "Refund Redemption",
+      "category": "Twitch",
+      "group": "Channel Points",
+      "description": "Refund Redemption (Twitch · Channel Points).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.polls.create-poll",
+      "name": "Create Poll",
+      "category": "Twitch",
+      "group": "Polls",
+      "description": "Create Poll (Twitch · Polls).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.polls.end-poll",
+      "name": "End Poll",
+      "category": "Twitch",
+      "group": "Polls",
+      "description": "End Poll (Twitch · Polls).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.polls.archive-poll",
+      "name": "Archive Poll",
+      "category": "Twitch",
+      "group": "Polls",
+      "description": "Archive Poll (Twitch · Polls).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.predictions.create-prediction",
+      "name": "Create Prediction",
+      "category": "Twitch",
+      "group": "Predictions",
+      "description": "Create Prediction (Twitch · Predictions).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.predictions.lock-prediction",
+      "name": "Lock Prediction",
+      "category": "Twitch",
+      "group": "Predictions",
+      "description": "Lock Prediction (Twitch · Predictions).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.predictions.resolve-prediction",
+      "name": "Resolve Prediction",
+      "category": "Twitch",
+      "group": "Predictions",
+      "description": "Resolve Prediction (Twitch · Predictions).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.predictions.cancel-prediction",
+      "name": "Cancel Prediction",
+      "category": "Twitch",
+      "group": "Predictions",
+      "description": "Cancel Prediction (Twitch · Predictions).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.users.get-user-info",
+      "name": "Get User Info",
+      "category": "Twitch",
+      "group": "Users",
+      "description": "Get User Info (Twitch · Users).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.users.get-follow-age",
+      "name": "Get Follow Age",
+      "category": "Twitch",
+      "group": "Users",
+      "description": "Get Follow Age (Twitch · Users).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.users.get-random-active-user",
+      "name": "Get Random Active User",
+      "category": "Twitch",
+      "group": "Users",
+      "description": "Get Random Active User (Twitch · Users).",
+      "keywords": []
+    },
+    {
+      "id": "twitch.users.check-subscriber-status",
+      "name": "Check Subscriber Status",
+      "category": "Twitch",
+      "group": "Users",
+      "description": "Check Subscriber Status (Twitch · Users).",
+      "keywords": []
+    },
+    {
+      "id": "youtube.chat.send-message",
+      "name": "Send Message",
+      "category": "YouTube",
+      "group": "Chat",
+      "description": "Send Message (YouTube · Chat).",
+      "keywords": [
+        "chat",
+        "say",
+        "post"
+      ]
+    },
+    {
+      "id": "youtube.chat.delete-message",
+      "name": "Delete Message",
+      "category": "YouTube",
+      "group": "Chat",
+      "description": "Delete Message (YouTube · Chat).",
+      "keywords": []
+    },
+    {
+      "id": "youtube.chat.timeout-user",
+      "name": "Timeout User",
+      "category": "YouTube",
+      "group": "Chat",
+      "description": "Timeout User (YouTube · Chat).",
+      "keywords": [
+        "mute",
+        "purge"
+      ]
+    },
+    {
+      "id": "youtube.chat.ban-user",
+      "name": "Ban User",
+      "category": "YouTube",
+      "group": "Chat",
+      "description": "Ban User (YouTube · Chat).",
+      "keywords": []
+    },
+    {
+      "id": "youtube.chat.set-slow-mode",
+      "name": "Set Slow Mode",
+      "category": "YouTube",
+      "group": "Chat",
+      "description": "Set Slow Mode (YouTube · Chat).",
+      "keywords": []
+    },
+    {
+      "id": "youtube.broadcast.set-title",
+      "name": "Set Title",
+      "category": "YouTube",
+      "group": "Broadcast",
+      "description": "Set Title (YouTube · Broadcast).",
+      "keywords": []
+    },
+    {
+      "id": "youtube.broadcast.set-description",
+      "name": "Set Description",
+      "category": "YouTube",
+      "group": "Broadcast",
+      "description": "Set Description (YouTube · Broadcast).",
+      "keywords": []
+    },
+    {
+      "id": "youtube.broadcast.insert-cue-point",
+      "name": "Insert Cue Point",
+      "category": "YouTube",
+      "group": "Broadcast",
+      "description": "Insert Cue Point (YouTube · Broadcast).",
+      "keywords": []
+    },
+    {
+      "id": "youtube.broadcast.get-live-broadcast",
+      "name": "Get Live Broadcast",
+      "category": "YouTube",
+      "group": "Broadcast",
+      "description": "Get Live Broadcast (YouTube · Broadcast).",
+      "keywords": []
+    },
+    {
+      "id": "youtube.polls.create-poll",
+      "name": "Create Poll",
+      "category": "YouTube",
+      "group": "Polls",
+      "description": "Create Poll (YouTube · Polls).",
+      "keywords": []
+    },
+    {
+      "id": "youtube.polls.end-poll",
+      "name": "End Poll",
+      "category": "YouTube",
+      "group": "Polls",
+      "description": "End Poll (YouTube · Polls).",
+      "keywords": []
+    },
+    {
+      "id": "kick.chat.send-message",
+      "name": "Send Message",
+      "category": "Kick",
+      "group": "Chat",
+      "description": "Send Message (Kick · Chat).",
+      "keywords": [
+        "chat",
+        "say",
+        "post"
+      ]
+    },
+    {
+      "id": "kick.chat.delete-message",
+      "name": "Delete Message",
+      "category": "Kick",
+      "group": "Chat",
+      "description": "Delete Message (Kick · Chat).",
+      "keywords": []
+    },
+    {
+      "id": "kick.chat.timeout-user",
+      "name": "Timeout User",
+      "category": "Kick",
+      "group": "Chat",
+      "description": "Timeout User (Kick · Chat).",
+      "keywords": [
+        "mute",
+        "purge"
+      ]
+    },
+    {
+      "id": "kick.chat.ban-user",
+      "name": "Ban User",
+      "category": "Kick",
+      "group": "Chat",
+      "description": "Ban User (Kick · Chat).",
+      "keywords": []
+    },
+    {
+      "id": "kick.channel.set-title",
+      "name": "Set Title",
+      "category": "Kick",
+      "group": "Channel",
+      "description": "Set Title (Kick · Channel).",
+      "keywords": []
+    },
+    {
+      "id": "kick.channel.set-category",
+      "name": "Set Category",
+      "category": "Kick",
+      "group": "Channel",
+      "description": "Set Category (Kick · Channel).",
+      "keywords": []
+    },
+    {
+      "id": "obs.scenes.set-current-scene",
+      "name": "Set Current Scene",
+      "category": "OBS",
+      "group": "Scenes",
+      "description": "Set Current Scene (OBS · Scenes).",
+      "keywords": [
+        "switch scene",
+        "change scene"
+      ]
+    },
+    {
+      "id": "obs.scenes.set-preview-scene",
+      "name": "Set Preview Scene",
+      "category": "OBS",
+      "group": "Scenes",
+      "description": "Set Preview Scene (OBS · Scenes).",
+      "keywords": []
+    },
+    {
+      "id": "obs.scenes.trigger-studio-mode-transition",
+      "name": "Trigger Studio Mode Transition",
+      "category": "OBS",
+      "group": "Scenes",
+      "description": "Trigger Studio Mode Transition (OBS · Scenes).",
+      "keywords": []
+    },
+    {
+      "id": "obs.scenes.get-current-scene",
+      "name": "Get Current Scene",
+      "category": "OBS",
+      "group": "Scenes",
+      "description": "Get Current Scene (OBS · Scenes).",
+      "keywords": []
+    },
+    {
+      "id": "obs.sources.set-source-visibility",
+      "name": "Set Source Visibility",
+      "category": "OBS",
+      "group": "Sources",
+      "description": "Set Source Visibility (OBS · Sources).",
+      "keywords": []
+    },
+    {
+      "id": "obs.sources.toggle-source-visibility",
+      "name": "Toggle Source Visibility",
+      "category": "OBS",
+      "group": "Sources",
+      "description": "Toggle Source Visibility (OBS · Sources).",
+      "keywords": []
+    },
+    {
+      "id": "obs.sources.set-source-position",
+      "name": "Set Source Position",
+      "category": "OBS",
+      "group": "Sources",
+      "description": "Set Source Position (OBS · Sources).",
+      "keywords": []
+    },
+    {
+      "id": "obs.sources.set-source-scale",
+      "name": "Set Source Scale",
+      "category": "OBS",
+      "group": "Sources",
+      "description": "Set Source Scale (OBS · Sources).",
+      "keywords": []
+    },
+    {
+      "id": "obs.sources.set-source-filter-state",
+      "name": "Set Source Filter State",
+      "category": "OBS",
+      "group": "Sources",
+      "description": "Set Source Filter State (OBS · Sources).",
+      "keywords": []
+    },
+    {
+      "id": "obs.sources.set-browser-source-url",
+      "name": "Set Browser Source URL",
+      "category": "OBS",
+      "group": "Sources",
+      "description": "Set Browser Source URL (OBS · Sources).",
+      "keywords": []
+    },
+    {
+      "id": "obs.sources.refresh-browser-source",
+      "name": "Refresh Browser Source",
+      "category": "OBS",
+      "group": "Sources",
+      "description": "Refresh Browser Source (OBS · Sources).",
+      "keywords": []
+    },
+    {
+      "id": "obs.sources.set-text-source",
+      "name": "Set Text Source",
+      "category": "OBS",
+      "group": "Sources",
+      "description": "Set Text Source (OBS · Sources).",
+      "keywords": []
+    },
+    {
+      "id": "obs.sources.set-image-source-file",
+      "name": "Set Image Source File",
+      "category": "OBS",
+      "group": "Sources",
+      "description": "Set Image Source File (OBS · Sources).",
+      "keywords": []
+    },
+    {
+      "id": "obs.sources.set-media-source-file",
+      "name": "Set Media Source File",
+      "category": "OBS",
+      "group": "Sources",
+      "description": "Set Media Source File (OBS · Sources).",
+      "keywords": []
+    },
+    {
+      "id": "obs.media.play-media",
+      "name": "Play Media",
+      "category": "OBS",
+      "group": "Media",
+      "description": "Play Media (OBS · Media).",
+      "keywords": []
+    },
+    {
+      "id": "obs.media.pause-media",
+      "name": "Pause Media",
+      "category": "OBS",
+      "group": "Media",
+      "description": "Pause Media (OBS · Media).",
+      "keywords": []
+    },
+    {
+      "id": "obs.media.stop-media",
+      "name": "Stop Media",
+      "category": "OBS",
+      "group": "Media",
+      "description": "Stop Media (OBS · Media).",
+      "keywords": []
+    },
+    {
+      "id": "obs.media.restart-media",
+      "name": "Restart Media",
+      "category": "OBS",
+      "group": "Media",
+      "description": "Restart Media (OBS · Media).",
+      "keywords": []
+    },
+    {
+      "id": "obs.media.seek-media",
+      "name": "Seek Media",
+      "category": "OBS",
+      "group": "Media",
+      "description": "Seek Media (OBS · Media).",
+      "keywords": []
+    },
+    {
+      "id": "obs.audio.set-input-mute",
+      "name": "Set Input Mute",
+      "category": "OBS",
+      "group": "Audio",
+      "description": "Set Input Mute (OBS · Audio).",
+      "keywords": []
+    },
+    {
+      "id": "obs.audio.toggle-input-mute",
+      "name": "Toggle Input Mute",
+      "category": "OBS",
+      "group": "Audio",
+      "description": "Toggle Input Mute (OBS · Audio).",
+      "keywords": []
+    },
+    {
+      "id": "obs.audio.set-input-volume",
+      "name": "Set Input Volume",
+      "category": "OBS",
+      "group": "Audio",
+      "description": "Set Input Volume (OBS · Audio).",
+      "keywords": []
+    },
+    {
+      "id": "obs.audio.set-audio-monitor-type",
+      "name": "Set Audio Monitor Type",
+      "category": "OBS",
+      "group": "Audio",
+      "description": "Set Audio Monitor Type (OBS · Audio).",
+      "keywords": []
+    },
+    {
+      "id": "obs.output.start-streaming",
+      "name": "Start Streaming",
+      "category": "OBS",
+      "group": "Output",
+      "description": "Start Streaming (OBS · Output).",
+      "keywords": []
+    },
+    {
+      "id": "obs.output.stop-streaming",
+      "name": "Stop Streaming",
+      "category": "OBS",
+      "group": "Output",
+      "description": "Stop Streaming (OBS · Output).",
+      "keywords": []
+    },
+    {
+      "id": "obs.output.start-recording",
+      "name": "Start Recording",
+      "category": "OBS",
+      "group": "Output",
+      "description": "Start Recording (OBS · Output).",
+      "keywords": []
+    },
+    {
+      "id": "obs.output.stop-recording",
+      "name": "Stop Recording",
+      "category": "OBS",
+      "group": "Output",
+      "description": "Stop Recording (OBS · Output).",
+      "keywords": []
+    },
+    {
+      "id": "obs.output.pause-recording",
+      "name": "Pause Recording",
+      "category": "OBS",
+      "group": "Output",
+      "description": "Pause Recording (OBS · Output).",
+      "keywords": []
+    },
+    {
+      "id": "obs.output.start-replay-buffer",
+      "name": "Start Replay Buffer",
+      "category": "OBS",
+      "group": "Output",
+      "description": "Start Replay Buffer (OBS · Output).",
+      "keywords": []
+    },
+    {
+      "id": "obs.output.save-replay-buffer",
+      "name": "Save Replay Buffer",
+      "category": "OBS",
+      "group": "Output",
+      "description": "Save Replay Buffer (OBS · Output).",
+      "keywords": []
+    },
+    {
+      "id": "obs.output.start-virtual-camera",
+      "name": "Start Virtual Camera",
+      "category": "OBS",
+      "group": "Output",
+      "description": "Start Virtual Camera (OBS · Output).",
+      "keywords": []
+    },
+    {
+      "id": "obs.output.stop-virtual-camera",
+      "name": "Stop Virtual Camera",
+      "category": "OBS",
+      "group": "Output",
+      "description": "Stop Virtual Camera (OBS · Output).",
+      "keywords": []
+    },
+    {
+      "id": "obs.advanced.send-raw-request",
+      "name": "Send Raw Request",
+      "category": "OBS",
+      "group": "Advanced",
+      "description": "Send Raw Request (OBS · Advanced).",
+      "keywords": []
+    },
+    {
+      "id": "obs.advanced.take-source-screenshot",
+      "name": "Take Source Screenshot",
+      "category": "OBS",
+      "group": "Advanced",
+      "description": "Take Source Screenshot (OBS · Advanced).",
+      "keywords": []
+    },
+    {
+      "id": "obs.advanced.set-transition",
+      "name": "Set Transition",
+      "category": "OBS",
+      "group": "Advanced",
+      "description": "Set Transition (OBS · Advanced).",
+      "keywords": []
+    },
+    {
+      "id": "obs.advanced.set-transition-duration",
+      "name": "Set Transition Duration",
+      "category": "OBS",
+      "group": "Advanced",
+      "description": "Set Transition Duration (OBS · Advanced).",
+      "keywords": []
+    },
+    {
+      "id": "streamlabs-desktop.scenes.set-current-scene",
+      "name": "Set Current Scene",
+      "category": "Streamlabs Desktop",
+      "group": "Scenes",
+      "description": "Set Current Scene (Streamlabs Desktop · Scenes).",
+      "keywords": [
+        "switch scene",
+        "change scene"
+      ]
+    },
+    {
+      "id": "streamlabs-desktop.scenes.set-source-visibility",
+      "name": "Set Source Visibility",
+      "category": "Streamlabs Desktop",
+      "group": "Scenes",
+      "description": "Set Source Visibility (Streamlabs Desktop · Scenes).",
+      "keywords": []
+    },
+    {
+      "id": "streamlabs-desktop.output.start-streaming",
+      "name": "Start Streaming",
+      "category": "Streamlabs Desktop",
+      "group": "Output",
+      "description": "Start Streaming (Streamlabs Desktop · Output).",
+      "keywords": []
+    },
+    {
+      "id": "streamlabs-desktop.output.stop-streaming",
+      "name": "Stop Streaming",
+      "category": "Streamlabs Desktop",
+      "group": "Output",
+      "description": "Stop Streaming (Streamlabs Desktop · Output).",
+      "keywords": []
+    },
+    {
+      "id": "streamlabs-desktop.output.start-recording",
+      "name": "Start Recording",
+      "category": "Streamlabs Desktop",
+      "group": "Output",
+      "description": "Start Recording (Streamlabs Desktop · Output).",
+      "keywords": []
+    },
+    {
+      "id": "streamlabs-desktop.output.stop-recording",
+      "name": "Stop Recording",
+      "category": "Streamlabs Desktop",
+      "group": "Output",
+      "description": "Stop Recording (Streamlabs Desktop · Output).",
+      "keywords": []
+    },
+    {
+      "id": "streamlabs-desktop.output.save-replay",
+      "name": "Save Replay",
+      "category": "Streamlabs Desktop",
+      "group": "Output",
+      "description": "Save Replay (Streamlabs Desktop · Output).",
+      "keywords": []
+    },
+    {
+      "id": "voice.text-to-speech.speak-text",
+      "name": "Speak Text",
+      "category": "Voice",
+      "group": "Text to Speech",
+      "description": "Speak Text (Voice · Text to Speech).",
+      "keywords": [
+        "tts",
+        "say"
+      ]
+    },
+    {
+      "id": "voice.text-to-speech.speak-with-voice",
+      "name": "Speak With Voice",
+      "category": "Voice",
+      "group": "Text to Speech",
+      "description": "Speak With Voice (Voice · Text to Speech).",
+      "keywords": []
+    },
+    {
+      "id": "voice.text-to-speech.stop-speaking",
+      "name": "Stop Speaking",
+      "category": "Voice",
+      "group": "Text to Speech",
+      "description": "Stop Speaking (Voice · Text to Speech).",
+      "keywords": []
+    },
+    {
+      "id": "voice.text-to-speech.set-voice-speed",
+      "name": "Set Voice Speed",
+      "category": "Voice",
+      "group": "Text to Speech",
+      "description": "Set Voice Speed (Voice · Text to Speech).",
+      "keywords": []
+    },
+    {
+      "id": "voice.text-to-speech.set-voice-volume",
+      "name": "Set Voice Volume",
+      "category": "Voice",
+      "group": "Text to Speech",
+      "description": "Set Voice Volume (Voice · Text to Speech).",
+      "keywords": []
+    },
+    {
+      "id": "voice.text-to-speech.clear-speech-queue",
+      "name": "Clear Speech Queue",
+      "category": "Voice",
+      "group": "Text to Speech",
+      "description": "Clear Speech Queue (Voice · Text to Speech).",
+      "keywords": []
+    },
+    {
+      "id": "voice.text-to-speech.pause-speech-queue",
+      "name": "Pause Speech Queue",
+      "category": "Voice",
+      "group": "Text to Speech",
+      "description": "Pause Speech Queue (Voice · Text to Speech).",
+      "keywords": []
+    },
+    {
+      "id": "voice.speech-to-text.start-listening",
+      "name": "Start Listening",
+      "category": "Voice",
+      "group": "Speech to Text",
+      "description": "Start Listening (Voice · Speech to Text).",
+      "keywords": []
+    },
+    {
+      "id": "voice.speech-to-text.stop-listening",
+      "name": "Stop Listening",
+      "category": "Voice",
+      "group": "Speech to Text",
+      "description": "Stop Listening (Voice · Speech to Text).",
+      "keywords": []
+    },
+    {
+      "id": "voice.speech-to-text.wait-for-phrase",
+      "name": "Wait for Phrase",
+      "category": "Voice",
+      "group": "Speech to Text",
+      "description": "Wait for Phrase (Voice · Speech to Text).",
+      "keywords": []
+    },
+    {
+      "id": "vtubing.vtube-studio.trigger-hotkey",
+      "name": "Trigger Hotkey",
+      "category": "VTubing",
+      "group": "VTube Studio",
+      "description": "Trigger Hotkey (VTubing · VTube Studio).",
+      "keywords": []
+    },
+    {
+      "id": "vtubing.vtube-studio.set-expression",
+      "name": "Set Expression",
+      "category": "VTubing",
+      "group": "VTube Studio",
+      "description": "Set Expression (VTubing · VTube Studio).",
+      "keywords": []
+    },
+    {
+      "id": "vtubing.vtube-studio.move-model",
+      "name": "Move Model",
+      "category": "VTubing",
+      "group": "VTube Studio",
+      "description": "Move Model (VTubing · VTube Studio).",
+      "keywords": []
+    },
+    {
+      "id": "vtubing.vtube-studio.set-parameter-value",
+      "name": "Set Parameter Value",
+      "category": "VTubing",
+      "group": "VTube Studio",
+      "description": "Set Parameter Value (VTubing · VTube Studio).",
+      "keywords": []
+    },
+    {
+      "id": "vtubing.vtube-studio.load-model",
+      "name": "Load Model",
+      "category": "VTubing",
+      "group": "VTube Studio",
+      "description": "Load Model (VTubing · VTube Studio).",
+      "keywords": []
+    },
+    {
+      "id": "vtubing.vtube-studio.tint-art-mesh",
+      "name": "Tint Art Mesh",
+      "category": "VTubing",
+      "group": "VTube Studio",
+      "description": "Tint Art Mesh (VTubing · VTube Studio).",
+      "keywords": []
+    },
+    {
+      "id": "vtubing.model-props.spawn-item",
+      "name": "Spawn Item",
+      "category": "VTubing",
+      "group": "Model Props",
+      "description": "Spawn Item (VTubing · Model Props).",
+      "keywords": []
+    },
+    {
+      "id": "vtubing.model-props.remove-item",
+      "name": "Remove Item",
+      "category": "VTubing",
+      "group": "Model Props",
+      "description": "Remove Item (VTubing · Model Props).",
+      "keywords": []
+    },
+    {
+      "id": "vtubing.model-props.throw-item-at-model",
+      "name": "Throw Item at Model",
+      "category": "VTubing",
+      "group": "Model Props",
+      "description": "Throw Item at Model (VTubing · Model Props).",
+      "keywords": []
+    },
+    {
+      "id": "overlays.alerts.show-alert",
+      "name": "Show Alert",
+      "category": "Overlays",
+      "group": "Alerts",
+      "description": "Show Alert (Overlays · Alerts).",
+      "keywords": []
+    },
+    {
+      "id": "overlays.alerts.queue-alert",
+      "name": "Queue Alert",
+      "category": "Overlays",
+      "group": "Alerts",
+      "description": "Queue Alert (Overlays · Alerts).",
+      "keywords": []
+    },
+    {
+      "id": "overlays.alerts.skip-current-alert",
+      "name": "Skip Current Alert",
+      "category": "Overlays",
+      "group": "Alerts",
+      "description": "Skip Current Alert (Overlays · Alerts).",
+      "keywords": []
+    },
+    {
+      "id": "overlays.alerts.pause-alert-queue",
+      "name": "Pause Alert Queue",
+      "category": "Overlays",
+      "group": "Alerts",
+      "description": "Pause Alert Queue (Overlays · Alerts).",
+      "keywords": []
+    },
+    {
+      "id": "overlays.widgets.show-widget",
+      "name": "Show Widget",
+      "category": "Overlays",
+      "group": "Widgets",
+      "description": "Show Widget (Overlays · Widgets).",
+      "keywords": []
+    },
+    {
+      "id": "overlays.widgets.hide-widget",
+      "name": "Hide Widget",
+      "category": "Overlays",
+      "group": "Widgets",
+      "description": "Hide Widget (Overlays · Widgets).",
+      "keywords": []
+    },
+    {
+      "id": "overlays.widgets.update-widget-data",
+      "name": "Update Widget Data",
+      "category": "Overlays",
+      "group": "Widgets",
+      "description": "Update Widget Data (Overlays · Widgets).",
+      "keywords": []
+    },
+    {
+      "id": "overlays.widgets.send-overlay-event",
+      "name": "Send Overlay Event",
+      "category": "Overlays",
+      "group": "Widgets",
+      "description": "Send Overlay Event (Overlays · Widgets).",
+      "keywords": []
+    },
+    {
+      "id": "music.spotify.play",
+      "name": "Play",
+      "category": "Music",
+      "group": "Spotify",
+      "description": "Play (Music · Spotify).",
+      "keywords": []
+    },
+    {
+      "id": "music.spotify.pause",
+      "name": "Pause",
+      "category": "Music",
+      "group": "Spotify",
+      "description": "Pause (Music · Spotify).",
+      "keywords": []
+    },
+    {
+      "id": "music.spotify.skip-track",
+      "name": "Skip Track",
+      "category": "Music",
+      "group": "Spotify",
+      "description": "Skip Track (Music · Spotify).",
+      "keywords": []
+    },
+    {
+      "id": "music.spotify.previous-track",
+      "name": "Previous Track",
+      "category": "Music",
+      "group": "Spotify",
+      "description": "Previous Track (Music · Spotify).",
+      "keywords": []
+    },
+    {
+      "id": "music.spotify.add-to-queue",
+      "name": "Add to Queue",
+      "category": "Music",
+      "group": "Spotify",
+      "description": "Add to Queue (Music · Spotify).",
+      "keywords": []
+    },
+    {
+      "id": "music.spotify.get-current-track",
+      "name": "Get Current Track",
+      "category": "Music",
+      "group": "Spotify",
+      "description": "Get Current Track (Music · Spotify).",
+      "keywords": []
+    },
+    {
+      "id": "music.spotify.set-volume",
+      "name": "Set Volume",
+      "category": "Music",
+      "group": "Spotify",
+      "description": "Set Volume (Music · Spotify).",
+      "keywords": []
+    },
+    {
+      "id": "hardware-and-devices.midi.send-note",
+      "name": "Send Note",
+      "category": "Hardware & Devices",
+      "group": "MIDI",
+      "description": "Send Note (Hardware & Devices · MIDI).",
+      "keywords": []
+    },
+    {
+      "id": "hardware-and-devices.midi.send-control-change",
+      "name": "Send Control Change",
+      "category": "Hardware & Devices",
+      "group": "MIDI",
+      "description": "Send Control Change (Hardware & Devices · MIDI).",
+      "keywords": []
+    },
+    {
+      "id": "hardware-and-devices.midi.send-program-change",
+      "name": "Send Program Change",
+      "category": "Hardware & Devices",
+      "group": "MIDI",
+      "description": "Send Program Change (Hardware & Devices · MIDI).",
+      "keywords": []
+    },
+    {
+      "id": "hardware-and-devices.stream-deck.set-button-title",
+      "name": "Set Button Title",
+      "category": "Hardware & Devices",
+      "group": "Stream Deck",
+      "description": "Set Button Title (Hardware & Devices · Stream Deck).",
+      "keywords": []
+    },
+    {
+      "id": "hardware-and-devices.stream-deck.set-button-image",
+      "name": "Set Button Image",
+      "category": "Hardware & Devices",
+      "group": "Stream Deck",
+      "description": "Set Button Image (Hardware & Devices · Stream Deck).",
+      "keywords": []
+    },
+    {
+      "id": "hardware-and-devices.stream-deck.set-button-state",
+      "name": "Set Button State",
+      "category": "Hardware & Devices",
+      "group": "Stream Deck",
+      "description": "Set Button State (Hardware & Devices · Stream Deck).",
+      "keywords": []
+    },
+    {
+      "id": "hardware-and-devices.smart-lights.set-light-colour",
+      "name": "Set Light Colour",
+      "category": "Hardware & Devices",
+      "group": "Smart Lights",
+      "description": "Set Light Colour (Hardware & Devices · Smart Lights).",
+      "keywords": []
+    },
+    {
+      "id": "hardware-and-devices.smart-lights.set-light-brightness",
+      "name": "Set Light Brightness",
+      "category": "Hardware & Devices",
+      "group": "Smart Lights",
+      "description": "Set Light Brightness (Hardware & Devices · Smart Lights).",
+      "keywords": []
+    },
+    {
+      "id": "hardware-and-devices.smart-lights.run-light-effect",
+      "name": "Run Light Effect",
+      "category": "Hardware & Devices",
+      "group": "Smart Lights",
+      "description": "Run Light Effect (Hardware & Devices · Smart Lights).",
+      "keywords": []
+    },
+    {
+      "id": "integrations.discord.post-webhook-message",
+      "name": "Post Webhook Message",
+      "category": "Integrations",
+      "group": "Discord",
+      "description": "Post Webhook Message (Integrations · Discord).",
+      "keywords": []
+    },
+    {
+      "id": "integrations.discord.post-embed",
+      "name": "Post Embed",
+      "category": "Integrations",
+      "group": "Discord",
+      "description": "Post Embed (Integrations · Discord).",
+      "keywords": []
+    },
+    {
+      "id": "integrations.donations.get-recent-donations",
+      "name": "Get Recent Donations",
+      "category": "Integrations",
+      "group": "Donations",
+      "description": "Get Recent Donations (Integrations · Donations).",
+      "keywords": []
+    },
+    {
+      "id": "integrations.donations.get-donation-goal",
+      "name": "Get Donation Goal",
+      "category": "Integrations",
+      "group": "Donations",
+      "description": "Get Donation Goal (Integrations · Donations).",
+      "keywords": []
+    },
+    {
+      "id": "integrations.donations.set-donation-goal",
+      "name": "Set Donation Goal",
+      "category": "Integrations",
+      "group": "Donations",
+      "description": "Set Donation Goal (Integrations · Donations).",
+      "keywords": []
+    },
+    {
+      "id": "integrations.webhooks.send-webhook",
+      "name": "Send Webhook",
+      "category": "Integrations",
+      "group": "Webhooks",
+      "description": "Send Webhook (Integrations · Webhooks).",
+      "keywords": []
+    },
+    {
+      "id": "integrations.webhooks.send-signed-webhook",
+      "name": "Send Signed Webhook",
+      "category": "Integrations",
+      "group": "Webhooks",
+      "description": "Send Signed Webhook (Integrations · Webhooks).",
+      "keywords": []
+    }
+  ]
+}
