@@ -5,7 +5,7 @@
 | Work item | DEN-7 (children DEN-8…DEN-11, label `bakeoff`) |
 | Runs | 2026-10-18 23:35 → 2026-10-19 00:20 (America/Chicago) |
 | Write-up | claude/claude-opus-5-5, 2026-10-19 (delegated overnight by the owner to the coordinator) |
-| Evidence | The 12 cross-reviews and the coordinator's timing log, copied verbatim into [bakeoff-2026-10/](bakeoff-2026-10/). The vendor handoffs are on cards DEN-8…DEN-11. The code is on branches `agent/{claude,codex,grok}/DEN-{8,9,10,11}-b{1,2,3,4}`. |
+| Evidence | The 12 cross-reviews and the coordinator's timing log, copied verbatim into [bakeoff-2026-10/](bakeoff-2026-10/), except one trailing space removed from line 17 of `_timings.txt`. The vendor handoffs are on cards DEN-8…DEN-11. The code is on branches `agent/{claude,codex,grok}/DEN-{8,9,10,11}-b{1,2,3,4}`. |
 | Status | **Provisional.** The owner rating column is still `pending`. The DELEGATION.md changes are marked *from bake-off 2026-10, owner to confirm*. |
 
 ## Verdict
@@ -21,7 +21,9 @@
   findings: 3 P1s (one each on B-1, B-2 and B-3) and 10 P2s. Mean reviewer score 3.25/5. Its only P1-free task was
   CI (B-4). This matches the existing guidance: don't give Grok long unsupervised implementation work.
 - **Every one of the 12 entries passed its Done-when** at the end of its first dispatched session, and each
-  reviewer confirmed this independently. Even so, 10 of the 12 had P2-or-worse findings. **On this sample,
+  reviewer confirmed this independently. On the very first `done_when` run (DELEGATION §6), 9 passed, 2 failed
+  (Claude B-3 and Grok B-3, both repaired in-session) and 1 is unknown (Codex B-3, no session record). Even so,
+  10 of the 12 had P2-or-worse findings. **On this sample,
   Done-when was not a quality gate**, and the cross-vendor review is what found the real defects.
 
 ## Method
@@ -56,44 +58,48 @@
 
 ## Results
 
-**First-run DW** means Done-when passed at the end of the first dispatched session, as confirmed by the
-reviewer. This is looser than §6's "pass on first `done_when` run": under that stricter reading, Claude B-3
-and Grok B-3 would be N (note 2). **Score** is the reviewer's quality score (1–5) for the entry. The owner rating stays `pending` until
+**First-run DW** is §6's metric: the first `done_when` run of the deliverable passed, before any fix in that
+session (note 2). `?` means the session left no record of its first run. **Session-end DW** means Done-when
+passed at the first dispatched session's final commit, as confirmed by the reviewer's re-run. **Score** is the reviewer's quality score (1–5) for the entry. The owner rating stays `pending` until
 the owner fills it in.
 
-| Task | Vendor | Branch @ commit | First-run DW | P0 | P1 | P2 | P3 | Wall-clock | Diff (+lines) | Score | Owner rating |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| B-1 Rust queue | Claude | `agent/claude/DEN-8-b1` @ `6797512` | Y | 0 | 0 | 0 | 0 | 9m51s | 1,932 | 5 | pending |
-| | Codex | `agent/codex/DEN-8-b1` @ `363e663` | Y¹ | 0 | 0 | 2 | 6 | 3m19s (+58s commit re-run¹) | 800 | 3 | pending |
-| | Grok | `agent/grok/DEN-8-b1` @ `0200459` | Y | 0 | 1 | 1 | 0 | ~29m | 1,701 | 3 | pending |
-| B-2 EventSub | Claude | `agent/claude/DEN-9-b2` @ `4a1d436` | Y | 0 | 0 | 0 | 0 | 7m51s | 1,932 | 4 | pending |
-| | Codex | `agent/codex/DEN-9-b2` @ `a3acdc7` | Y | 0 | 1 | 2 | 4 | 4m28s | 1,475 | 3 | pending |
-| | Grok | `agent/grok/DEN-9-b2` @ `8b0e290` | Y | 0 | 1 | 2 | 2 | ~16m | 1,861 | 3 | pending |
-| B-3 React picker | Claude | `agent/claude/DEN-10-b3` @ `5cdef2b` | Y² | 0 | 0 | 1 | 0 | 10m02s | 4,773 | 4 | pending |
-| | Codex | `agent/codex/DEN-10-b3` @ `38b4b95` | Y | 0 | 0 | 2 | 6 | 6m43s | 2,203 | 4 | pending |
-| | Grok | `agent/grok/DEN-10-b3` @ `7a02907` | Y² | 0 | 1 | 4 | 4 | ~16m³ | 4,962 | 3 | pending |
-| B-4 CI | Claude | `agent/claude/DEN-11-b4` @ `5542353` | Y | 0 | 0 | 1 | 0 | 5m41s | 913 | 4 | pending |
-| | Codex | `agent/codex/DEN-11-b4` @ `a31801b` | Y | 0 | 0 | 2 | 6 | 3m34s | 320 | 4 | pending |
-| | Grok | `agent/grok/DEN-11-b4` @ `b658c51` | Y | 0 | 0 | 3 | 5 | ~10m | 527 | 4 | pending |
+| Task | Vendor | Branch @ commit | First-run DW | Session-end DW | P0 | P1 | P2 | P3 | Wall-clock | Diff (+lines) | Score | Owner rating |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| B-1 Rust queue | Claude | `agent/claude/DEN-8-b1` @ `6797512` | Y | Y | 0 | 0 | 0 | 0 | 9m51s | 1,932 | 5 | pending |
+| | Codex | `agent/codex/DEN-8-b1` @ `363e663` | Y¹ | Y¹ | 0 | 0 | 2 | 6 | 3m19s (+58s commit re-run¹) | 800 | 3 | pending |
+| | Grok | `agent/grok/DEN-8-b1` @ `0200459` | Y | Y | 0 | 1 | 1 | 0 | ~29m | 1,701 | 3 | pending |
+| B-2 EventSub | Claude | `agent/claude/DEN-9-b2` @ `4a1d436` | Y | Y | 0 | 0 | 0 | 0 | 7m51s | 1,932 | 4 | pending |
+| | Codex | `agent/codex/DEN-9-b2` @ `a3acdc7` | Y | Y | 0 | 1 | 2 | 4 | 4m28s | 1,475 | 3 | pending |
+| | Grok | `agent/grok/DEN-9-b2` @ `8b0e290` | Y | Y | 0 | 1 | 2 | 2 | ~16m | 1,861 | 3 | pending |
+| B-3 React picker | Claude | `agent/claude/DEN-10-b3` @ `5cdef2b` | N² | Y | 0 | 0 | 1 | 0 | 10m02s | 4,773 | 4 | pending |
+| | Codex | `agent/codex/DEN-10-b3` @ `38b4b95` | ?² | Y | 0 | 0 | 2 | 6 | 6m43s | 2,203 | 4 | pending |
+| | Grok | `agent/grok/DEN-10-b3` @ `7a02907` | N² | Y | 0 | 1 | 4 | 4 | ~16m³ | 4,962 | 3 | pending |
+| B-4 CI | Claude | `agent/claude/DEN-11-b4` @ `5542353` | Y | Y | 0 | 0 | 1 | 0 | 5m41s | 913 | 4 | pending |
+| | Codex | `agent/codex/DEN-11-b4` @ `a31801b` | Y | Y | 0 | 0 | 2 | 6 | 3m34s | 320 | 4 | pending |
+| | Grok | `agent/grok/DEN-11-b4` @ `b658c51` | Y | Y | 0 | 0 | 3 | 5 | ~10m | 527 | 4 | pending |
 
 **Totals per vendor**
 
-| Vendor | First-run DW | P1 | P2 | P3 | Mean score | Total wall-clock | Quota |
-|---|---|---|---|---|---|---|---|
-| Claude Opus 5.5 | 4/4 | 0 | 2 | 0 | 4.25 | ~33m | not measured⁴ |
-| Codex GPT-6.1 Sol | 4/4 | 1 | 8 | 22 | 3.50 | ~18m (+58s) | about 7% of the 168 h window at 00:05⁴ |
-| Grok 4.7 | 4/4 | 3 | 10 | 11 | 3.25 | ~71m | not measured⁴ |
+| Vendor | First-run DW | Session-end DW | P1 | P2 | P3 | Mean score | Total wall-clock | Quota |
+|---|---|---|---|---|---|---|---|---|
+| Claude Opus 5.5 | 3/4 | 4/4 | 0 | 2 | 0 | 4.25 | ~33m | not measured⁴ |
+| Codex GPT-6.1 Sol | 3/3 known (1 unknown) | 4/4 | 1 | 8 | 22 | 3.50 | ~18m (+58s) | about 7% of the 168 h window at 00:05⁴ |
+| Grok 4.7 | 3/4 | 4/4 | 3 | 10 | 11 | 3.25 | ~71m | not measured⁴ |
 
 Notes:
 
 1. Codex's first B-1 run passed every check but couldn't commit, because the coordinator had launched it with a
    `workspace-write` sandbox and a read-only `.git`. This was the coordinator's mistake, not Codex's. A 58 s
    re-run committed the same code unchanged. Every later Codex run used `danger-full-access`.
-2. The Done-when commands passed when the entry was handed off, but the session went through red runs first,
-   which it fixed itself:
+2. First-run DW sources: the card handoffs and `_timings.txt`. Both N entries passed by handoff, but the
+   session went through red runs first, which it fixed itself:
    - Claude B-3: Playwright browser missing, then a test race.
    - Grok B-3: three typecheck errors, 7 Vitest failures, and a Playwright locator.
-   - The other handoffs report no red Done-when runs.
+   - Codex B-3 (`?`): DEN-10 has no Codex handoff and the timing log only records the commit, so its first run
+     is unknown. It is not inferred from the reviewer's later re-run.
+   - The other handoffs report no red Done-when runs of the deliverable, and `_timings.txt` records Codex B-1
+     and B-2 as passing on the first run. Baseline runs before any deliverable existed (Codex B-1 at the repo
+     root with no `Cargo.toml`, Codex B-4 before actionlint was installed) are not counted.
 3. Grok B-3 has two start times in the timing log: "started 00:04:19" and "started ~00:00". I used 00:04 to
    00:20. With 00:00 it would be about 20 min.
 4. Quota wasn't measured per run. The wrappers have no quota telemetry for Claude, and Grok has no quota view.
@@ -254,9 +260,10 @@ Notes:
 5. **Make the fresh-context self-review step vendor-neutral.** Put it in AGENTS.md or PROMPTING.md §2 so Codex and
    Grok run it too. It's the cheapest quality lever this bake-off found. This is a change to single-writer files,
    so it isn't made here. It needs its own card.
-6. **Harden Done-when.** It passed 12 out of 12 times by the end of the first session (10 of 12 on the very
-   first run, see note 2) and didn't separate the vendors. Card authors should add
-   checks that fail on the defects found here:
+6. **Harden Done-when.** It passed 12 out of 12 times by the end of the first session and 9 of 12 on the very
+   first run (2 N, 1 unknown, see note 2). It barely separated the vendors: 3 first-run passes each, with one
+   red run for Claude and Grok and one unknown for Codex. Card authors should add checks that fail on the
+   defects found here:
    - a viewport assertion for UI screenshots;
    - a schema-drift fixture for parsers;
    - a shutdown and cancellation stress test for async code.
