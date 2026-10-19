@@ -12,6 +12,10 @@
 #
 # The agent follows AGENTS.md + docs/agents/board.md: it claims the card itself, works only in this worktree,
 # appends its handoff to the card and releases it. Nothing is pushed.
+#
+# Wrapper invariant: the prompt is ALWAYS the final positional argument to the wrapper (cdx/clx/cgx); any launch
+# flags (wrapper_args) come before it. Headless shims take the prompt as the last argument and forward earlier
+# ones, so never append anything after the prompt.
 set -euo pipefail
 
 usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
@@ -93,4 +97,5 @@ if dry; then
 fi
 cd "$wt"
 echo "Launching $wrapper in $wt ($mode $card)…"
+# Invariant (see header): the prompt must stay the last argument.
 exec "$wrapper" "${wrapper_args[@]}" "$prompt"
