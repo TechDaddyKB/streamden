@@ -287,7 +287,9 @@ Research: [se-widget-compat-and-node-editor.md](research/se-widget-compat-and-no
 
 ### Q-U5 — Native chat window on Wayland ✅ (proposed default)
 OBS disables custom browser docks on native Wayland (Hyprland included), so we ship a native always-on-top
-chat window *and* an OBS dock URL.
+chat window *and* an OBS dock URL. **Confirmed by spike S-2:** no dock menu at all on native Wayland; docks work
+under XWayland. On **NVIDIA Linux**, OBS's browser source hardware acceleration must be turned off (blank sources
+on Wayland, crash under XWayland), and the setup wizard should detect this and guide the user.
 
 ---
 
@@ -331,6 +333,9 @@ Proposed defaults:
 
 Imported widget code is **never** uploaded, cloud-synced or sent to AI without consent (seller licenses are
 personal-use).
+**Spike S-2 input (2026-10-18):** the per-widget origin scheme `w-<id>.localhost` works in OBS's CEF (isolated and
+persistent). But iframed widgets get partitioned storage, and writes made just before a CEF crash were lost. So
+the SE `localStorage` shim should be **backed by our server's storage**. Recommendation: yes.
 **Answer:**
 
 ### Q-D3 — Real-time co-editing with mods? 🟥 (Round 3)

@@ -44,8 +44,30 @@ web-tech WYSIWYG designer. It must be maintainable by Claude, Codex and Grok age
 - **Exit hatches:** the Tauri 3 CEF runtime (Chromium), or Electron with the same TS UI. The Rust engine moves
   unchanged into a sidecar either way.
 
+## Spike evidence (2026-10-18, E-1 = Hyprland + NVIDIA/AMD hybrid)
+- **S-1 (DEN-2): GO for Tauri 2, with conditions.** Every compat level rendered, with no Error 71, DMA-BUF or
+  EGL failures. First paint was 150–260 ms; idle CPU 0.4–1.2 %. The tray, close-to-tray with the engine still
+  running, the second window, fullscreen, resize, moving across monitors, and the crash-loop fallback
+  (levels 0→4, then browser UI) all worked. Conditions that change the design:
+  1. **The early-GL-context quirk must not be the default.** On this machine it pushed rendering to software
+     (llvmpipe), about 5× the CPU.
+  2. **Destroying a window leaks its WebKit process** (about 100–130 MB per close and reopen). The shell must
+     terminate the web process explicitly.
+  3. **The memory budget needs a process split:** closed-to-tray still held about 196 MB, against about 52 MB for
+     engine + tray alone. So the UI runs as a separate process, launched on demand, and the engine + tray process
+     never loads WebKit.
+  4. `always_on_top` is ignored on Hyprland, so the chat window uses compositor rules (`pin`) and docs.
+  5. WebKit rendered on the AMD iGPU in this hybrid setup. NVIDIA-only desktops are still untested.
+- **S-2 (DEN-3), Linux done:** transparent overlays, WebSocket reconnect (0.14–3.2 s), `w-<id>.localhost`
+  per-widget origins (isolated, persistent) and CDN loads all pass. Native-Wayland OBS has no custom docks
+  (native chat window confirmed), and OBS browser hardware acceleration must be **off** on NVIDIA Linux
+  (blank or crash). Public pages can't reach loopback (Chromium LNA), so widgets are always served from our
+  server.
+
 ## Acceptance checklist
-- [ ] Spike S-1 passes on Hyprland + NVIDIA (render, tray, multi-window, close and reopen webview)
-- [ ] Spike S-2: an overlay from axum renders in an OBS browser source on Linux and Windows
+- [x] Spike S-1 on Hyprland + NVIDIA (E-1): GO with the conditions above
+- [ ] Spike S-1 on KDE (E-2) and Windows (E-3)
+- [x] Spike S-2 on Linux (E-1)
+- [ ] Spike S-2 on Windows (E-3)
 - [x] Q-U1 (UI framework) answered: React + TypeScript (D-018)
 - [ ] Owner accepts
