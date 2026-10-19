@@ -12,9 +12,10 @@
     "./tokens.css": "./src/tokens.css"
   },
   "scripts": {
-    "build": "node scripts/build-css.mjs --check && node scripts/check-contrast.mjs --quiet && tsc -p tsconfig.json",
+    "build": "node scripts/build-css.mjs --check && node --test scripts/build-css.test.mjs && node scripts/check-contrast.mjs --quiet && tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "tokens:css": "node scripts/build-css.mjs",
+    "test": "node --test scripts/build-css.test.mjs",
     "contrast": "node scripts/check-contrast.mjs"
   },
   "devDependencies": {
