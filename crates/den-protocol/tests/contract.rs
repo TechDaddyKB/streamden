@@ -237,6 +237,12 @@ fn rpc_response_carries_exactly_one_outcome() {
             .is_err(),
         "id is required (null when unknown)"
     );
+    let null_error = serde_json::json!({ "jsonrpc": "2.0", "id": 1, "result": 1, "error": null });
+    assert!(
+        serde_json::from_value::<RpcResponse>(null_error.clone()).is_err(),
+        "a present `error: null` is a malformed envelope, as the schema says"
+    );
+    assert!(!schema.is_valid(&null_error));
     let published = codegen::build(Catalog::core()).unwrap();
     assert!(
         published.types["RpcResponse"]["oneOf"].is_array(),
@@ -304,8 +310,7 @@ fn unknown_kinds_decode_to_the_documented_fallbacks() {
     assert!(!validator(root_schema_for::<Fragment>().to_value()).is_valid(&bad));
     for kind in den_protocol::domain::Node::KNOWN_KINDS {
         assert!(
-            !strict.is_valid(&serde_json::json!({ "id": "018f7a8c-0000-7000-8000-000000000020", "enabled": true, "kind": kind, "bogus": 1 }))
-                || *kind == "op",
+            !strict.is_valid(&serde_json::json!({ "id": "018f7a8c-0000-7000-8000-000000000020", "enabled": true, "kind": kind, "bogus": 1 })),
             "known kind {kind} must not fall through to the open fallback branch"
         );
     }

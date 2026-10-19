@@ -665,7 +665,10 @@ fn annotate_leaves(
         return;
     }
     if is_structured(obj) {
-        let already_widened = explicit.is_none() && admits_template_string(obj);
+        // `anyOf: [T, TemplateString]` (a `TemplateOr<T>` field) is value mode and already widened,
+        // whether or not the author also said `"value"` explicitly.
+        let already_widened =
+            matches!(explicit, None | Some(TemplateMode::Value)) && admits_template_string(obj);
         let mode = if already_widened {
             TemplateMode::Value
         } else {
@@ -756,28 +759,47 @@ pub const REDACTED: &str = "***";
 const MAX_REDACT_DEPTH: usize = 64;
 
 /// Redacts every value at an `x-secret: true` position of `schema` to `"***"` (§3), so examples never
-/// publish a secret. Schema-aware: follows `properties`, `additionalProperties`, `items`, `prefixItems`,
-/// `$ref` (siblings included, so a secret marked on the reference counts) and every composition branch.
-/// A branch that does not apply to the value can only redact more, never less. Values the schema does
-/// not describe (an untyped `params` object, for instance) are left alone.
+/// publish a secret. Schema-aware: follows `properties`, `patternProperties` (regexes evaluated; one
+/// that does not compile matches everything), `additionalProperties`, `items`, `prefixItems`, `$ref`
+/// chains (siblings included, so a secret marked on the reference counts) and every composition
+/// branch. The walk errs on the side of redaction: a composition branch that does not apply to the
+/// value can only redact more, never less, and a value nested deeper than the schema walk follows is
+/// redacted whole. Values the schema does not describe (an untyped `params` object, for instance) are
+/// left alone.
 pub fn redact_secrets(value: &mut Value, schema: &Value, types: &BTreeMap<String, Value>) {
     redact(value, schema, types, 0);
 }
 
+/// Resolves a `$ref` chain (a target that is itself a `$ref`) with every hop's siblings merged in.
+fn resolve_ref_chain(
+    obj: &Map<String, Value>,
+    types: &BTreeMap<String, Value>,
+) -> Map<String, Value> {
+    let mut current = obj.clone();
+    for _ in 0..MAX_REF_DEPTH {
+        let Some(target) = resolve_ref(&current, types) else {
+            break;
+        };
+        current = merge_ref_target(&current, target);
+    }
+    current
+}
+
 fn redact(value: &mut Value, schema: &Value, types: &BTreeMap<String, Value>, depth: usize) {
     if depth > MAX_REDACT_DEPTH {
+        // Fail closed: a value the walk cannot classify is not published.
+        *value = Value::String(REDACTED.into());
         return;
     }
     let Some(obj) = schema.as_object() else {
         return;
     };
     let merged;
-    let obj = match resolve_ref(obj, types) {
-        Some(target) => {
-            merged = merge_ref_target(obj, target);
-            &merged
-        }
-        None => obj,
+    let obj = if obj.contains_key("$ref") {
+        merged = resolve_ref_chain(obj, types);
+        &merged
+    } else {
+        obj
     };
     if obj.get("x-secret") == Some(&Value::Bool(true)) {
         *value = Value::String(REDACTED.into());
@@ -795,7 +817,22 @@ fn redact(value: &mut Value, schema: &Value, types: &BTreeMap<String, Value>, de
             for (name, member) in map.iter_mut() {
                 if let Some(prop) = obj.get("properties").and_then(|p| p.get(name)) {
                     redact(member, prop, types, depth + 1);
-                } else if let Some(additional) = obj.get("additionalProperties")
+                    continue;
+                }
+                let mut matched = false;
+                if let Some(Value::Object(patterns)) = obj.get("patternProperties") {
+                    for (pattern, pattern_schema) in patterns {
+                        let applies = regex::Regex::new(pattern)
+                            .map(|re| re.is_match(name))
+                            .unwrap_or(true);
+                        if applies {
+                            matched = true;
+                            redact(member, pattern_schema, types, depth + 1);
+                        }
+                    }
+                }
+                if !matched
+                    && let Some(additional) = obj.get("additionalProperties")
                     && additional.is_object()
                 {
                     redact(member, additional, types, depth + 1);
