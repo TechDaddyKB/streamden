@@ -1,0 +1,35 @@
+# Build outputs
+/target/
+**/target/
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+.vite/
+
+# Agent tooling (local state, never committed)
+.claude/worktrees/
+.claude/settings.local.json
+CLAUDE.local.md
+.codex-log/
+.grok/worktrees/
+
+# Secrets and local env — NEVER commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Logs
+*.log
+.enjoy-logs/
