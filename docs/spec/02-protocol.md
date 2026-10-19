@@ -4,7 +4,8 @@
   provisionally approved by the coordinator on the owner's delegation (2026-10-19); owner confirmation pending.
   r5 (DEN-30 `plugins.call` classification, DEN-31 tier-0 MCP outputSchema) is on `main`. r6 folds in the contract
   amendments spec 03 §23 requested (A1–A13 and the two scopes, card DEN-33) and the shapes `den-protocol` v0 had to
-  assume (DEN-34, card DEN-38 folded into DEN-33), pending review. Card: DEN-33.
+  assume (DEN-34, card DEN-38 folded into DEN-33); its `ForEach` approval expectations were corrected by DEN-44
+  (folded into DEN-42, pending review). Cards: DEN-33, DEN-42.
 - **Owns:** `crates/den-protocol` (single-writer), the codegen pipeline (`cargo xtask codegen`), and every generated
   artifact (`protocol.json`, OpenAPI, AsyncAPI, TS, Python, plugin manifest schema, MCP tool catalog).
 - **Builds on:** [architecture.md](../architecture.md) §2–4, [plugin-sdk-and-api.md](../research/plugin-sdk-and-api.md)
@@ -870,8 +871,15 @@ them.
    `unplanned_call` and the dry-run `warnings` say so in advance; execution consumes the entries in iteration
    order. A read of `itemVar` after the loop binds to the node's last recorded render (the record with index
    `min(len, cap) − 1`, a `missing` render for an empty collection, dynamic otherwise), which is what execution
-   records. A session grant exempts the body's hashes like any other but still pins the iteration count, because
-   it is part of the call multiset (A2). Enforcement happens at three points. (a) **At the call:** the plan is
+   records. Every iteration's record carries the whole `items` render, so any change to the collection (an element, the order
+   or the length, to or from empty) changes every body hash; it is never a mismatch only at the changed index. A
+   session grant exempts the body's hashes like any other but still pins the iteration count, because it is part
+   of the call multiset (A2). Besides (a) and (b) below, a `ForEach` occurrence that the plan expanded from a
+   concrete render is checked **at loop start**, before its first iteration: its `items` binding render must
+   equal the planned one (`args`), or under a session grant its iteration count must equal the planned one
+   (`unplanned_call`), so a collection changed after the call started, emptied included, stops the run before any
+   body node and never runs a prefix. Fewer calls on an unchanged collection because of control flow is not a
+   mismatch (the plan is a superset). Enforcement happens at three points. (a) **At the call:** the plan is
    recomputed and must be identical (same action set and revisions, same multiset of calls, each with the same
    `dynamic_fields`), or the call gets
    `APPROVAL_REQUIRED` with `details.reason = "binding_mismatch"`, `details.mismatch ∈ { "args", "revision",
@@ -1319,10 +1327,12 @@ import-originated data is.
    plan did not list `/message` as dynamic presented to a call whose recomputed plan does → `args`; B queued and
    executed minutes later with nothing changed → runs; a session grant: changed args pass, changed B revision fails,
    B executed after the grant's `expires_at` → `expired`. **`ForEach`** (A2): a body `chat.send { message: {item} }`
-   over `{globals.list}` of three elements plans three calls with distinct `foreach` records; one element changed
-   after approval → `args` at the first body call; the list grown to four → `args` at the call (the recomputed
-   multiset and hashes differ) and, under a session grant, `unplanned_call` (the count is pinned); shrunk to two
-   → runs (fewer consumed than planned); `items` from a `saveAs` of `http.request` → the body is planned once with
+   over `{globals.list}` of three elements plans three calls with distinct `foreach` records; the third element
+   changed, the list grown to four, shrunk to two or emptied after approval → `args` at the call (every hash carries
+   the whole collection) and, when changed after the call started, `args` at loop start with nothing sent; under
+   a session grant a changed element runs and a changed length → `unplanned_call` at the call or at loop start
+   (the count is pinned);
+   unchanged input whose body `BreakLoop`s after two iterations → runs (fewer consumed than planned); `items` from a `saveAs` of `http.request` → the body is planned once with
    `/message` dynamic, the warning names the loop, and a second iteration reaching `chat.send` stops with
    `unplanned_call`; a post-loop `chat.send { message: {item} }` → bound to the last record, and changing the
    last element after approval → `args`; an empty collection → the post-loop node's `{item}` is a `missing` render
@@ -1493,3 +1503,7 @@ protocol design choice made here, not a product decision, and is open to reviewe
   `schedule`, plus `settings` (spec 03 §16), the `catalog.changed` notification name and the core primitive
   `http.*` (spec 11), are reserved for core; a manifest claiming a reserved slug is refused; and `lint-catalog`
   fails a core registration under an unreserved prefix (§4, §5.2, §9.7, §17.12).
+  DEN-44 (folded into DEN-42, 2026-10-19): a changed `ForEach` collection fails a one-shot approval at the call or
+  at a new loop-start check (which also catches an emptied collection and pins the count under a session grant),
+  never after a prefix; shrinking is not "fewer consumed"; only control flow over unchanged input is (§8.8 rule 4,
+  §17.9).
