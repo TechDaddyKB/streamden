@@ -91,7 +91,7 @@ pub struct EventMeta {
     pub payload_version: u32,        // per-event-type schema version, starts at 1
     pub test: bool,                  // simulator or "Test trigger"
     pub replay: bool,                // re-delivered from the replay buffer or from history
-    pub caused_by: Option<RunId>,    // set when emitted by an action run (loop protection, spec 03)
+    pub caused_by: Option<RunId>,    // set when emitted by an action run (loop protection, spec 03; restriction inheritance, §8.8 rule 5)
     pub correlation_id: Option<String>, // upstream message id, for dedupe and moderation links
 }
 ```
@@ -208,17 +208,22 @@ actions: *Apply* on an AI draft sets `user`; *Trust this action* on an imported 
 true }` after the consent screen. Editing an imported action does not change its trust. The same rule applies to
 `updatedBy` on variables (§6.3) and to `revision`, which the server bumps on every write.
 
-**Draft-first under MCP (tier-2 policy, §8.1).** A tier-2 operation called under an MCP context never mutates a
-live document. For **actions**: `actions.create` creates an `ai_draft` with `enabled: false`; `actions.update`
+**Draft-first under MCP (tier-2 policy, §8.1).** A tier-2 configuration operation called under a context whose
+origin principal is `Mcp` (§8.8 rule 5) never mutates a live document and never reports that it did. There are two
+draft representations. `actions.create` creates an `ai_draft` action with `enabled: false`; `actions.update`
 creates a new action `ai_draft { draftOf: <target> }` holding the proposed content (it keeps the target's name,
 which is why uniqueness is checked among non-draft actions only) and leaves the target untouched. *Apply* in the
 "Pending AI changes" panel replaces the target's content (bumping its `revision`), sets `origin: user`, and deletes
-the draft; *Discard* deletes it. For **every other document kind** (queues, commands, overlays, settings) the
-draft is a `PendingChange { id, kind, draftOf?: EntityId, operation, params, createdBy: Principal }` document
-(§7.3, its own `schemaVersion`), which *Apply* replays under the user's context. Codegen adds the optional result
-field `draft?: DraftRef { id, kind }` to every tier-2 operation, set when the call was executed draft-first; `draft`
-is a reserved result key like `dryRun` (§8.1), so WS, REST and MCP results share one schema. Drafts never run (§8.8
-rule 6).
+the draft; *Discard* deletes it. **Every other configuration write, including `actions.delete`** and the
+queue, command, overlay and settings operations, becomes a `PendingChange { id, kind, draftOf?: EntityId,
+operation, params, createdBy: Principal }` document (§7.3, its own `schemaVersion`) that *Apply* replays under the
+user's context (for `actions.delete` that is one `actions.delete` call; applying it also discards `ai_draft`
+actions whose `draftOf` is the target) and *Discard* deletes. A call executed draft-first returns the generated
+**draft result** `DraftResult { draft: DraftRef { id, kind: "action" | "pending_change", draftOf?: EntityId,
+operation: OperationName }, plan: Vec<PlanStep>, warnings: Vec<String> }` (§8.1) **instead of** the normal
+result, so `actions.delete` never answers `{ deleted: true }` for a deletion that has not happened: `plan` says
+what *Apply* will execute. `draft` is a reserved result key like `dryRun`, and WS, REST and MCP share the same
+three result shapes. Drafts never run (§8.8 rule 6).
 
 ### 6.2 Trigger
 
@@ -260,7 +265,8 @@ The catalog entry for each filterable field lists its allowed `ops`, an `options
 - **Names:** `^[A-Za-z_][A-Za-z0-9_]{0,63}$`, case-sensitive.
 - **Run context root** (what `{…}` resolves against). Reserved root names, which always resolve to the
   engine's value: `event` (full envelope), `user` (the event's `UserRef` plus `vars`), `trigger` (`id`,
-  `type`), `action` (`id`, `name`), `run` (`id`, `queuedAt`, `queue`, `isTest`, `principal`, `surface`, `maxTier`; §8.8),
+  `type`), `action` (`id`, `name`), `run` (`id`, `queuedAt`, `queue`, `isTest`, `principal`, `surface`, `maxTier`,
+  `chain`; §8.8),
   `globals`, `plugins`, `match`
   (last regex captures), `args` (the whole args map), and `now`. Other names resolve against the args map,
   which is seeded with the event's top-level payload fields at run start; args set by later nodes overwrite
@@ -395,23 +401,35 @@ pub struct OperationDef {
   ApprovalId` on every operation that can require approval: tier 3, plus the operations whose effective tier is
   dynamic (`actions.run`, `plugins.call`, §8.8). A client that received `APPROVAL_REQUIRED` repeats the identical
   call with `approvalId` set; both names are rejected in author-defined params and in results by `lint-catalog`.
-- **Dry run.** Tier ≥ 1 operations get an optional `dryRun: bool` param added by codegen, and their result root
-  MUST be `type: object` (so `actions.delete` returns `{ deleted: true }`, never `null`), which `lint-catalog`
-  enforces. The result contract has two shapes, both in `protocol.json`: `operations.<name>.result` (the normal
-  result) and `operations.<name>.dryRunResult`, which is always the shared type
-  `DryRunResult { dryRun: true, plan: Vec<PlanStep>, diff?: Value, warnings: Vec<String>, wouldRequireApproval:
+- **Dry run and the three result shapes.** Tier ≥ 1 operations get an optional `dryRun: bool` param added by
+  codegen, and their result root MUST be `type: object` (so `actions.delete` returns `{ deleted: true }` when it
+  deleted, never `null`), which `lint-catalog` enforces. The result contract has up to three shapes, all in
+  `protocol.json`: `operations.<name>.result` (the normal result, meaning the effect happened);
+  `operations.<name>.dryRunResult` (tier ≥ 1), always the shared type `DryRunResult { dryRun: true, plan:
+  Vec<PlanStep>, actions?: Vec<ActionRevisionRef>, diff?: Value, warnings: Vec<String>, wouldRequireApproval:
   bool, effectiveTier: RiskTier }` with `PlanStep { operation, params /* rendered, secrets redacted */, tier,
-  target?: String, description }`. The required literal `dryRun: true` discriminates the two shapes on the wire,
-  so `dryRun` is also a reserved **result** key and `lint-catalog` fails any result schema that defines it. The
-  contract is the same on WS, REST and MCP; generated clients expose it as overloads keyed on the `dryRun` literal
-  (§9.1), OpenAPI responses are `oneOf: [result, DryRunResult]`, and MCP applies its own wrapping afterwards
-  (§9.6). Every tier ≥ 1 operation ships at least one normal and one dry-run example, both validated in CI (§17).
+  action?: ActionId, node?: NodeId, argsHash?: Sha256 /* binding hash, §8.8, on tier ≥ 3 steps */, target?:
+  String, description }`; and `operations.<name>.draftResult` (tier-2 configuration operations), always the shared
+  type `DraftResult` (§6.1), meaning the call was deferred into a draft and nothing live changed. For a composite
+  call `actions` pins every action the run can reach to its revision and `plan` lists every operation it would
+  execute, repeats included; together they are exactly what an approval of that call binds to (§8.8 rule 4). The
+  three shapes are disjoint on the wire: a normal result never defines `dryRun` or `draft` (reserved **result**
+  keys; `lint-catalog` fails any result schema that does, and the generated tier ≥ 1 result schemas forbid them
+  with `properties: { dryRun: false, draft: false }`), `DryRunResult` requires the literal `dryRun: true`, and
+  `DraftResult` requires the object `draft`. The contract is the same on WS, REST and MCP; generated clients expose
+  it as overloads keyed on the `dryRun` literal and a union for the draft case (§9.1), OpenAPI responses are
+  `oneOf: [result, DryRunResult, DraftResult]`, and MCP applies its own wrapping afterwards (§9.6). Every tier ≥ 1
+  operation ships at least one normal and one dry-run example, and every tier-2 configuration operation also a
+  draft example; all are validated in CI (§17).
 - **MCP exposure rules come from the tier, not the author:** tier 4 is **never** exposed over MCP (D-030: code
   execution, ending the stream), whatever the manifest says. Tier 3 requires in-app approval. Tier 2 creates
   disabled drafts. The tier that counts is the **effective tier** of the call (§8.8): for `actions.run` that is
   the maximum over everything the action would execute, re-checked at every node, so a `Code` node or an
   end-stream operation reached through a stored action, a nested or queued `RunAction`, `plugins.call` or a batch
-  is refused under an MCP context exactly like a direct call.
+  is refused under an MCP context exactly like a direct call. A trigger firing on an event the run caused inherits
+  the same restrictions (§8.8 rule 5): the outer call has already returned, so the chained run is the one that
+  stops at that node. `dryRun: true` takes precedence over draft-first: under MCP a tier-2 configuration call with
+  `dryRun: true` returns `DryRunResult` and creates nothing, not even a draft.
 - Plugin operations are first-class methods (`acme.send_chat`). `plugins.call { plugin, method, params }`
   remains as a generic alias for clients that only know plugin IDs.
 
@@ -470,13 +488,13 @@ invalid params, -32603 internal). Application errors use **-32000** with a stabl
 | `data.code` | Meaning |
 |---|---|
 | `UNAUTHENTICATED` | No or invalid identify |
-| `PERMISSION_DENIED` | Scope missing (`details.required` lists it), or the call's effective tier exceeds the context's `maxTier` (`details.reason = "tier_exceeds_context"`, plus `details.node` when it happened inside a run, §8.8) |
+| `PERMISSION_DENIED` | Scope missing (`details.required` lists it), or the call's effective tier exceeds the context's `maxTier` (`details.reason = "tier_exceeds_context"`, plus `details.node` when it happened inside a run and `details.chain` when the restriction was inherited across a `causedBy` chain, §8.8) |
 | `INVALID_PARAMS` | Schema validation failed. Always sent with JSON-RPC code **-32602** (the only `data.code` that doesn't use -32000); `fieldErrors` set |
 | `NOT_FOUND` · `CONFLICT` · `INVALID_STATE` | Entity missing · name or version clash · wrong state (e.g. queue paused, running a disabled draft) |
 | `RATE_LIMITED` | `retryAfterMs` set |
 | `TIMEOUT` · `CANCELLED` | Operation deadline · cancelled by the client or by shutdown |
 | `PLUGIN_UNAVAILABLE` · `CONNECTION_UNAVAILABLE` · `UPSTREAM_ERROR` | Plugin not running · connector not connected · platform/app returned an error (`details.upstream`) |
-| `APPROVAL_REQUIRED` · `PAUSED` | In-app approval pending (`details.approvalId`); `details.reason = "binding_mismatch"` when a supplied approval does not bind to this call (§8.8) · "Pause AI control" or a global pause is on |
+| `APPROVAL_REQUIRED` · `PAUSED` | In-app approval pending (`details.approvalId`); `details.reason = "binding_mismatch"` when a supplied approval does not bind to this call or to a node it reached, with `details.mismatch ∈ { "args", "revision", "unplanned_call", "expired" }` and `details.action`/`details.node`; `details.reason = "unattended"` when a tier-3 node was reached through a `causedBy` chain with nobody to answer (§8.8) · "Pause AI control" or a global pause is on |
 | `UNSUPPORTED_ON_PLATFORM` | OS-gated operation (`details.platforms`) |
 | `PAYLOAD_TOO_LARGE` | Size limit exceeded |
 | `UNSUPPORTED_VERSION` | Unsupported `rpcVersion` on REST (WS closes with 4002); `details.supported` gives the range |
@@ -511,27 +529,54 @@ Checking the static tier of the outer operation is not enough: `actions.run` exe
 ```rust
 pub struct AuthContext {
     pub principal: Principal,          // kind-tagged, below
-    pub surface: Surface,              // rpc | mcp | sub_action | plugin_host | internal
+    pub surface: Surface,              // rpc | mcp | sub_action | plugin_host | event | internal
     pub scopes: Vec<Scope>,
     pub max_tier: RiskTier,            // the highest tier this context may ever execute
     pub approvals: Vec<ApprovalBinding>,
-    pub lineage: Vec<RunId>,           // runs this context has passed through (nested RunAction), newest last
+    pub lineage: Vec<RunId>,           // runs this context has passed through (nested RunAction, causedBy chains), newest last
+    pub chain: Option<ChainOrigin>,    // set once the context has crossed a `causedBy` edge (rule 5)
 }
-pub enum Principal {                   // #[serde(tag = "kind")]
-    Token { token_id: TokenId, name: String, kind: TokenKind /* ui | api | overlay */ }, // max_tier: the token's limit, default 4
+pub enum Principal {                   // #[serde(tag = "kind")]; no variant may have a field named `kind` (serde rejects it, §17.1 fixes it)
+    Token { token_id: TokenId, name: String, token_kind: TokenKind /* ui | api | overlay; wire: tokenKind */ }, // max_tier: the token's limit, default 4
     Mcp { token_id: TokenId, session_id: SessionId, client: ClientInfo },               // max_tier: 3, always (D-030)
     Plugin { plugin_id: PluginId },                                                       // max_tier: from its permissions (spec 12)
-    Trigger { trigger_id: TriggerId, action_id: ActionId },                               // event-started runs; max_tier: 4
+    Trigger { trigger_id: TriggerId, action_id: ActionId },                               // event-started runs; max_tier: 4 unless derived (rule 5)
     System,                                                                               // startup, timers, migrations; max_tier: 4
+}
+pub struct ChainOrigin {
+    pub origin_run: RunId,             // the run started at the entry surface; its restrictions are the ones inherited
+    pub origin_principal: Principal,   // that run's principal; tier policy (MCP exclusion, draft-first) is keyed on it
+    pub hops: u32,                     // `causedBy` edges crossed so far
 }
 pub struct ApprovalBinding {
     pub id: ApprovalId, pub operation: OperationName,
-    pub args_hash: Sha256,             // canonical JSON of the rendered params, minus `dryRun` and `approvalId`
-    pub action: Option<ActionRevisionRef>, // { id: ActionId, revision: u64 } (§3: no tuples on the wire)
-    pub tier3_descendants: Vec<OperationName>, // for actions.run: what the dry-run plan listed
+    pub args_hash: Sha256,             // binding hash (below) of the call's own params, minus `dryRun` and `approvalId`
+    pub plan: Option<ApprovedPlan>,    // composite calls (actions.run, plugins.call, batch.execute entries): what was approved
     pub session_grant: bool, pub expires_at: Timestamp,
 }
+pub struct ApprovedPlan {
+    pub actions: Vec<ActionRevisionRef>, // every action the plan reaches (root, inline and queued RunAction targets), pinned; { id, revision } (§3: no tuples on the wire)
+    pub calls: Vec<PlannedCall>,         // every tier-3 node occurrence the plan would execute; a repeated node or operation is a separate entry
+}
+pub struct PlannedCall {
+    pub action: Option<ActionId>, pub node: Option<NodeId>, // a node in a stored action (both set), or
+    pub plugin: Option<PluginId>,                           // a host call a plugin's dry run declared (spec 12); exactly one identity form is set
+    pub operation: OperationName, pub args_hash: Sha256,
+}
 ```
+
+**Binding hash.** SHA-256 over the canonical JSON (sorted keys, no whitespace, NFC strings) of a call's or node's
+params after a **binding render**: a render against the **plan-time context**, which is the call's own `args`,
+the global, user and plugin variables as of render time, and the stored action content, in which everything else
+resolves to fixed sentinels: the volatile roots and functions (`now`, `run.*`, `random(…)`), the roots that only
+exist once a run executes (`event`, `match`), and every arg name that any `save_as` or `Set argument` node in the
+reachable tree can write (a static property of the tree, so plan time and execution time sentinel the same
+names). Rendering is pure (§10), so this is simply a second render, and both sides compute it identically. The
+hash therefore changes when the stored action content, the call's arguments or a variable a template reads
+directly changes, but not because time passed or because a value computed inside the run differed; those
+intermediate values are data, and the pinned revisions fix every node that produces or consumes them. The same
+hash appears per step in every dry-run plan (`PlanStep.argsHash`, §8.1), so a client can tell which step a
+mismatch refers to.
 
 The rules are normative for every surface. Spec 03 (engine) and spec 06 (API/MCP) implement them; §17.9 tests
 them.
@@ -539,8 +584,9 @@ them.
 1. **Propagation.** A run started by `actions.run` inherits the caller's context. Inline and queued `RunAction`
    children, `Code` nodes, `Parallel` branches, `batch.execute` entries and `plugins.call` targets inherit the
    context of the node or request that started them, with the run appended to `lineage`. A queued run keeps the
-   context it was enqueued with, however long it waits. Nothing executed on behalf of a context may exceed its
-   `max_tier` or use a scope it lacks, at any depth.
+   context it was enqueued with, however long it waits. Runs that triggers start on events a run emitted inherit
+   its restrictions too (rule 5). Nothing executed on behalf of a context may exceed its `max_tier` or use a scope
+   it lacks, at any depth or any number of hops.
 2. **Effective tier.** `effectiveTier(action)` is the maximum tier over every enabled node reachable from the
    action: `Op` → the operation's catalog tier (host classification included, §11); `Code` → 4; `RunAction` with a
    static target → `effectiveTier(target)` (a cycle counts once); `RunAction` whose target is a template or is
@@ -557,21 +603,66 @@ them.
    re-checks each node's tier and scopes against the run's context immediately before executing it. A node that
    exceeds the context fails with `PERMISSION_DENIED` (`tier_exceeds_context`, `details.node`), the run **stops**
    (it does not skip the node and continue), and the audit log records it. Under an MCP context a `Code` node
-   therefore never executes, whatever path led to it.
-4. **Approvals bind to what actually executes.** An approval covers one `operation` + `args_hash`, and for
-   `actions.run` also the target `ActionId` + `revision` (§6.1) and the tier-3 descendants the dry-run plan listed.
-   A call with a different hash, a bumped revision or a new tier-3 descendant gets `APPROVAL_REQUIRED` again with
-   `details.reason = "binding_mismatch"`. Session grants ("approve for 15 min") bind to `operation` + action +
-   revision, not to arguments. One approval covers one execution unless it is a session grant; the handle TTL (§4)
-   counts from issue. Untrusted text never satisfies an approval (§16).
-5. **Events start a new context.** Events emitted by a run carry `meta.causedBy`. Triggers that fire on them start
-   new runs under `Principal::Trigger` with an empty `lineage`, because a trigger is the user's own configuration,
-   not the caller's intent. The audit record links both runs through `causedBy`; loop protection stays in spec 03.
-   Whether MCP-caused chains should instead inherit MCP restrictions is Q-A6 (the spec's default is no).
+   therefore never executes, whatever path led to it, including a trigger on an event the run caused (rule 5).
+4. **Approvals bind to what actually executes.** An approval covers one `operation` + `args_hash`. For a
+   composite call (`actions.run`, `plugins.call`, or a `batch.execute` entry that is one of these) it also covers
+   an `ApprovedPlan`, which the server computes itself at approval time with the dry-run algorithm, never from
+   client-supplied data: the revision of every action the run can reach, and one `PlannedCall` per tier-3 node
+   occurrence (repeats are separate entries; both arms of an `If`/`Switch` are planned, so the plan is a superset
+   of what runs; a cycle is planned once). Enforcement happens at three points. (a) **At the call:** the plan is
+   recomputed and must be identical (same action set and revisions, same multiset of calls), or the call gets
+   `APPROVAL_REQUIRED` with `details.reason = "binding_mismatch"`, `details.mismatch ∈ { "args", "revision",
+   "unplanned_call" }` and `details.action`/`details.node`. (b) **Before every tier-3 node:** the node's `(action,
+   node, operation, bindingHash)`, or for a host call a plugin makes `(plugin, operation, bindingHash)`, must
+   consume one not-yet-consumed matching `PlannedCall`, otherwise the run **stops** with the same error. A plan is
+   finite: a loop that reaches a tier-3 node more often than planned stops, and so does a tier-3 call that a
+   plugin makes which its dry run did not declare (spec 12). (c) **Before a queued `RunAction` child starts**,
+   however long it waited: the target's current revision must equal the pinned one, and for a session grant
+   `expires_at` must not have passed (`details.mismatch = "expired"`), else it stops the same way. A stopped run is
+   audited and surfaced in the approval UI (spec 06/13), where the user can run the action again under their own
+   context; nothing is retried automatically. **Session grants** ("approve for 15 min") exempt the `args_hash`
+   fields, the call's and every `PlannedCall`'s, but still pin revisions, node identities and the call multiset,
+   and their `expires_at` applies to every descendant. One approval covers one execution unless it is a session
+   grant. The handle TTL (§4) bounds when the approved call may **start**; once it has started, its descendants
+   are bound by the plan, not by the clock. Untrusted text never satisfies an approval (§16).
+5. **Restrictions follow `causedBy` chains.** When a run emits an event, the engine stamps `meta.causedBy` (§5.1)
+   and carries the emitting run's `AuthContext` alongside the event inside the engine (never on the wire), so
+   dispatch needs no lookup. A trigger that fires on such an event starts its run under `Principal::Trigger` (who
+   fired, for the audit log) with `surface: event`, but with a context **derived** from the causing run's and never
+   wider than it: `max_tier = min(causing.max_tier, 4)`, `scopes = causing.scopes` (a trigger on its own has every
+   scope, so the intersection is the causing run's), `approvals = []` (bindings name concrete calls, none of which
+   is in the chain), `lineage = causing.lineage ++ [causing run]`, and `chain = { origin_run, origin_principal,
+   hops }` with `hops = causing.chain.hops + 1`, or 1 when the causing run has no chain; the origin is the run
+   started at the entry surface and is kept across every hop. **Tier policy is keyed on the origin principal**
+   (`chain.origin_principal` when set, else `principal`): MCP exclusion, tier-3 approval and draft-first apply
+   whenever the origin is `Mcp`; a `Plugin` origin follows its permissions (spec 12); `Token`, `Trigger` and
+   `System` origins need no approval, because the user invoked or configured the call. The rule applies to every
+   hop and every principal. Under a user token or `System` the derived context is as wide as a fresh trigger
+   context, so ordinary automations are unaffected; under an MCP context (`max_tier` 3) or a plugin context, a
+   trigger whose action contains a `Code` node or ends the stream fails that node with `PERMISSION_DENIED`
+   (`tier_exceeds_context`, `details.chain` = the origin run) and stops, exactly as if the node were nested in the
+   original run. A tier-3 node reached through a chain with an `Mcp` origin has nobody to answer an approval
+   request, so it stops with `APPROVAL_REQUIRED` (`details.reason = "unattended"`); the approval UI shows the
+   stopped run with its chain and offers to run the trigger's action under the user's own context, which is the
+   explicit consent boundary. Dry-run plans and `effectiveTier` do not look across chains (which triggers will fire
+   is only known at emission), so the outer call can succeed while the chained run stops; `wouldRequireApproval`
+   describes the call, not its chains. Events **without** `causedBy` start a fresh, unrestricted trigger context:
+   upstream events, manual "Test trigger" events, and a platform echoing back a message the engine sent, so the
+   taint covers the causation the engine can see. `causedBy` is server-assigned on every path (§16): the engine
+   stamps it from the emitting run; a core connector that can attribute an upstream event to the engine's own
+   outbound call (its own chat messages, matched by `meta.correlationId`) SHOULD report the attribution so the
+   engine stamps it (spec 05); the plugin host stamps it on events a plugin emits while servicing a host call made
+   under a run (spec 12); no client, connector payload or plugin can set it. An attributed `causedBy` that names a
+   run whose context the engine no longer retains (retention is at least the attribution window, spec 03) fires no
+   triggers at all and is audited as `chain_context_lost`: an event of unknown provenance never widens authority.
+   Loop protection (hop and lineage limits) stays in spec 03. This is the owner's provisional answer to Q-A6
+   (coordinator, 2026-10-19, owner to confirm); the UI lint that warns when a trigger listens to events
+   MCP-exposed operations can emit and its action has effective tier 4 remains recommended (spec 07).
 6. **Drafts never run.** `actions.run` on an `ai_draft`, or on any `enabled: false` action, fails with
    `INVALID_STATE`; an MCP context cannot enable it (tier 2 is draft-first).
-7. **Visible, not settable.** The run context (§6.3) exposes `run.principal` (kind only), `run.surface` and
-   `run.maxTier` read-only for templates and scripts. No API input can set any part of an `AuthContext`.
+7. **Visible, not settable.** The run context (§6.3) exposes `run.principal` (kind only), `run.surface`,
+   `run.maxTier` and `run.chain` (`originRun`, `originPrincipal` kind only, `hops`; `null` when not derived)
+   read-only for templates and scripts. No API input can set any part of an `AuthContext`.
 
 ## 9. Codegen
 
@@ -580,7 +671,7 @@ them.
 ```
 crates/den-protocol (types + catalog registration: fn register(&mut Catalog))
   └─ cargo xtask codegen
-       ├─ schema/protocol.json        catalog: operations (params, paramsAuthoring, result, dryRunResult), events
+       ├─ schema/protocol.json        catalog: operations (params, paramsAuthoring, result, dryRunResult, draftResult), events
        │                              (payload schema per payloadVersion, payloadVersions per rpcVersion), shared
        │                              types, errors, scopes, deprecations
        ├─ schema/plugin.schema.json   manifest schema (§11)
@@ -599,11 +690,14 @@ crates/den-protocol (types + catalog registration: fn register(&mut Catalog))
 - `cargo xtask codegen --check` regenerates into a temp dir and diffs. CI runs it on every PR, plus `git diff
   --exit-code`. Generated files are committed, marked `// @generated`, and never hand-edited (AGENTS.md).
 - Generator versions are pinned (Cargo.lock, `pnpm-lock.yaml`, `uv.lock`), so output only changes when sources do.
-- **Generated clients carry the dry-run contract** (§8.1). TS: `client.chat.send(params): Promise<ChatSendResult>`
-  and an overload `client.chat.send(params & { dryRun: true }): Promise<DryRunResult>`; the generic
-  `client.call(method, params)` returns the union. Python: `@overload` on `dry_run: Literal[True]`, with pydantic
-  models `ChatSendResult | DryRunResult` discriminated by `dryRun`. Clients validate incoming results against the
-  shape the request selected; a mismatch is a client-side protocol error, not a silently widened type.
+- **Generated clients carry the dry-run and draft contracts** (§8.1). TS: `client.chat.send(params):
+  Promise<ChatSendResult>` and an overload `client.chat.send(params & { dryRun: true }): Promise<DryRunResult>`;
+  the generic `client.call(method, params)` returns the union. Python: `@overload` on `dry_run: Literal[True]`,
+  with pydantic models `ChatSendResult | DryRunResult` discriminated by `dryRun`. Whether a tier-2 configuration
+  call is deferred into a draft depends on the context, not on the params, so no overload can select it: those
+  operations return `ActionsDeleteResult | DraftResult` and clients narrow on the presence of `draft` (TS `"draft"
+  in r`, pydantic discriminated by the required `draft` key). Clients validate incoming results against the shapes
+  the request allows; a mismatch is a client-side protocol error, not a silently widened type.
 - **Authoring schemas are generated, never hand-written**: `paramsAuthoring` (§10.1) is derived from `params` by
   xtask and is what the UI forms, `den validate` and the save-time validator use for `Op.params`.
 
@@ -652,8 +746,9 @@ Per tool:
   Small `$ref`s are inlined. Property names must match `^[A-Za-z0-9_.-]{1,64}$`.
 - **outputSchema** = the result schema **after** MCP transforms: `x-den-untrusted` string fields are replaced
   by the wrapper schema `{ untrusted: true, source, text }`, and tier ≥ 1 tools get the `oneOf`-free envelope
-  `{ result?: <result>, dryRun?: DryRunResult }` (the same `DryRunResult` as §8.1, wrapped so that
-  `structuredContent` always validates without a root union). The server also returns a JSON text block.
+  `{ result?: <result>, dryRun?: DryRunResult, draft?: DraftResult }` (the same types as §8.1 and §6.1, wrapped so
+  that `structuredContent` always validates without a root union; exactly one key is set). The server also returns
+  a JSON text block.
 - **annotations**, all four always set explicitly (MCP defaults `destructiveHint` to true when not read-only):
   tier 0 → `readOnlyHint: true`; tiers 1–2 → `readOnlyHint: false, destructiveHint: false`; tier 3 →
   `destructiveHint: true` plus `_meta["anthropic/requiresUserInteraction"]`. Operations whose effective tier is
@@ -682,7 +777,7 @@ Per tool:
 |---|---|
 | `cargo xtask codegen --check` | Any generated artifact drifts |
 | `cargo xtask schema-compat --base <last-tag>` | Breaking change without a version bump (§7.2) |
-| `cargo xtask lint-catalog` | Missing doc comment/description/example; bad identifier; reserved run-context name; MCP name/schema rule violated; a result schema defining `dryRun` or `draft`, or an author param named `dryRun` or `approvalId`; a tier ≥ 1 operation whose result root isn't `type: object` or that lacks a dry-run example; a leaf param without a resolved template mode, or a value-mode enum member starting with `{` (§10.1); a protocol method registered as an operation; a core tier-4 operation marked `mcp` |
+| `cargo xtask lint-catalog` | Missing doc comment/description/example; bad identifier; reserved run-context name; MCP name/schema rule violated; a result schema defining `dryRun` or `draft`, or an author param named `dryRun` or `approvalId`; a tier ≥ 1 operation whose result root isn't `type: object` or that lacks a dry-run example; a tier-2 configuration operation that lacks a draft example; a leaf param without a resolved template mode, or a value-mode enum member starting with `{` (§10.1); a protocol method registered as an operation; a core tier-4 operation marked `mcp` |
 | `cargo nextest run -p den-protocol` | Round-trip, golden fixture or migration test fails |
 | `pnpm -C sdk/ts typecheck && pnpm -C sdk/ts test` | Generated TS doesn't compile or rejects fixtures |
 | `uv run pytest sdk/python` (plus pyright) | Generated models reject fixtures |
@@ -804,7 +899,7 @@ defined by their owning spec, but always as catalog operations following §8.1 a
 - **Schema-driven forms:** every sub-action, trigger filter, setting and manifest form is rendered from the
   catalog schema plus `x-ui` hints (AGENTS.md: "never hand-write a form for something that has a schema").
 - **API explorer** (spec 07): browses `system.describe`, runs operations with `dryRun` and renders the typed
-  `DryRunResult` plan (§8.1), shows the normal and dry-run examples.
+  `DryRunResult` plan and `DraftResult` (§8.1), shows the normal, dry-run and draft examples.
 - **Deprecation and version notices:** a client that negotiated an old `rpcVersion` is flagged in
   *Settings → API Clients* (spec 06).
 - **Import report:** lists unconverted templates and `placeholder` nodes (spec 15).
@@ -840,15 +935,18 @@ import-originated data is.
 - Every inbound message (WS, REST, stdio, webhook, import) is parsed with size and depth limits before any work.
 - Transport hardening is in spec 06 and is mandatory: bind to `127.0.0.1` by default, check the `Host` and
   `Origin` headers on every HTTP request and WS upgrade, and use pairing tokens for LAN mode (AGENTS.md).
-- Server-assigned fields (`origin`, `updatedBy`, IDs on create, `meta.caused_by`) are ignored on input (§6.1).
+- Server-assigned fields (`origin`, `updatedBy`, IDs on create, `meta.caused_by`) are ignored on input (§6.1);
+  `causedBy` is stamped by the engine from the emitting run or from a core connector's attribution, never by a
+  client, a connector payload or a plugin (§8.8 rule 5).
 - Every operation is checked against the caller's scopes on every surface. The MCP meta-tools and `plugins.call`
   go through the same pipeline (validation → scope → tier policy → approval → rate limit → audit), so neither is a
   bypass.
 - Tier comes from the catalog and the host's classification, never only from the client or the plugin (§8.1, §11).
 - Authorization is transitive (§8.8): every node of every run is checked against the originating context's
-  `maxTier` and scopes right before it executes, approvals bind to the rendered arguments and the action revision,
-  and an MCP context can never reach tier 4 through `actions.run`, a nested or queued `RunAction`, `plugins.call` or
-  `batch.execute`.
+  `maxTier` and scopes right before it executes; approvals bind to the call's arguments, to the revision of every
+  action the run can reach and to each planned tier-3 node with its binding hash; restrictions follow `causedBy`
+  chains; and an MCP context can never reach tier 4 through `actions.run`, a nested or queued `RunAction`,
+  `plugins.call`, `batch.execute` or a trigger on an event its run emitted.
 - Templates are rendered and the result re-validated against the concrete invocation schema before any operation
   runs; direct API callers cannot submit templates at all (§10.1).
 - `x-secret` values never leave the keychain path; `x-den-untrusted` text is wrapped for AI consumers and never
@@ -864,7 +962,10 @@ import-originated data is.
 1. **Round-trip and golden tests** (`den-protocol`): every type serializes to its committed fixture and back
    unchanged (property tests with `proptest` for the tree types), including `#[serde(flatten)]` inside the
    `Node::Op` variant through serde, schemars (`unevaluatedProperties`) and ts-rs; if ts-rs can't express it,
-   `ContributionRef` is written out as two fields and this test is what catches the drift.
+   `ContributionRef` is written out as two fields and this test is what catches the drift. Every variant of every
+   internally tagged union (all five `Principal` variants, every `Node`, `Origin` and `Filter` kind) has a fixture;
+   a variant field named like its tag (`kind`) is a serde compile error, which is why `Principal::Token` carries
+   `tokenKind`.
 2. **Examples are tests:** every catalog example and `testPayload` validates against its JSON Schema, its TS type
    (tsc) and its pydantic model.
 3. **Catalog lint, codegen drift and schema-compat** as in §9.7.
@@ -882,9 +983,23 @@ import-originated data is.
    an action with a direct `Code` node → `PERMISSION_DENIED` before execution; an inline `RunAction` child that
    contains `Code` → refused; a queued `RunAction` child edited to add `Code` after enqueue → the node fails at
    execution and the run stops; a template-targeted `RunAction` → tier 4; `actions.run` on an `ai_draft` →
-   `INVALID_STATE`; approval replay with changed args, a bumped revision or a new tier-3 descendant →
-   `APPROVAL_REQUIRED` with `binding_mismatch`; the same action succeeds under a `maxTier: 4` user token; a
-   follow-up run triggered by an event the MCP run emitted starts a new context (asserts the Q-A6 default).
+   `INVALID_STATE`; the same action succeeds under a `maxTier: 4` user token. **Approval bindings** (rule 4), with
+   A queuing B whose tier-3 node sends a templated message: approval replay with changed `actions.run` args →
+   `binding_mismatch` / `args`; root unchanged, B edited after approval → `revision` with `details.action = B`;
+   all revisions unchanged, a global the message template reads changed before B executes → `args` with
+   `details.node`; `{now}` in the message → still matches (sentinel); A edited to run the same tier-3 operation
+   twice → `unplanned_call`; a `While` reaching a tier-3 node more often than planned → stops; a message template
+   reading a `save_as` result from an earlier node → matches regardless of that result (sentinel); B queued and
+   executed minutes later with nothing changed → runs; a session grant: changed args pass, changed B revision fails,
+   B executed after the grant's `expires_at` → `expired`. **Chains** (rule 5): the MCP run executes
+   `variables.set`, `variables.global_updated` fires a user trigger whose action has a `Code` node → that node fails
+   with `tier_exceeds_context` and `details.chain`, the run stops, and the audit links both runs through
+   `causedBy`; a two-hop chain (A → event → B → event → C) still inherits, `run.chain.hops` = 2; a tier-3 node in a
+   chained run with an `Mcp` origin → `APPROVAL_REQUIRED` / `unattended`, while the same chain started by a UI token
+   runs it without approval; a tier-2 configuration operation in a chained run with an `Mcp` origin → draft-first;
+   the same chain under a user token runs the `Code` node; an upstream event without `causedBy` starts a fresh
+   context; an attributed `causedBy` naming an unretained run fires no trigger and audits `chain_context_lost`; a
+   plugin-supplied `causedBy` is ignored.
 10. **Payload versions** (§5.2): two sessions on `rpcVersion` N and N−1 receive one upstream event in their
     respective shapes, replay honours each session's version, and a core `payloadVersion` bump without an
     `rpcVersion` bump fails `schema-compat`.
@@ -897,20 +1012,26 @@ import-originated data is.
     schema clause and by the save-time validator (§4).
 13. **MCP exposure** (§9.6): the Lean profile creates a disabled `ai_draft` through `actions_create` and through
     `invoke_operation("actions.create")` with identical results; `invoke_operation` on a protocol method or a tier-4
-    operation → `NOT_FOUND`; `actions_update` yields an `ai_draft { draftOf }` with the target's name and leaves the
-    target untouched; `queues_update` yields a `PendingChange`; every tier-2 result carries `draft` on MCP and
-    validates against the same result schema on WS.
-14. **Dry-run results** (§8.1): every tier ≥ 1 operation's normal and dry-run examples validate against `result`
-    and `DryRunResult` respectively in JSON Schema, TS and pydantic, and the TS overload and Python `@overload`
-    resolve to the right type.
+    operation → `NOT_FOUND`; `actions_update` and `invoke_operation("actions.update")` yield an `ai_draft {
+    draftOf }` with the target's name and leave the target untouched; `actions_delete` (Full profile) and
+    `invoke_operation("actions.delete")` (Lean) yield a `PendingChange { operation: "actions.delete" }` and leave the
+    target in place, and the result validates against `DraftResult` (no `deleted` key); `dryRun: true` on
+    `actions_create` returns `DryRunResult` and creates no draft; `queues_update` yields a `PendingChange`; every
+    tier-2 draft result validates against `draftResult` on WS and inside the MCP envelope; the same calls under a
+    user token return the normal result.
+14. **Dry-run and draft results** (§8.1): every tier ≥ 1 operation's normal and dry-run examples, and every tier-2
+    configuration operation's draft example, validate against `result`, `DryRunResult` and `DraftResult`
+    respectively in JSON Schema, TS and pydantic, and against no other of the three; the TS overload and Python
+    `@overload` resolve to the right type, and the draft union narrows on `draft`.
 
 ## 18. Open questions (added to [QUESTIONS.md](../QUESTIONS.md))
 
 - **Q-X4:** how much of the template expression language (§10) ships in v1.
 - **Q-B6:** license of `crates/den-protocol` itself.
 - **Q-B7:** host for the published schema `$id` URLs (needs a domain, ADR-0004 open item).
-- **Q-A6:** whether runs triggered by events that an MCP-initiated run caused inherit the MCP restrictions (§8.8
-  rule 5; the spec's default is no, with audit linkage).
+- **Q-A6:** whether runs triggered by events that an MCP-initiated run caused inherit the MCP restrictions.
+  Provisionally answered by the coordinator on 2026-10-19 (owner to confirm): yes, for the whole `causedBy` chain,
+  with audit linkage; §8.8 rule 5 is written that way and applies the same rule to every restricted principal.
 
 Assumptions made while writing this spec (reviewers, please check): D-027 already settles Q-X3, so §10 proposes
 only the details; LSP framing supersedes the research's newline-delimited sidecar framing (§8.6); MCP never
@@ -934,3 +1055,18 @@ protocol design choice made here, not a product decision, and is open to reviewe
   a reserved `draft` result field, the generated `if/then/else` clause for `ContributionRef.plugin`, tier-3
   annotations for dynamic-tier MCP tools, trigger `config` and `settings` excluded from template modes, and
   `ActionRevisionRef` instead of a tuple.
+- **r3**: resolves the Codex (Astra) re-review of r2. Finding 1 (P1): restrictions follow `causedBy` chains per
+  the provisional Q-A6 answer; `ChainOrigin`, `surface: event`, origin-keyed tier policy, `unattended` approvals,
+  `run.chain` (§5.1, §6.3, §8.1, §8.5, §8.8 rules 1, 3, 5, 7, §16, §17.9, §18). Finding 2 (P1): `ApprovedPlan`
+  with pinned revisions of every reachable action and per-occurrence `PlannedCall`s, the binding hash with
+  volatile sentinels, enforcement at the call, before every tier-3 node and before queued children, `expired` and
+  `unplanned_call` mismatches, session-grant exemption narrowed to arguments; `DryRunResult.actions` and
+  `PlanStep.action/node/argsHash` (§8.1, §8.5, §8.8 rule 4, §16, §17.9). Finding 3 (P2): `actions.delete` and
+  every non-action configuration write draft as `PendingChange`; `DraftResult` as the third, disjoint result shape
+  on every transport, generated unions, draft examples (§6.1, §8.1, §9.1, §9.6, §9.7, §13, §17.13, §17.14).
+  Finding 4 (P2): `Principal::Token.tokenKind`, fixtures for every variant of every tagged union (§8.8, §17.1).
+  A fresh-context Claude reviewer pass on r3 added: tier-3 approval keyed on the origin principal like the other
+  tier policies, the plan-time context and sentinel set of the binding render (run-produced values are data, not
+  binding inputs), `PlannedCall` identity for plugin-declared host calls, the handle TTL bounding only the start of
+  an approved call, `causedBy` stamped by the engine on every path with `chain_context_lost` fail-closed, chains
+  excluded from dry-run plans, `dryRun` precedence over draft-first, and the `draftResult` artifact in §9.1.
