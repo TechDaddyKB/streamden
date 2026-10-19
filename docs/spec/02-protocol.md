@@ -447,8 +447,21 @@ pub struct OperationDef {
   validated against the target's **author** params schema, so the reserved `dryRun` and `approvalId` are only
   accepted on the outer call. Tier policy, approval, rate limits and audit apply as if the target were called
   directly: the approval binds to the target's `operation` and the `args_hash` of `params` (§8.8 rule 4), so it
-  is interchangeable with an approval of the native call. Results, dry-run and draft shapes and the MCP
-  transforms (§9.6, `x-den-untrusted` wrapping included) use the target's schemas, never a generic one.
+  is interchangeable with an approval of the native call. **Result contract.** The alias has its own static
+  catalog schemas, because its target is only known at call time and may be tier 0 (whose result root can be an
+  array or scalar and which has no `dryRunResult`). Its normal result is `PluginCallResult { value: Value }`:
+  `value` is the target's normal result (`null`, scalar, array or object), unchanged apart from the MCP
+  transforms below, for a target of any tier, and conforms to the target's result schema at call time; the
+  static schema of `value` is unconstrained (`{}`). This object wrapper is how the alias meets the tier ≥ 1
+  object-root rule; it is not an exception to it. Its dry-run result is always the shared `DryRunResult`, returned only after every target check above (resolution,
+  exposure, scopes, `params` validation) has passed: for a tier ≥ 1 target, the target's own dry run (the target
+  is called with `dryRun: true`); for a tier-0 target, one the alias builds without calling the target, with
+  `plan` holding a single `PlanStep { operation: <target>, params /* rendered */, tier: 0, description }`,
+  `warnings: []`, `wouldRequireApproval: false` and `effectiveTier: 1`. The alias has no `draftResult`: plugin
+  operations are never configuration operations (those write the core documents of §7.3), so no target defers
+  into a draft. On MCP, `plugins_call` always uses the tier-1 envelope of §9.6 around these alias shapes,
+  whatever the target's tier; `x-den-untrusted` fields inside `value` are wrapped by the target's result schema,
+  exactly as the native tool would.
 
 ### 8.2 Envelope (WebSocket and REST `POST /api/v1/rpc`)
 
@@ -814,7 +827,9 @@ evaluated at runtime against the live catalog, filters every profile list and th
 `describe_operation` and `invoke_operation`, so no path reaches an operation a native tool could not. Protocol
 methods (§8.1, §12) are not operations: `invoke_operation` returns `NOT_FOUND` for them, as it does for tier 4.
 `plugins.call` is an operation and passes the predicate (`plugins_call`); its target is checked against the same
-predicate at call time (§8.1), so the alias reaches exactly the plugin operations a native tool could.
+predicate at call time (§8.1), so the alias reaches exactly the plugin operations a native tool could. Its
+outputSchema is generated from its own tier-1 shapes (`PluginCallResult`, `DryRunResult`), never from a
+target's.
 Per tool:
 - **name** = method with `.` → `_` (`obs.set_scene` → `obs_set_scene`). Codegen fails unless it matches
   `^[a-z0-9_]{1,64}$`. Renames keep an entry in `schema/mcp-aliases.json`.
@@ -1122,8 +1137,16 @@ import-originated data is.
     `actions_create` returns `DryRunResult` and creates no draft; `queues_update` yields a `PendingChange`; every
     tier-2 draft result validates against `draftResult` on WS and inside the MCP envelope; the same calls under a
     user token return the normal result. **`plugins.call`** (§8.1): `plugins_call` is in `tools/list` and
-    `invoke_operation("plugins.call")` is accepted; both, and the WS method, give the same result as the native
-    plugin tool for an MCP-exposed tier-1 target, including the wrapped `x-den-untrusted` fields; an unknown
+    `invoke_operation("plugins.call")` is accepted; both, and the WS method, return `PluginCallResult` whose
+    `value` equals the native plugin tool's result (on MCP, the native envelope's `result`) for an MCP-exposed
+    tier-1 target, including the wrapped `x-den-untrusted` fields; for tier-0 targets returning an array, a
+    scalar and `null`, the WS method, `plugins_call` and `invoke_operation("plugins.call")` each return `{ value:
+    <that value> }` (key present for `null`; inside the MCP `result` key), and with `dryRun: true` a
+    `DryRunResult` with one tier-0 `PlanStep`, `wouldRequireApproval: false` and `effectiveTier: 1`, without
+    invoking the target, while a dry run on a target the caller lacks scopes for → `PERMISSION_DENIED`; every one
+    of these results, tier-0 and tier-1, validates against the advertised alias schemas
+    (`operations["plugins.call"]` `result`/`dryRunResult` in `protocol.json` and the `plugins_call`
+    outputSchema) and against no other of the three shapes; an unknown
     plugin or `method` → `NOT_FOUND`; over MCP a target with `expose.mcp: false` or tier 4 → `NOT_FOUND`, while
     over WS the `expose.mcp: false` target runs, a target with `expose.rpc: false` → `NOT_FOUND`, and a tier-4
     target → `PERMISSION_DENIED` (`tier_exceeds_context`) for a `maxTier: 3` token and runs for a `maxTier: 4` user
@@ -1200,5 +1223,8 @@ protocol design choice made here, not a product decision, and is open to reviewe
 - **r5** (DEN-30): resolves the P2 follow-up from the r4 review. `plugins.call` is classified as a catalog
   operation with a dynamic effective tier, not a protocol method: target restrictions (same plugin, target's own
   exposure and scopes, per-surface exposure flag), `plugin`/`method` resolution, reserved params only on the outer
-  call, approvals and result transforms keyed on the target, MCP tool and meta-tool exposure, and its row removed
-  from the §12 protocol-method table (§8.1, §8.8 rule 2, §9.6, §12, §17.13).
+  call, approvals keyed on the target, MCP tool and meta-tool exposure, and its row removed from the §12
+  protocol-method table. Round 2 (Codex review) adds the alias's own result contract, so tier-0 targets fit the
+  tier ≥ 1 rules: `PluginCallResult { value }` wraps the target's result, the dry run is always `DryRunResult`
+  (built by the alias for a tier-0 target, after the target checks), there is no alias draft result, and MCP
+  always applies the tier-1 envelope, with tier-0 conformance tests (§8.1, §8.8 rule 2, §9.6, §12, §17.13).
