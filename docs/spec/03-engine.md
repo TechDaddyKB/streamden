@@ -570,41 +570,62 @@ Every enabled branch runs as its own task, each with a **copy** of the args map 
 snapshot. The node joins when all branches have ended. A branch's **writes** are the names it set or deleted
 (not its whole copied map); they are merged back into the parent's args **in branch order** (a later branch's
 write to the same name wins), so the result is deterministic and independent of timing. `Delay` inside a branch
-delays only that branch. A branch that fails under `onError: stop` cancels its siblings and fails the run; under
+delays only that branch (and, when the branch runs inline under the task budget below, the start of the node's
+later branches). A branch that fails under `onError: stop` cancels its siblings and fails the run; under
 `continue` the other branches finish and the run goes on.
 
 **Bounded fan-out.** Branches are not free: a 20-deep chain of actions each calling the next twice through
 inline `Parallel` branches would otherwise start 2^20 tasks under a single queue slot. Every **root run** (a
 run started by admission; its inline children and every `Parallel` branch at any depth belong to it) owns a
-**task budget** of `engine.run.maxTasksPerRun` (64) permits:
+**task budget** of `engine.run.maxTasksPerRun` (64) permits, and a permit bounds an **existing** branch task,
+not an executing one:
 
-- a branch runs only while it holds a permit; a `Parallel` node starts branches **in branch order as permits
-  become available** (bounded scheduling: with 100 branches and 64 permits, branch 65 starts when one of the
-  first 64 ends), and the merge order stays branch order whatever the start order;
-- a task that reaches a join (a `Parallel` node awaiting its branches, a `ForEach`/`While` body awaiting a nested
-  `Parallel`) **releases its permit while it waits** and re-acquires one before continuing, with re-acquisition
-  served before new branch starts. Permits are therefore only ever held by tasks that are executing nodes, so
-  the set of permit holders always makes progress and nested fan-out cannot deadlock, however deep;
-- the root task itself needs no permit (it is the one task a run always has); inline children run in their
-  caller's task and need none either;
-- a branch waiting for a permit observes the run's cancellation token and ends `cancelled` / `parent` without
-  acquiring (§9.11);
+- a branch task holds its permit from the moment it is spawned until it ends, **including while it is parked at
+  a join** (a `Parallel` node awaiting its branches, a `ForEach`/`While` body awaiting a nested `Parallel`).
+  Permits are never released at a join and never re-acquired, so the number of branch tasks that exist for one
+  root run, parked or executing, is at most `maxTasksPerRun` at every instant;
+- a `Parallel` node takes its enabled branches **in branch order**. For each one it tries to take a permit
+  **without waiting**: with a permit the branch is spawned as its own task; without one the branch runs
+  **inline in the node's own task**, to completion, before the node considers the next branch. An inline
+  branch has its own copy of the args, its own writes record, its own `Stop` scope and the same `onError`
+  treatment as a spawned one; only the scheduling differs. No task ever waits for a permit, so nested fan-out
+  cannot deadlock however deep: a parked task waits only on spawned tasks, and the leaves of that finite tree
+  are executing. Branch-level parallelism is a scheduling property, not a semantic one: the merge order
+  (branch order) and the merged args are identical whether a branch was spawned or ran inline; the wall-clock
+  duration and the relative order of side effects *between* branches are timing, which this spec has never
+  guaranteed (a branch that `signals.wait`s for a sibling that has not started yet times out under either
+  rule). Before taking each next branch the node checks the run's cancellation token and whether a sibling has
+  already stopped or failed the run under `onError: stop`; it takes no further branch after that. With 100
+  branches and 64 permits the first 64 are spawned, branch 65 runs inline in
+  the node's task, and from branch 66 on a branch is spawned whenever a permit has come back;
+- the root task itself needs no permit (it is the one task a run always has); inline `RunAction` children run
+  in their caller's task and need none either;
+- a branch observes the run's cancellation token like every node (§9.11), spawned or inline;
 - the args map is a **persistent map** like the variable store (§11.4), so a branch's "copy" shares structure
   with its parent and costs nothing until the branch writes. The **run memory budget** `engine.run.maxRunBytes`
-  (32 MiB) bounds the serialized size of the root's map plus every live branch's distinct writes; the
+  (32 MiB) bounds the serialized size of the root's map plus every branch's distinct writes record **from the
+  branch's first write until the join merges it**, whether the branch is spawned or inline and executing,
+  parked at a join or already ended (a `Parallel` with 1,000 branches that each write 3 MiB and exit holds
+  those records until its join, so they are charged); the
   per-map limit `maxArgsBytes` (4 MiB) still applies to each map. A write that would exceed either fails the
   node with `PAYLOAD_TOO_LARGE` (`details.reason ∈ { "args", "run_budget" }`), under the node's `onError`;
 - the **node-execution budget** `engine.run.maxNodeExecutions` (1,000,000 per root run, counted across inline
   children, branches and loop iterations) turns an exponential fan-out into a deterministic failure:
   exceeding it fails the run with `INVALID_STATE` (`details.reason = "node_budget"`), not a slow death.
 
-The engine-wide bound on **executing** branch tasks is therefore `maxConcurrent × maxTasksPerRun` (16,384 at the
-defaults); tasks parked at a join still exist without a permit, so the bound on *existing* tasks is that times
-the nesting depth (`maxInlineDepth` + `maxDepth`, ≤ 64 × 16,384 ≈ 1 M; a parked Tokio task costs a few hundred
-bytes plus its future, and parked branches' writes count against the run budget). Args are bounded by
-`maxConcurrent × maxRunBytes` (8 GiB theoretical at the defaults; the settings validator warns when that product
-exceeds half of physical memory). §22.4 tests the
-2^20 chain under the budget (bounded live tasks, `node_budget` failure, cancellation mid-fan-out) and a
+Every piece of allocated run state is therefore bounded by a setting, not by the shape of the action: branch
+tasks by `maxTasksPerRun` per root run and `maxConcurrent × maxTasksPerRun` engine-wide (16,384 at the
+defaults), parked or executing; the continuation frames of one task by `maxDepth × maxInlineDepth` (1,024),
+which an inline branch does not increase because its subtree is part of its action's tree depth; pending
+branches by the node's own child list (a `Parallel` node keeps an index into its children, never a queue of
+branch descriptors); and args by `maxConcurrent × maxRunBytes` (8 GiB theoretical at the defaults; the settings
+validator warns when that product exceeds half of physical memory). The r2 rule released permits at joins and
+bounded only executing tasks; a breadth-first schedule of a 17-level binary chain of inline `Parallel` nodes
+could then park 131,071 joins under 64 permits before any leaf ran. An action that wants more tasks than the
+budget does not fail and does not grow: it degrades to sequential execution inside the tasks it has and then
+either completes or hits `node_budget`. §22.4 tests the
+2^20 chain under the budget (bounded existing tasks, `node_budget` failure, cancellation mid-fan-out), the
+17-level breadth-first chain with `Delay` leaves at budgets 1 and 64, and a
 100-branch `Parallel` with 64 permits (all branches run, merge order preserved). `Action.concurrent` is defined as `Parallel` over the top-level nodes, one node per branch (Streamer.bot's
 "Concurrent"; unlike Streamer.bot, `Delay` is honoured per branch, and the importer drops top-level `Delay` nodes
 of imported concurrent actions to preserve behaviour). `random` takes precedence over `concurrent` when both are
@@ -708,7 +729,7 @@ persisted. A signal name is `^[A-Za-z_][A-Za-z0-9_.-]{0,63}$`.
 | Loop iterations | 10,000 default, 1,000,000 ceiling | loop ends with warning |
 | Args map size (each map: root or branch) | 4 MiB serialized (`engine.run.maxArgsBytes`) | node fails `PAYLOAD_TOO_LARGE` |
 | Run memory budget (root map + live branch writes) | 32 MiB (`engine.run.maxRunBytes`) | node fails `PAYLOAD_TOO_LARGE` (`run_budget`), §9.6 |
-| Branch tasks per root run | 64 (`engine.run.maxTasksPerRun`) | further branches wait for a permit, §9.6 |
+| Branch tasks per root run (existing, parked or executing) | 64 (`engine.run.maxTasksPerRun`) | further branches run inline in the `Parallel` node's task, §9.6 |
 | Node executions per root run | 1,000,000 (`engine.run.maxNodeExecutions`) | run fails `INVALID_STATE` (`node_budget`), §9.6 |
 | Single variable value | 256 KiB (`engine.variables.maxValueBytes`) | write fails `PAYLOAD_TOO_LARGE` |
 | Concurrent running runs, whole engine | 256 (`engine.run.maxConcurrent`) | further dispatches wait, FIFO across queues |
@@ -857,8 +878,9 @@ the entry**, which is a stricter invariant over the same wire shape (every `vari
 `persisted`). Amendment A11 asks spec 02 to state the invariant so the contract and the engine do not drift.
 
 Every stored entry is `{ value, persisted, untrusted, updatedAt, updatedBy }`. **`untrusted`** is the
-provenance flag of §21: it is set by the write rule there, stored (§13.2), returned by `variables.get` and
-`variables.list`, carried in the `variables.*_updated` events and in exports (§13.4), and consulted by every
+provenance flag of §21: it is set by the write rule there, stored (§13.2), returned by `variables.get`,
+`variables.list` and `variables.set`, carried in the `variables.*_updated` events (independently for `old` and
+`new`) and in exports (§13.4), and consulted by every
 template read (§11.3). It is never an input a client can clear while keeping a tainted value: a write replaces
 both the value and the flag together.
 
@@ -869,17 +891,31 @@ both the value and the flag together.
 `variables.set { scope, name, value, persisted, mode: set | increment | decrement | default, durable?: bool,
 platform?, userId? }`
 (tier 1; `increment`/`decrement` require a number or missing (treated as 0) and are atomic; `default` writes only
-if the variable does not exist; returns `{ value, created }`), `variables.delete` (tier 1), `variables.clear_temp {
-scope }` (tier 1; Streamer.bot "Clear Non-Persisted (User) Globals"), `variables.set_arg { name, value }` (tier 1,
+if the variable does not exist; returns `{ value, created, untrusted }`, where `value` and `untrusted` describe
+the **stored entry after the call**: for `default` on an existing entry that is the existing value with the
+existing flag, and no write and no event occur), `variables.delete` (tier 1; returns `{ deleted: bool }`, never
+the value), `variables.clear_temp {
+scope }` (tier 1; Streamer.bot "Clear Non-Persisted (User) Globals"; returns `{ count }`), `variables.set_arg { name, value }` (tier 1,
 sub-action only, `writesArgs: Named { nameParam: "name" }`, refuses reserved roots). All writes publish
-`variables.global_updated` / `variables.user_updated` with payload `{ name, old, new, persisted, untrusted,
-updatedBy }`; `old: null` means created, `new: null` means deleted (rows 3.16; `variables.user_updated` is
+`variables.global_updated` / `variables.user_updated` with payload `{ name, old, oldUntrusted, new, untrusted,
+persisted, updatedBy }`; `old: null` means created (`oldUntrusted: null`), `new: null` means deleted
+(`untrusted: null`); otherwise `oldUntrusted` is the replaced entry's flag and `untrusted` the written entry's,
+**independently**, because one flag cannot describe two values: a user-token literal overwriting chat text emits
+`{ old: <chat text>, oldUntrusted: true, new: <literal>, untrusted: false }` (rows 3.16; `variables.user_updated` is
 `highVolume`). For `variables.user_updated` the **envelope's** `platform` and `user` are the variable's user
-(the event is about that user), never payload keys (§7.1 reserved-name rule). `variables.get` and
-`variables.list` results carry `untrusted` next to `value`, and their `value` is catalogued `x-den-untrusted:
-conditional` (A10): MCP wraps it as `{ untrusted: true, source: "variable:<scope>:<name>", text }` (non-string
-values as canonical JSON text) exactly when the stored flag is set, so an AI client never reads chat-derived
-text as configuration, while an untainted scene name stays a plain value.
+(the event is about that user), never payload keys (§7.1 reserved-name rule).
+
+**Readback rule.** Every field of an operation result or event payload that carries a stored variable value
+carries the flag of the entry it came from next to it and is catalogued `x-den-untrusted: conditional` on that
+sibling (A10): `value` in `variables.get`, `variables.list` and `variables.set` results (sibling `untrusted`),
+`old` in `variables.*_updated` (sibling `oldUntrusted`) and `new` there (sibling `untrusted`). No operation
+returns a stored value without its flag. The flag has the same consumers everywhere: MCP wraps the field as
+`{ untrusted: true, source: "variable:<scope>:<name>", text }` (non-string values as canonical JSON text)
+exactly when the sibling flag is set, so an AI client never reads chat-derived text as configuration through
+`get`, `list`, `set`, a subscription or the event log, while an untainted scene name stays a plain value; a run
+seeded from the event treats `{event.old}` and `{event.new}` as tainted sources exactly when their flag is set
+(§21); a `saveAs` of such a result taints the arg when any flagged field of the result is set; and the event log
+and history store the payload with both flags, so a replay (§12.3, §12.5) seeds the same taint.
 
 ### 11.3 Reads in templates
 
@@ -1197,7 +1233,7 @@ All are catalog operations (spec 02 §8.1) with the usual generated `dryRun`; ti
 | `queues.create/update/delete` | 2 | ✓ / — / ✓ | |
 | `queues.pause/resume/pause_all/resume_all/clear/force_next/shuffle` | 1 | ✓ / ✓ / ✓ | |
 | `variables.get/list` | 0 | ✓ / ✓ / ✓ | `variables:read[:ns]` |
-| `variables.set/delete/clear_temp` | 1 | ✓ / ✓ / ✓ | `variables:write[:ns]`; `set` has `writesArgs: None` |
+| `variables.set/delete/clear_temp` | 1 | ✓ / ✓ / ✓ | `variables:write[:ns]`; `set` has `writesArgs: None`; results `{ value, created, untrusted }` / `{ deleted }` / `{ count }` (§11.2 readback rule) |
 | `variables.set_arg` | 1 | — / ✓ / — | `writesArgs: Named { nameParam: "name" }` |
 | `signals.send`, `signals.wait` | 1 | ✓ / ✓ / — | `wait` is not an MCP tool (it blocks) |
 | `commands.*` (§7.2) | 2 / 1 / 0 | ✓ / set_state, reset_counter, set_cooldown / ✓ | |
@@ -1335,13 +1371,17 @@ and requires:
   never to satisfy an approval; the engine carries that provenance through everything it stores, so the boundary
   does not depend on authors remembering to wrap chat text:
   - **Tainted sources of a run:** the `event` and `user` root paths the catalog marks `x-den-untrusted` (chat
-    text, display names, titles…), the args seeded from them, the `match` root whenever its captures come from
+    text, display names, titles…) or marks `x-den-untrusted: conditional` with the sibling flag set in this
+    envelope (a `variables.*_updated` event's `old` when `oldUntrusted` is true, its `new` when `untrusted` is
+    true, §11.2), the args seeded from them, the `match` root whenever its captures come from
     a regex over an untrusted field (a chat-text trigger filter, a regex command's `captures`, a `Condition`
     regex whose `left` is tainted), every stored variable whose `untrusted` flag is set (§11.1), and every arg
     the rules below taint. Each run keeps its set of tainted arg names; history stores it per snapshot (§12.1).
   - **Propagation inside a run:** an arg is tainted when its writer's source references a tainted source (the
     same syntactic reference check as spec 02's dynamic fields, through `writesArgs`, `saveAs`, `RunAction.args`
-    seeds, `ForEach` collections and `Code.setArgs`, which taints every name it writes). A signal carries the
+    seeds, `ForEach` collections and `Code.setArgs`, which taints every name it writes); a `saveAs` or
+    `writesArgs` of an operation result is also tainted when a conditionally marked field of that result has
+    its flag set (a `variables.get`/`set` result with `untrusted: true`). A signal carries the
     taint of each of its `args` from the sending run (or taints all of them when the sender is a `Plugin`
     principal), and `signals.wait { overwrite }` applies it to the names it writes. Untainting is impossible by
     assignment: only a literal or a trusted source produces a clean arg.
@@ -1353,23 +1393,35 @@ and requires:
     cannot tell from genuine AI-authored configuration. The flag is `false` only for a literal value written
     under a `Token` or `System` origin (the user's own content; the variable viewer shows the flag, and a
     user-token rewrite is how an AI-written value becomes trusted). `increment`/`decrement` keep the existing
-    flag; `default` on a missing entry follows the write rule. The flag is stored in the same row (§13.2), survives restart, travels
-    in `variables.*_updated`, `variables.get/list` and the export bundle, and a foreign import (spec 15) that
+    flag; `default` on a missing entry follows the write rule, and on an existing entry writes nothing and
+    returns the existing value **with its flag** (§11.2). The flag is stored in the same row (§13.2), survives restart, travels
+    in `variables.*_updated` (independent `oldUntrusted`/`untrusted`), `variables.get/list/set` results and the export bundle, and a foreign import (spec 15) that
     carries no flag imports every variable as `untrusted: true` (unknown provenance is untrusted; the user
     re-writes a value to clear it).
-  - **Reads:** a template read of a tainted variable is a tainted source (§11.3); `variables.get/list` return
-    the flag and MCP wraps the value (§11.2); `runs.get` returns both snapshots' taint sets and replay re-seeds
+  - **Reads:** a template read of a tainted variable is a tainted source (§11.3); every operation result or
+    event field that carries a stored value carries its entry's flag, MCP wraps it on that flag, and a run
+    seeded or `saveAs`-written from it is tainted on that flag (§11.2 readback rule: `get`, `list`, `set`
+    including `default` on an existing entry, and `old`/`new` of `variables.*_updated` with their own flags);
+    `runs.get` returns both snapshots' taint sets and replay re-seeds
     from the chosen one (§12.3).
   - **Plans and approvals:** every dry-run `PlanStep` and `PlannedCall` lists `untrustedFields` (A10), the param
     paths whose render references a tainted source, computed by the same syntactic rule as `dynamicFields`, so
     an approval request renders those values inside the untrusted wrapper and the AI layer (D-030) never sees
-    viewer text as configuration. The binding hash still covers the value: untrusted text does not bypass
+    viewer text as configuration. For a reference to a `saveAs` arg whose producer is a `variables.get`/`set`
+    (a `run_value` sentinel in `dynamicFields`), the planner resolves the conditional flag **through the
+    producer's `name`**: with a literal `name` it reads the stored entry's flag in the plan snapshot and lists
+    the field when set; with a templated `name`, or a scope/user it cannot resolve at plan time, it lists the
+    field conservatively. Execution applies the run-time flag (§11.2 readback rule), so a field the plan did
+    not list can still be tainted when the variable turned untrusted in between, and never the reverse. The binding hash still covers the value: untrusted text does not bypass
     binding, it is only never presented as trusted.
   - §22.9 covers chat → `variables.set` → restart → `variables.get` over MCP (wrapped), a later run's
     `chat.send { message: {globals.last} }` dry run (`untrustedFields: ["message"]`) and approval request, an
     `increment` on a tainted counter (flag kept), an MCP-origin literal write (flag set), a literal user-token
     write clearing the flag, a replay of the queued snapshot of a run that overwrote the chat text with a literal
-    (`untrustedFields` still lists the field), and a `{match[1]}` from a regex command in a tier-3 param.
+    (`untrustedFields` still lists the field), a `{match[1]}` from a regex command in a tier-3 param, an MCP
+    `variables.set { mode: default }` on an existing tainted variable (existing value returned wrapped, no
+    write, no event), and a tainted → literal overwrite whose `variables.global_updated` carries
+    `oldUntrusted: true, untrusted: false` and whose `{event.old}` reaches a later tier-3 plan as untrusted.
 - `x-secret` values are redacted from snapshots, trace events, exports and the event log before they leave the
   operation that produced them.
 - The storage files are created `0600` on Unix; the data directory is created `0700` (Windows: per-user ACL, §19).
@@ -1415,13 +1467,23 @@ and requires:
    value warnings; args size limit; **`ForEach`:** array, object (sorted keys), `null`, scalar failure, cap
    warning, `Break`/`Continue`, variables after the loop, pinned collection under concurrent writes; **bounded
    fan-out:** a 20-deep chain of actions each with two inline `Parallel` branches calling the next never has
-   more than `maxTasksPerRun` live branch tasks, fails with `node_budget` at the budget, and cancels cleanly
-   mid-fan-out with every branch `cancelled` / `parent` and the slot released once; a 100-branch `Parallel`
-   with 64 permits runs every branch and merges in branch order; nested joins release and re-acquire permits
-   (no deadlock with `maxTasksPerRun = 1`); `run_budget` failure when branch writes exceed `maxRunBytes` while
-   each map stays under `maxArgsBytes`.
+   more than `maxTasksPerRun` **existing** branch tasks (spawned, executing or parked, counted by a spawn/exit
+   hook), fails with `node_budget` at the budget, and cancels cleanly
+   mid-fan-out with every spawned and inline branch `cancelled` / `parent` and the slot released once;
+   **breadth-first expansion:** a 17-level binary chain of inline `Parallel` nodes whose 131,072 leaves each
+   `Delay` (paused clock), run at `maxTasksPerRun` 1 and 64 under a scheduler that prefers starting new
+   branches to finishing old ones: existing branch tasks (parked ones included) never exceed the budget, the
+   measured task and continuation memory stays under the fixed ceiling §9.6's bounds give, the run completes
+   with the same merged args and the same node charge as a sequential run, and the same chain cancelled while
+   expanding ends every branch `cancelled` / `parent` with zero branch tasks left; a 100-branch `Parallel`
+   with 64 permits runs every branch (64 spawned, the rest inline or spawned as permits return) and merges in
+   branch order; `Parallel` nested three deep with `maxTasksPerRun = 1` runs entirely inline, never deadlocks
+   and produces the same result as with 64; `run_budget` failure when branch writes exceed `maxRunBytes` while
+   each map stays under `maxArgsBytes`, including writes held by parked branches.
 5. **Variables:** atomic increment under 1,000 concurrent runs; persisted/temp move; change events with
-   `old`/`new`; durability: `kill -9` after a write and before `flushMs` loses at most that write, after
+   `old`/`new` and independent `oldUntrusted`/`untrusted` (created: `null`/flag; tainted → clean literal:
+   `true`/`false`; clean → tainted: `false`/`true`; deleted: flag/`null`); `set` returns the stored entry's
+   flag in every mode, `delete` and `clear_temp` return no value; durability: `kill -9` after a write and before `flushMs` loses at most that write, after
    `durable: true` loses nothing (test harness with a child process).
 6. **History and replay:** snapshots at admission and after; redaction; truncation marker; retention pruning keeps
    recent failures; replay uses the current revision and the caller's context and re-seeds the taint set;
@@ -1457,7 +1519,16 @@ and requires:
    unconsumed, a collection from `saveAs` → `dynamicFields` on the body and a one-iteration plan, and a session
    grant pinning multiplicity but not values; **untrusted provenance:** the §21 chain (chat → global →
    restart → MCP read wrapped → dry-run `untrustedFields` → approval request shows the wrapper), `Code` writes
-   tainted, `Plugin` writes tainted, foreign import tainted, literal user write clean.
+   tainted, `Plugin` writes tainted, foreign import tainted, literal user write clean; **readback paths
+   (§11.2 rule):** an MCP `variables.set { mode: default }` on an existing chat-derived variable writes
+   nothing, publishes nothing and returns the existing value wrapped (`untrusted: true`); a user-token literal
+   overwrite of that variable emits `{ oldUntrusted: true, untrusted: false }`, a trigger on
+   `variables.global_updated` runs `chat.send { message: {event.old} }` whose dry run lists `untrustedFields:
+   ["message"]` and whose approval request shows the wrapper, while the same action over `{event.new}` lists
+   none; an MCP subscriber receives that event with `old` wrapped and `new` plain; `events.replay` of it from
+   the event log after a restart seeds the same taint; a `saveAs: "v"` of `variables.get` on a tainted
+   variable taints `v` and a tier-3 param rendered from `{v.value}` is listed, while the same `saveAs` on a
+   clean variable is not.
 10. **Performance:** criterion benches for match, admission, node overhead, `variables.set`; a soak test at 5,000
     events/s for 10 minutes checking the §20 budgets and zero idle wake-ups afterwards (`strace`/ETW count).
 11. **Cross-platform:** the storage, timer and shutdown tests run on Linux and Windows CI (Windows compiles and
@@ -1501,9 +1572,12 @@ landed, the stated default applies.
   set (reserved `approvalId`, tier-3 MCP annotation, dry-run plan) alongside `actions.run` and `plugins.call`.
 - **A9 — `Queue.maxRunMs: Option<u64>`** (§9.11), default none.
 - **A10 — Untrusted provenance on stored variables and plans** (§21): stored variables carry `untrusted: bool`
-  (`variables.get/list` results, `variables.*_updated` payloads, the export bundle's `globals[]` entries);
-  `x-den-untrusted: conditional` as a catalog marking for a field wrapped by MCP when a sibling flag is set
-  (§11.2); `PlanStep.untrustedFields` / `PlannedCall.untrusted_fields` next to `dynamicFields`, shown by the
+  (`variables.get/list` results, the `variables.set` result `{ value, created, untrusted }`, the export bundle's
+  `globals[]` entries); `variables.*_updated` payloads carry **independent** `oldUntrusted` and `untrusted`
+  flags for `old` and `new`; `variables.delete` returns `{ deleted }` and `clear_temp` `{ count }` (no values);
+  `x-den-untrusted: conditional` as a catalog marking that **names the sibling boolean** gating MCP wrapping
+  and run seeding (`untrusted` unless stated, `oldUntrusted` for `old`; §11.2 readback rule);
+  `PlanStep.untrustedFields` / `PlannedCall.untrusted_fields` next to `dynamicFields`, shown by the
   approval request inside the untrusted wrapper. `variables.user_updated` puts the user in the envelope.
 - **A11 — Global and user variable key** (§11.1): spec 02 §6.3 should state that `name` is unique across the
   persisted and temp stores and `persisted` is an attribute of the entry (the engine's invariant), not part of
@@ -1580,3 +1654,26 @@ grammar"; signals are implemented as operations rather than new `Node` kinds so 
   guarantee boundary and lane ordering wording; the existing-task bound; A13 payload upgrades; `clean_shutdown`
   cleared before migrations; `user` carried into queued children; `untrusted` in `variables.get`; the
   `events:simulate` scope on `triggers.test`.
+- **r3**: resolves the two P1s of the Codex (Astra) re-review of r2 (the three P2s are Backlog cards DEN-42,
+  DEN-43 and DEN-44 and are not changed here).
+  1. P1 parked `Parallel` tasks escaped the permit limit → §9.6: a permit now bounds an **existing** branch
+     task and is held from spawn to exit, including at joins; a `Parallel` node never waits for a permit but
+     runs a branch **inline in its own task** when none is free, which keeps the merge order and every other
+     observable result and makes deadlock impossible; parked branches' writes count against `maxRunBytes`; the
+     state bound is restated as `maxTasksPerRun` tasks per root run, `maxConcurrent × maxTasksPerRun`
+     engine-wide, `maxDepth × maxInlineDepth` frames per task, no pending-branch queue; `Delay` note for inline
+     branches; §9.13 row; §22.4 adds the 17-level breadth-first chain with `Delay` leaves at budgets 1 and 64,
+     parked-task counting, cancellation mid-expansion and the `maxTasksPerRun = 1` nesting case.
+  2. P1 variable readback losing provenance → §11.2: `variables.set` returns `{ value, created, untrusted }` of
+     the stored entry after the call (`default` on an existing entry returns the existing value with its flag,
+     no write, no event); `variables.delete`/`clear_temp` return no value; `variables.*_updated` carries
+     independent `oldUntrusted`/`untrusted`; a **readback rule** makes every value-carrying field conditional
+     on its sibling flag for MCP wrapping, event seeding, `saveAs` tainting, event log and replay; §21 sources,
+     propagation, variables and reads bullets; §15 results; §23 A10 extended (DEN-33 synchronized); §22.5 and
+     §22.9 cases (MCP `default` on a tainted entry, tainted → literal overwrite → `{event.old}` in a later
+     plan, subscriber and replay fidelity, `saveAs` of `variables.get`).
+  A fresh-context Claude reviewer pass on the r3 diff (both P1s resolved; 2 P2, 3 P3, all folded in) added:
+  ended-but-unmerged branch writes charged to `maxRunBytes` until the join; the plan-time resolution of the
+  conditional flag through the producer's `name`; the node stops taking branches after a sibling stopped or
+  failed the run; "identical" narrowed to merge order and merged args; §11.1 names `set` and the two event
+  flags.
