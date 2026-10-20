@@ -24,12 +24,12 @@ fn schema(conn: &Connection) -> Vec<(String, String)> {
         .unwrap()
 }
 
-#[test]
-fn fresh_files_get_schema_v1() {
+fn assert_schema_v1(spec: &str, source: &str) {
+    let spec = spec.replace("\r\n", "\n");
+    let source = source.replace("\r\n", "\n");
     let (_temp, mut config, mut history) = files();
     bootstrap_config(&mut config).unwrap();
     bootstrap_history(&mut history).unwrap();
-    let spec = include_str!("../../../../docs/spec/03-engine.md");
     let ddl = spec.split("### 13.2 Schema v1\n\n```sql\n").nth(1).unwrap();
     let (config_ddl, history_ddl) = ddl
         .split("\n```")
@@ -37,7 +37,6 @@ fn fresh_files_get_schema_v1() {
         .unwrap()
         .split_once("\n-- history.db\n")
         .unwrap();
-    let source = include_str!("../../src/storage/schema.rs");
     for (conn, ddl) in [(&config, config_ddl), (&history, history_ddl)] {
         assert!(source.contains(ddl), "DDL must be verbatim accepted §13.2");
         let expected = Connection::open_in_memory().unwrap();
@@ -59,6 +58,25 @@ fn fresh_files_get_schema_v1() {
             .unwrap(),
         "1"
     );
+}
+
+#[test]
+fn fresh_files_get_schema_v1() {
+    assert_schema_v1(
+        include_str!("../../../../docs/spec/03-engine.md"),
+        include_str!("../../src/storage/schema.rs"),
+    );
+}
+
+#[test]
+fn schema_v1_accepts_lf_and_crlf_inputs() {
+    let spec = include_str!("../../../../docs/spec/03-engine.md").replace("\r\n", "\n");
+    let source = include_str!("../../src/storage/schema.rs").replace("\r\n", "\n");
+    for spec in [&spec, &spec.replace('\n', "\r\n")] {
+        for source in [&source, &source.replace('\n', "\r\n")] {
+            assert_schema_v1(spec, source);
+        }
+    }
 }
 
 #[test]
