@@ -526,9 +526,20 @@ fn access_denial_keeps_raw_os_error() {
     let parent = temp.path().join("denied");
     fs::create_dir(&parent).unwrap();
     fs::set_permissions(&parent, fs::Permissions::from_mode(0o0)).unwrap();
+    let denied = match fs::read_dir(&parent) {
+        Ok(_) => {
+            fs::set_permissions(&parent, fs::Permissions::from_mode(0o700)).unwrap();
+            eprintln!("SKIPPED denial assertion: host can read the owned 0o000 fixture");
+            return;
+        }
+        Err(error) => error,
+    };
     let result = prepare(parent.join("data"));
     fs::set_permissions(&parent, fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(denied.kind(), std::io::ErrorKind::PermissionDenied);
     let error = result.unwrap_err();
     assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
     assert!(error.raw_os_error().is_some());
+    assert_eq!(error.raw_os_error(), denied.raw_os_error());
+    eprintln!("actual fixture denial: {error:?}; read_dir: {denied:?}");
 }

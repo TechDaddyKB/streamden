@@ -364,6 +364,9 @@ fn directory_probe_preserves_actual_os_errors() {
 /// `spawn_blocking`). Mount enumeration can block in statvfs indefinitely;
 /// this synchronous API offers no cancellation or latency bound. Detection is
 /// heuristic, including on Windows: mapped remote-drive coverage is not promised.
+/// Sync markers match whole components, ignoring ASCII case; enterprise/suffixed
+/// names such as `OneDrive - Org` and `Dropbox (Team)` may be missed. Windows
+/// volume-GUID roots and mount-path case mismatches can also miss advisories.
 /// PreparedPaths' snapshot, ACL, trusted-namespace and failure-leftover limits apply.
 #[derive(Debug)]
 pub struct DataDir {
@@ -537,6 +540,94 @@ mod discovery_tests {
     }
 
     #[test]
+    fn resolver_precedence_and_lazy_inputs() {
+        let temp = tempfile::tempdir().unwrap();
+        let (variable, suffix) = match std::env::consts::OS {
+            "linux" => ("XDG_DATA_HOME", "streamden"),
+            "windows" => ("LOCALAPPDATA", "StreamDen"),
+            "macos" => ("HOME", "Library/Application Support/StreamDen"),
+            other => panic!("unsupported platform: {other}"),
+        };
+        for priority in 0..3 {
+            let base = temp.path().join(priority.to_string());
+            let explicit = base.join("explicit");
+            let portable = base.join("portable");
+            let platform = base.join("platform");
+            let expected = [&explicit, &portable, &platform.join(suffix)][priority].clone();
+            let mut reads = Vec::new();
+            let mut discovered = false;
+            let paths = DataDir::resolve_with(
+                (priority == 0).then(|| explicit.clone()),
+                |key| {
+                    reads.push(key.to_owned());
+                    match key {
+                        "STREAMDEN_DATA_DIR" if priority == 1 => {
+                            Some(portable.clone().into_os_string())
+                        }
+                        "STREAMDEN_DATA_DIR" if priority == 2 => None,
+                        key if priority == 2 && key == variable => {
+                            Some(platform.clone().into_os_string())
+                        }
+                        _ => panic!("lower-priority environment read: {key}"),
+                    }
+                },
+                || panic!("absolute roots must not read cwd"),
+                || {
+                    assert!(expected.join("config.db").is_file());
+                    discovered = true;
+                    Ok(vec![])
+                },
+            )
+            .unwrap();
+            assert_eq!(paths.root(), fs::canonicalize(&expected).unwrap());
+            assert!(discovered);
+            let expected_reads: &[&str] = match priority {
+                0 => &[],
+                1 => &["STREAMDEN_DATA_DIR"],
+                _ => &["STREAMDEN_DATA_DIR", variable],
+            };
+            assert_eq!(reads, expected_reads);
+            for unselected in [explicit, portable, platform.join(suffix)] {
+                if unselected != expected {
+                    assert!(!unselected.exists());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn mixed_case_sync_markers_require_whole_components() {
+        let temp = tempfile::tempdir().unwrap();
+        for marker in [
+            "dRoPbOx",
+            "oNeDrIvE",
+            "iClOuD dRiVe",
+            "IcLoUdDrIvE",
+            "CoM~ApPlE~cLoUdDoCs",
+            "nExTcLoUd",
+        ] {
+            assert_eq!(
+                resolve(temp.path().join(marker).join("data"), Some("ext4")).warnings(),
+                ["synced_folder"]
+            );
+            for name in [format!("prefix{marker}"), format!("{marker}suffix")] {
+                assert!(
+                    resolve(temp.path().join(name), Some("ext4"))
+                        .warnings()
+                        .is_empty()
+                );
+            }
+        }
+        for name in ["OneDrive - Org", "Dropbox (Team)"] {
+            assert!(
+                resolve(temp.path().join(name), Some("ext4"))
+                    .warnings()
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
     fn network_and_sync_are_warnings_without_refusal() {
         let temp = tempfile::tempdir().unwrap();
         for format in [
@@ -629,6 +720,8 @@ mod discovery_tests {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let public_root = temp.path().join("public-runtime-guard");
         let attempt = || {
             DataDir::resolve_with(
                 None,
@@ -640,7 +733,13 @@ mod discovery_tests {
         {
             let _entered = runtime.enter();
             assert!(attempt().unwrap_err().to_string().contains("outside Tokio"));
-            assert!(DataDir::resolve(None).is_err());
+            assert!(
+                DataDir::resolve(Some(public_root.clone()))
+                    .unwrap_err()
+                    .to_string()
+                    .contains("outside Tokio")
+            );
+            assert!(!public_root.exists());
         }
         runtime.block_on(async {
             tokio::task::spawn_blocking(move || {
