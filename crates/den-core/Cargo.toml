@@ -26,6 +26,8 @@ chrono-tz = "=0.10.4"
 unicode-casefold = "=0.2.0"
 rand = "=0.10.3"
 tracing = "=0.1.44"
+# Portable mount paths and filesystem types for Spec 03 §19 (MIT OR Apache-2.0).
+mountpoints = "=0.2.1"
 
 [dev-dependencies]
 proptest = "=1.12.0"

@@ -872,6 +872,7 @@ dependencies = [
  "croner",
  "den-protocol",
  "im",
+ "mountpoints",
  "proptest",
  "rand",
  "regex",
@@ -2394,6 +2395,16 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "mountpoints"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3090e3ea5226b07cedd89a57c735d3ed0374a84236a85529a1d8bfec98eb8ec5"
+dependencies = [
+ "libc",
+ "winapi",
 ]
 
 [[package]]
