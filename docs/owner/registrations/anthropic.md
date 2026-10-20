@@ -1,12 +1,16 @@
 # Anthropic: Claude API key and billing
 
-Last verified against official docs: 2026-10-18. Part of the [owner runbooks](../README.md). Phase P4 (AI layer), decision **Q-A1**.
+Last verified against official docs: 2026-10-18; connection model re-verified 2026-10-19 (DEN-244, D-059). Part of the [owner runbooks](../README.md). Phase P4 (AI layer), decision **Q-A1**.
 
 ## Purpose
 
 StreamDen lets users paste **their own Anthropic API key** (bring your own key, "BYOK") to power the in-app assistant and the optional AI chat responder. The owner needs a key for development.
 
 **Important policy:** Anthropic **prohibits** third-party apps from offering Claude.ai login or routing requests through Free/Pro/Max subscription credentials. So StreamDen must not use a Claude subscription for its own requests. The compliant paths are (1) the API key in our app and (2) the user's own Claude Desktop or Claude Code connecting **to our MCP server**.
+
+## How users connect (D-059 applied: no browser login exists)
+
+Anthropic **prohibits** third-party apps from offering Claude.ai login or routing requests through Free/Pro/Max credentials, and from collecting or intermediating Claude.ai session tokens ([legal and compliance](https://code.claude.com/docs/en/legal-and-compliance), re-read 2026-10-19). So the pasted **API key** is the default and only in-app path (D-021), billed to the key owner per token. The browser-free "connect your AI" alternative is the user's own Claude Desktop or Claude Code talking to StreamDen's MCP server. D-059 changes nothing here.
 
 ## Prerequisites
 

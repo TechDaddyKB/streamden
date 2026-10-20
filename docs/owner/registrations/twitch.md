@@ -1,6 +1,6 @@
 # Twitch: developer application (and optional bot account)
 
-Last verified against official docs: 2026-10-18. Part of the [owner runbooks](../README.md).
+Last verified against official docs: 2026-10-18; connection model re-verified 2026-10-19 (DEN-244, D-059). Part of the [owner runbooks](../README.md).
 
 ## Purpose
 
@@ -11,6 +11,12 @@ Twitch is the P1 platform. StreamDen needs one **Twitch developer application** 
 - create and manage **channel-point rewards** (see the ownership caveat below).
 
 The decision already made in [platform-apis.md section 3.5](../../research/platform-apis.md): register one **Public** client and use the **Device Code Flow (DCF)**. A public client has no client secret, so nothing secret ships inside the app and we need no relay for Twitch.
+
+## How users connect (D-059: browser login first)
+
+- **Default:** StreamDen shows a short code and opens `https://www.twitch.tv/activate` in the system browser; the user approves there. That is Twitch's **Device Code Flow**, the only flow a **Public** client may use (no PKCE, no client secret, no app access tokens: [getting tokens](https://dev.twitch.tv/docs/authentication/getting-tokens-oauth/), re-read 2026-10-19). The user copies nothing. The bot account links the same way.
+- **Fallback (Advanced):** a bring-your-own Client ID field for developers who registered their own Public app. There is no secret to paste and no manual token entry.
+- **Provider gates:** the Public client type cannot mint app tokens, so the Chat Bot badge and conduits stay unavailable without a server-side confidential app (D-019 relay, later). The Client ID is permanent because channel-point rewards bind to it.
 
 ## Prerequisites
 

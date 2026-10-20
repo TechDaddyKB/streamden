@@ -1,6 +1,6 @@
 # TikTok: nothing to register (no official LIVE events API)
 
-Last verified against official docs: 2026-10-18. Part of the [owner runbooks](../README.md). Later phase (P6, optional), subject to Q-S1.
+Last verified against official docs: 2026-10-18; connection model re-verified 2026-10-19 (DEN-244, D-059). Part of the [owner runbooks](../README.md). Later phase (P6, optional), subject to Q-S1.
 
 ## Purpose
 
@@ -11,6 +11,10 @@ So for the core product the owner has **nothing to register**. The decision in t
 - the open-source connectors (TikTok-Live-Connector, TikTokLive) are reverse-engineered, licensed **AGPL** (or "modified AGPL"), and rely on a third-party signing service;
 - TikTok's Terms of Service (section 3.4) forbid reverse engineering and automated bots without written approval;
 - sending chat needs the account's session cookies, which would be sent to the third-party signer.
+
+## How users connect (D-059 applied)
+
+Nothing to connect in core: there is no official LIVE API, no OAuth and no app. The community plugin's optional Euler Stream key is a paste. "Browser login" (session cookies) is explicitly **not** offered (Q-C9).
 
 ## Prerequisites
 

@@ -75,6 +75,7 @@ Things I could not fetch (so claims rely on secondary sources): X Terms of Servi
 3. Dashboard webhook to the relay (works, extra moving part).
 - Idempotency: key on event ID; delivery order is not guaranteed; live-mode retries run up to 3 days.
 
+> **D-059 (2026-10-19, DEN-244): connection model for the two core rails.** **Stripe:** `stripe login` is already a browser flow: the CLI shows a pairing code and opens the Dashboard, the user confirms, and credentials sit in the OS credential store with automatic refresh; `stripe login --interactive` (paste an API key) is the manual fallback, and a restricted read-only key serves option 2. Newer CLIs (after v1.50.0) need an account Administrator to enable CLI access first ([CLI login](https://docs.stripe.com/cli/login), read 2026-10-19). Stripe **Connect** OAuth is a platform product whose exchange uses the platform's secret key ([reference](https://docs.stripe.com/connect/oauth-reference)); it is **not** this integration and is not planned. **PayPal Business:** REST authentication is a `client_credentials` grant with the app's own client ID and secret ([REST auth](https://developer.paypal.com/api/rest/authentication/), read 2026-10-19), so there is no end-user consent to prefer: the user pastes their own REST app credentials (keychain) and webhooks reach the desktop through the relay. No partner or "Log in with PayPal" onboarding is assumed. The event-listener design above is unchanged; the owner runbooks for both are still to be written (proposed in the DEN-244 artifact). Payment-app sessions or scraping stay prohibited (D-046).
 ### 1.3 Unofficial local paths
 
 #### A. Payment-notification emails via IMAP IDLE
@@ -260,6 +261,8 @@ Make **polling opt-in per trigger** with a visible cost estimator and a default 
 
 **Recommendation:** implement **OAuth loopback (scoped, `transition:generic` initially)** as the standard option and **app password** as an "unattended / long-running" option, since the 2-week public-client cap is awkward for a streaming PC that is never opened for weeks. A confidential client (180-day refresh tokens, unlimited session) would need an HTTPS-hosted client metadata and a private key on a server, which conflicts with local-first (the self-hosted relay could do it; open question for the owner).
 
+> **Owner decision 2026-10-19 (D-059, DEN-244):** confirmed in this order: atproto OAuth in the browser is the default, the app password is the advanced "unattended" fallback. Re-read 2026-10-19: the [atproto OAuth spec](https://atproto.com/specs/oauth) still caps public-client sessions and refresh tokens at 2 weeks and makes PKCE, PAR and DPoP mandatory, so the UI must expect a fortnightly re-login on OAuth.
+
 ### 3.2 Posting and rich posts
 
 All **[official]** ([Creating a post](https://bsky.network/docs/bluesky-api/creating-a-post), [Posts in depth](https://bsky.network/docs/about-bluesky-content/posts), lexicons in `bluesky-social/atproto`):
@@ -341,6 +344,8 @@ Recommendation: keep AT Protocol in the Rust core (`atrium-api` + `atrium-oauth`
 | Triggers | Webhooks exist (unverified) | Streaming API (WebSocket) for notifications: local, no public URL (unverified in this research) |
 | Rust | none surveyed; use `reqwest` | `megalodon` 1.3.0 (2026-04-18; Mastodon, Pleroma, Misskey...) |
 | Verdict | **Plugin**, post-only | **Plugin or core-lite** (small effort, covers many instances) |
+
+> **D-059 (2026-10-19, DEN-244): connection order for these later plugins (timing unchanged, D-046).** **Threads:** the browser authorization window is the default; the code exchange at `POST graph.threads.com/oauth/access_token` requires `client_secret` and the 60-day long-lived exchange "include[s] your app secret" (server-side only), so both run in the hosted broker on a StreamDen Meta app (D-019 later, Q-C12); the long-lived refresh needs only the token (at least 24 h old, unexpired). Until each permission passes App Review and the app is published, only Threads Testers can grant it; a BYO Meta app stays the advanced fallback ([tokens](https://developers.facebook.com/docs/threads/get-started/get-access-tokens-and-permissions), [long-lived](https://developers.facebook.com/docs/threads/get-started/long-lived-tokens), read 2026-10-19). **Mastodon:** the browser flow on the user's own instance is the default, not the pasted token: register per installation with `POST /api/v1/apps` (proprietary; no Dynamic Client Registration), `GET /oauth/authorize`, exchange at `POST /oauth/token` with the instance-issued `client_id`/`client_secret` kept in the keychain; Mastodon "only supports confidential clients", PKCE and `/.well-known/oauth-authorization-server` exist from 4.3.0, so older instances and forks differ ([authorized flow](https://docs.joinmastodon.org/client/authorized/), [OAuth spec](https://docs.joinmastodon.org/spec/oauth/), read 2026-10-19). The Settings > Development token is the advanced fallback. Token lifetime and refresh are not stated on the fetched pages.
 
 ### 3.9 Bluesky feature list and effort
 

@@ -232,6 +232,14 @@ policies)?
 **Recommendation:** bring-your-own with a guided wizard as the default, an optional shared project, and no scraping
 in core (could be a community plugin).
 **Answer:** Bring-your-own Google project via wizard; shared project optional; no scraping in core (D-031).
+**Update (owner, 2026-10-19, DEN-244):** the owner now prefers **browser login first, manual connection as the
+fallback** for every service (D-059). For YouTube that flips the default order: "Sign in with Google" against the
+shared StreamDen project is the default, and the bring-your-own-project wizard is the advanced fallback. The shared
+project already works for limited development and test use before Google verification (test users, warning screen,
+7-day tokens in Testing, lifetime 100-user cap); OAuth verification (public rollout) and the quota audit (capacity)
+are owner actions in [google-youtube.md](owner/registrations/google-youtube.md), tracked as a follow-up card, not as
+a new question. BYO stays the supported path while the shared production sign-in is unavailable, so D-031's wizard
+is still required. The historical answer above is unchanged.
 
 ### Q-C3 — Kick unofficial chat WebSocket fallback? 🟩 (Round 2)
 It's the only way to get deleted-message sync, but Kick staff call it unsupported.
@@ -307,6 +315,24 @@ TikTok a community plugin. Options: (a) no TikTok sending anywhere; first-party 
 mandatory warning that the session goes to a third party); (c) first-party opt-in sending like Q-C8 (b).
 **Recommendation:** (b). The composer shows TikTok as "read-only (no official API)" unless a community plugin
 declares a send capability.
+**Answer:**
+
+### Q-C12 — Hosted token broker timing: keep D-019's "later", or fund it earlier? 🟥 (Round 4)
+D-059 makes browser consent the preferred target for the providers whose OAuth needs a confidential client secret:
+Kick (no public client; verified 2026-10-19: [OAuth flow](https://docs.kick.com/getting-started/generating-tokens-oauth2-flow.md),
+[KickDevDocs #413](https://github.com/KickEngineering/KickDevDocs/issues/413) open with no Kick reply), Discord
+`webhook.incoming`, Streamlabs, StreamElements and Patreon, plus Fourthwall (Threads and Shopify's merchant
+authorization would join them if those connectors are sliced). The secret may only live in the official hosted relay's
+token broker, which D-019 schedules "later" (unfunded). Until it runs, each of them ships with its manual path (BYO
+Kick app plus self-hosted relay or tunnel; pasted webhook URL, socket token, JWT, creator token) and the docs say so.
+This is not a request to re-confirm browser-first, and it does not block the DEN-244 docs or story plan: D-019 stands
+if unanswered. Options: (a) keep D-019 as is: the broker arrives with the hosted relay whenever that is funded
+(default); (b) fund the hosted broker in P2 with a budget line, abuse handling and a privacy policy, so the brokered
+buttons ship together with their connectors. Shipping the secrets inside the app is not an option (research and
+provider terms).
+**Recommendation:** (a) for planning; keep the broker endpoint in the P2 self-host relay design so (b) is a
+deployment, not a rewrite. Provider app approvals (Streamlabs, Kick verification, StreamElements credential request)
+can start before either.
 **Answer:**
 
 ---

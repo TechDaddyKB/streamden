@@ -13,7 +13,7 @@
    - A **stdio shim** binary (`streamerlive-mcp`) that most local clients launch. With the shim, no secret ever goes into a third-party config file.
 2. **500+ operations:** do not list them all as tools by default. Ship a small curated **core toolset** (about 20 tools) plus three **meta-tools**: `search_operations`, `describe_operation` and `invoke_operation`. This is the MCP-recommended catalog → inspect → execute pattern. An opt-in **"full" profile** lists every operation as a native tool, for clients that have their own tool search (Claude Code defers MCP tools by default). Tool lists vary by token, so each client gets its own profile.
 3. **Safety:** risk tiers come from schema metadata, and every mutating operation supports `dryRun`. Destructive calls need **in-app approval**, delivered through an MRTR approval handle. MCP elicitation is a convenience, not a security boundary. A viewer-facing AI never gets write tools.
-4. **Using consumer subscriptions in our app:**
+4. **Using consumer subscriptions in our app** (owner decision 2026-10-19, D-059: browser login first where a vendor sanctions it, pasted API key as the fallback; a paid API key is never presented as a subscription login):
    - **OpenAI** officially allows it through **Sign in with ChatGPT plan usage** for open-source or locally run apps. Paid or hosted apps need approval.
    - **Anthropic prohibits** offering Claude.ai login or routing requests through Pro/Max credentials.
    - **xAI** has no published third-party program. It has blessed specific open-source agents (OpenCode, Kilo Code), so this is gray.

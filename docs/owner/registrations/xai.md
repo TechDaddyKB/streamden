@@ -1,10 +1,14 @@
 # xAI: Grok API key and billing
 
-Last verified against official docs: 2026-10-18. Part of the [owner runbooks](../README.md). Phase P4 (AI layer), decision **Q-A1**.
+Last verified against official docs: 2026-10-18; connection model re-verified 2026-10-19 (DEN-244, D-059). Part of the [owner runbooks](../README.md). Phase P4 (AI layer), decision **Q-A1**.
 
 ## Purpose
 
 StreamDen supports an **xAI API key** (bring your own) as one of three AI wire formats (the OpenAI Responses format also covers xAI). The owner needs a key for development. xAI has **no published third-party program** for using a SuperGrok or X Premium subscription inside other apps. The compliant path is Grok Build (xAI's CLI agent) connecting **to our MCP server**.
+
+## How users connect (D-059 applied: no sanctioned browser login)
+
+xAI publishes no program for SuperGrok or X Premium inside third-party apps and bills the API from **prepaid credits** ([billing](https://docs.x.ai/docs/key-information/billing), re-read 2026-10-19). The pasted **API key** is the default and only in-app path; Grok Build connecting to StreamDen's MCP server is the subscription user's route. Asking xAI for an approved sign-in stays Q-A1 option (c).
 
 ## Prerequisites
 

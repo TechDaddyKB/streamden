@@ -1,6 +1,6 @@
 # Google Cloud and YouTube Data API
 
-Last verified against official docs: 2026-10-18. Part of the [owner runbooks](../README.md).
+Last verified against official docs: 2026-10-18; connection model re-verified 2026-10-19 (DEN-244, D-059). Part of the [owner runbooks](../README.md).
 
 ## Purpose
 
@@ -10,10 +10,17 @@ StreamDen reads YouTube live chat (`liveChatMessages.streamList`), sends chat an
 2. an **OAuth consent screen** (now called the **Google Auth Platform** in the console),
 3. a **Desktop app OAuth client** (loopback redirect + PKCE, system browser).
 
-Which project the end users sign in through is **Q-C2** (shared project, or each user brings their own). This file has two parts:
+Which project the end users sign in through was **Q-C2**: answered by D-031 and re-ordered by D-059 (shared project first, bring-your-own as the advanced fallback). This file has two parts:
 
 - **Part A**: the project's own Google project (needed for the shared-project option and for your own testing).
 - **Part B**: the short "end-user version" that the in-app wizard will walk users through.
+
+## How users connect (D-059: browser login first)
+
+- **Default:** one **Sign in with Google** button. StreamDen opens the Google consent page in the **system browser** with a loopback `http://127.0.0.1:<port>` redirect and PKCE, using the **shared StreamDen project** from Part A. Google blocks embedded webviews and custom URI schemes for this ([native-app](https://developers.google.com/identity/protocols/oauth2/native-app), re-read 2026-10-19). The device flow (step 20) is the secondary browser path for the `youtube` and `youtube.readonly` scopes only.
+- **What the shared project can do before verification:** limited development and test use. Google states that "apps in development/testing/staging mode are not subject to verification" and that users "will be allowed to click through 'unverified app' warning screens", with the 100-user cap in effect until verification ([verification requirements](https://support.google.com/cloud/answer/13464323?hl=en), read 2026-10-19). Concretely: in **Testing** status each user must be on the test-user list (max 100) and tokens expire after 7 days; **In production** without verification shows the warning screen and every new user counts towards the lifetime 100-user cap ([app audience](https://support.google.com/cloud/answer/15549945), re-read 2026-10-19). Good enough for the owner's and testers' streams, not for a public release of the YouTube connector.
+- **Gates for public rollout and capacity (owner actions in "Production verification" below, not open questions):** sensitive-scope **OAuth verification** (domain, privacy policy, demo video) removes the warning screen and the 100-user cap; the separate **quota audit** raises the one 10,000-unit pool that all shared-project users share. Submitting either is not the same as being granted it, and only the granted quota decides how many concurrent streams the shared project can serve (unmeasured until `streamList` re-billing is measured).
+- **Fallback (Advanced):** the **bring-your-own project** wizard in Part B (the historical D-031 default). The user creates a Cloud project and a Desktop client, pastes its Client ID and secret, then finishes with the same browser consent. It is the supported path while the shared production sign-in is unavailable, and it stays available afterwards for users who want their own 10,000-unit quota.
 
 ## Prerequisites
 

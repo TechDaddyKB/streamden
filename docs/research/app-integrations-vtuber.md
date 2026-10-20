@@ -495,6 +495,8 @@ Use cases: publish our overlay renderer as an NDI source; NDI tally/discovery tr
 | `OAuthPkce` | Spotify BYO client |
 | `ApiKeyRegistration` | Voicemod clientKey |
 
+> **D-059 (2026-10-19, DEN-244):** browser login first, manual fallback. `OAuthDeviceCode` (Pulsoid) and `OAuthPkce` (Spotify on the user's own client ID, Crowd Control's code login, **Home Assistant's instance OAuth**) are the defaults where they exist. Fallbacks differ per app: Pulsoid has a manual token; Spotify's manual step *is* the BYO client ID (D-050); Crowd Control documents no manual fallback (its apps are created by CC developers on request); Home Assistant keeps the long-lived access token as the advanced fallback. Home Assistant is **not** paste-only because it is local: its auth API offers `/auth/authorize`, `/auth/token` with PKCE `S256`, refresh and `/auth/revoke`, but the `client_id` must be a public website URL that declares the native redirect with `<link rel="redirect_uri">` ([auth API](https://contributors.home-assistant.io/core/internals/auth-api/), read 2026-10-19), so the row above moves to `OAuthPkce` once that client page exists. `TokenPaste` remains the only path for Lumia and Streamlabs Desktop, and only the **interim** path for Streamlabs' cloud socket, whose target is OAuth through the hosted broker (`docs/owner/README.md` "Connection model"). A brokered variant of `OAuthPkce` (exchange on the relay) is a design seam for the SDK, not a new flow invented here.
+
 - `discover()`: returns candidate instances (host, port, instance id, version). Supports multi-instance (VTS windows, veadotube instances).
 - `triggers()`: descriptors with id, label, payload JSON Schema, example payload and rate hint. High-rate streams such as VMC bones, HR and ModelOutline are flagged `stream`, so the UI offers throttling and threshold conditions instead of raw firing.
 - `actions()`: descriptors with parameter JSON Schema plus **dynamic option providers**, e.g. `vts.hotkeys`, `meld.scenes`, `voicemod.voices`. These are resolved live so dropdowns show real hotkey/scene names.
@@ -549,8 +551,8 @@ One card per app, showing only the pairing step it needs:
 - Approve ytmdesktop.
 - Press the Hue link button (countdown).
 - Hold Nanoleaf power for 5–7 s (30 s window).
-- Paste the Streamlabs/HA/Lumia token.
-- Run Pulsoid device-code login.
+- Authorize Home Assistant in the browser on the user's own instance (long-lived token under Advanced, D-059); paste the Lumia token (and, until the hosted broker exists, the Streamlabs socket token; the D-059 target is "Connect with Streamlabs").
+- Run Pulsoid device-code login (default; manual token as the advanced fallback, D-059).
 - Install the Warudo companion plugin (Steam Workshop link).
 - Install our Stream Deck / Touch Portal / OpenDeck plugin.
 
@@ -735,7 +737,7 @@ Persistent "VTuber rig status" panel:
   - OpenDeck: https://github.com/nekename/OpenDeck
   - Touch Portal: https://www.touch-portal.com/api
   - OpenRGB SDK: https://gitea.marinkevich.ru/grayhook/OpenRGB/src/branch/master/Documentation/OpenRGBSDK.md
-  - Home Assistant: https://contributors.home-assistant.io/core/internals/websocket-api/
+  - Home Assistant: https://contributors.home-assistant.io/core/internals/websocket-api/ ; auth API (OAuth, PKCE, long-lived tokens): https://contributors.home-assistant.io/core/internals/auth-api/
   - Govee LAN: https://app-h5.govee.com/user-manual/wlan-guide
 - **Interactive:**
   - Crowd Control: https://developer.crowdcontrol.live/sockets/

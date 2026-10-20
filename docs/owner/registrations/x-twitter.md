@@ -1,12 +1,18 @@
 # X (Twitter): developer account and app
 
-Last verified against official docs: 2026-10-18. Part of the [owner runbooks](../README.md).
+Last verified against official docs: 2026-10-18; connection model re-verified 2026-10-19 (DEN-244, D-059). Part of the [owner runbooks](../README.md).
 
 ## Purpose
 
 StreamDen treats X as an **action target**: post a "we're live" tweet (with or without an image), post clip announcements and optionally read your own mentions. It does **not** read X Live chat (that needs the whitelisted Livestream API, see Policy notes). Per **Q-C4** each user registers their **own** X developer app and pays X directly.
 
 The auth decision from the platform research: OAuth 2.0 Authorization Code with **PKCE** as a **Native App** (public client, no secret), with a loopback callback on `127.0.0.1`.
+
+## How users connect (D-059: browser login first, on the user's own app)
+
+- **Default:** StreamDen opens X's authorization page in the browser (OAuth 2.0 PKCE, **Native App** public client, exact `http://127.0.0.1:<SL_PORT>/...` callback) and receives the code on the loopback listener ([authorization code](https://docs.x.com/fundamentals/authentication/oauth-2-0/authorization-code), re-read 2026-10-19: public clients send `client_id` only, codes expire in 30 s, `offline.access` gives refresh tokens).
+- **Manual part that cannot go away:** per **D-046 / Q-C4** each streamer registers **their own** X developer app and buys their own credits, because X bills per app. The one-time console steps below are therefore end-user steps too (the in-app wizard repeats them), and the user pastes exactly one public value: the Client ID. No shared StreamDen X app is planned.
+- **Never:** browser-session or cookie login (X's terms; D-046).
 
 ## Prerequisites
 
