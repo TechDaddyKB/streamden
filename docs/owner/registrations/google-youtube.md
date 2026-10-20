@@ -140,7 +140,7 @@ You should see your channel. A `refresh_token` is present in the token response;
 
 Procedure/source check: **2026-10-20 UTC (DEN-257)**, public official documentation only; no provider console or OAuth flow inspected. Console labels below are documented unless marked **verify on screen**. This prepares approved N1; it does not dispatch owner work. DEN-257 must first pass independent Claude + Grok review and publication/integration, then be Done before the coordinator creates N1 with `depends_on: DEN-257`. The checklist must be available with this runbook before N1 is ready.
 
-**Current evidence:** the owner reports Google developer registration already created. That does not prove production identity, domain ownership, published pages, connector/demo readiness, OAuth approval or quota. None of those gates is marked complete here. D-059 still prefers shared-project browser login; limited shared-project dev/test use is possible now. Until verification is **granted for the requested scopes**, BYO (Part B) is the public connector path.
+**Current evidence:** the owner reported completing Google developer-registration work (source: DEN-257 project note 91; report recorded 2026-10-20 UTC, actual registration and report dates unverified). This is not a console/API verification. Project/client inventory, production identity, domain ownership, published pages, connector/demo readiness, OAuth approval and quota remain pending. D-059 still prefers shared-project browser login; limited shared-project dev/test use is possible now. Until verification is **granted for the requested scopes**, BYO (Part B) is the public connector path.
 
 ### Readiness packet and non-secret record
 
