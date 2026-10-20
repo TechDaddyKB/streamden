@@ -302,3 +302,211 @@ fn timestamp_utc_boundaries_reject_overflow_without_narrowing_parser_inputs() {
     assert_eq!(values::compare(&overflow, &valid), None);
     assert_eq!(values::compare(&valid, &overflow), None);
 }
+
+use den_core::matcher::filter::CompiledFilter;
+use den_protocol::{Event, Filter, FilterOp, FilterableField};
+
+fn event(payload: Value) -> Event {
+    serde_json::from_value(json!({
+        "id": "019a03ad-0000-7000-8000-000000000001",
+        "type": "core.custom", "ts": "2026-10-20T00:00:00.000Z",
+        "source": {"plugin": "core.test"}, "payload": payload,
+        "meta": {"payloadVersion": 1}
+    }))
+    .unwrap()
+}
+
+fn compile(field: &str, op: FilterOp, value: Value, insensitive: bool) -> CompiledFilter {
+    let mut definition = FilterableField::new(field, vec![op]);
+    definition.case_insensitive = insensitive;
+    CompiledFilter::compile(
+        &Filter {
+            field: field.into(),
+            op,
+            value,
+        },
+        &definition,
+    )
+    .unwrap()
+}
+
+#[test]
+fn every_operator_positive_negative_and_missing() {
+    use FilterOp::*;
+    for (op, operand, good, bad) in [
+        (Eq, json!(1), json!(1.0), json!(2)),
+        (Ne, json!(1), json!(2), json!(1.0)),
+        (In, json!([1, 2]), json!(1.0), json!(3)),
+        (NotIn, json!([1, 2]), json!(3), json!(1.0)),
+        (Gte, json!(2), json!(2), json!(1)),
+        (Lte, json!(2), json!(2), json!(3)),
+        (Between, json!([1, 3]), json!(2), json!(4)),
+        (Contains, json!("PH"), json!("Alpha"), json!("beta")),
+        (Regex, json!("^a+$"), json!("aaa"), json!("baa")),
+        (Exists, json!(true), json!(false), Value::Null),
+    ] {
+        let filter = compile("x", op, operand, false);
+        assert!(filter.eval(&event(json!({"x": good}))).pass, "{op:?}");
+        assert!(!filter.eval(&event(json!({"x": bad}))).pass, "{op:?}");
+        assert!(!filter.eval(&event(json!({}))).pass, "missing {op:?}");
+    }
+}
+
+#[test]
+fn regex_compiles_once_captures_owned_groups_and_named_matches() {
+    let filter = compile(
+        "x",
+        FilterOp::Regex,
+        json!(r"(?P<first>a)(b)?(?P<absent>z)?"),
+        false,
+    );
+    for text in ["a", "ab"] {
+        let result = filter.eval(&event(json!({"x": text})));
+        assert!(result.pass);
+        let captures = result.captures.unwrap();
+        assert_eq!(captures.groups[0].as_deref(), Some(text));
+        assert_eq!(captures.groups[1].as_deref(), Some("a"));
+        assert_eq!(
+            captures.groups[2].as_deref(),
+            if text == "ab" { Some("b") } else { None }
+        );
+        assert_eq!(captures.groups[3], None);
+        assert_eq!(captures.named.get("first").map(String::as_str), Some("a"));
+        assert!(!captures.named.contains_key("absent"));
+    }
+    let miss = filter.eval(&event(json!({"x": "zzz"})));
+    assert!(!miss.pass);
+    assert!(miss.captures.is_none());
+    let equal = compile("x", FilterOp::Eq, json!("a"), false);
+    assert!(equal.eval(&event(json!({"x": "a"}))).captures.is_none());
+}
+
+#[test]
+fn regex_invalid_and_compiled_size_limit_are_errors() {
+    for pattern in ["(", "a{1000000}"] {
+        let definition = FilterableField::new("x", vec![FilterOp::Regex]);
+        let filter = Filter {
+            field: "x".into(),
+            op: FilterOp::Regex,
+            value: json!(pattern),
+        };
+        let error = CompiledFilter::compile(&filter, &definition).unwrap_err();
+        assert_eq!(error.code().0, den_protocol::rpc::ErrorCode::INVALID_PARAMS);
+        assert!(!error.to_string().contains(pattern));
+    }
+}
+
+#[test]
+fn compiled_paths_validation_case_rules_and_specificity() {
+    use FilterOp::*;
+    let mut input =
+        event(json!({"data": {"amount": 2}, "platform": "spoof", "user": {"id": "spoof"}}));
+    input.platform = Some("twitch".parse().unwrap());
+    input.user = Some(
+        serde_json::from_value(json!({
+            "platform": "twitch", "id": "actual", "login": "alice", "displayName": "Alice"
+        }))
+        .unwrap(),
+    );
+    for (field, operand) in [
+        ("data.amount", json!(2.0)),
+        ("user.id", json!("actual")),
+        ("platform", json!("twitch")),
+    ] {
+        assert!(compile(field, Eq, operand, false).eval(&input).pass);
+    }
+    input.user = None;
+    input.platform = None;
+    for field in ["user.id", "platform", "data.missing", "data.amount.x"] {
+        assert!(
+            compile(field, Exists, json!(false), false)
+                .eval(&input)
+                .pass
+        );
+    }
+    for op in [
+        Eq, Ne, In, NotIn, Gte, Lte, Between, Contains, Regex, Exists,
+    ] {
+        let operand = match op {
+            In | NotIn => json!([1]),
+            Between => json!([1, 2]),
+            Regex => json!("a"),
+            Exists => json!(true),
+            _ => json!(1),
+        };
+        let mut definition = FilterableField::new("x", vec![op]);
+        definition.specificity = u32::MAX;
+        let weight = match op {
+            Eq | In => 3,
+            Ne | NotIn | Exists => 1,
+            _ => 2,
+        };
+        let filter = Filter {
+            field: "x".into(),
+            op,
+            value: operand,
+        };
+        assert_eq!(
+            CompiledFilter::compile(&filter, &definition)
+                .unwrap()
+                .specificity(),
+            u64::from(u32::MAX) * weight
+        );
+    }
+    for (op, operand) in [
+        (In, json!(1)),
+        (NotIn, json!(null)),
+        (Exists, json!(1)),
+        (Gte, json!("oops")),
+        (Lte, json!(false)),
+        (Between, json!([1])),
+        (Between, json!([1, "2"])),
+        (Regex, json!(1)),
+    ] {
+        let filter = Filter {
+            field: "x".into(),
+            op,
+            value: operand,
+        };
+        assert!(CompiledFilter::compile(&filter, &FilterableField::new("x", vec![op])).is_err());
+    }
+    for field in ["", ".x", "x.", "x..y"] {
+        let filter = Filter {
+            field: field.into(),
+            op: Eq,
+            value: json!(1),
+        };
+        assert!(CompiledFilter::compile(&filter, &FilterableField::new(field, vec![Eq])).is_err());
+    }
+    let filter = Filter {
+        field: "x".into(),
+        op: Eq,
+        value: json!(1),
+    };
+    for definition in [
+        FilterableField::new("other", vec![Eq]),
+        FilterableField::new("x", vec![Ne]),
+    ] {
+        assert!(CompiledFilter::compile(&filter, &definition).is_err());
+    }
+    for (op, operand, insensitive, expected) in [
+        (Eq, json!("STRASSE"), false, false),
+        (Eq, json!("STRASSE"), true, true),
+        (Contains, json!("STRASSE"), false, true),
+        (Ne, json!("STRASSE"), true, false),
+        (In, json!(["STRASSE"]), true, true),
+        (NotIn, json!(["STRASSE"]), true, false),
+    ] {
+        assert_eq!(
+            compile("x", op, operand, insensitive)
+                .eval(&event(json!({"x": "Straße"})))
+                .pass,
+            expected
+        );
+    }
+    assert!(
+        compile("x", Contains, json!({"v": [1.0]}), false)
+            .eval(&event(json!({"x": [{"v": [1]}]})))
+            .pass
+    );
+}
