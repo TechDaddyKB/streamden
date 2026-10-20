@@ -770,3 +770,227 @@ async fn writer_rejects_invalid_ids_and_enabled_before_persistence() {
     assert!(docs.get("action".into(), id).await.unwrap().is_none());
     worker.close().await.unwrap();
 }
+
+fn nested_body(depth: usize) -> Value {
+    let mut value = Value::Null;
+    for _ in 0..depth {
+        value = Value::Array(vec![value]);
+    }
+    json!({"deep": value})
+}
+
+#[tokio::test]
+async fn unreadable_bodies_are_invalid_input_and_never_inserted() {
+    let (_temp, worker, docs) = harness().await;
+    let (writer, _) = writer(&docs);
+    // Include the reader boundary, the reported 200-level defect, and SQLite's 1000 limit.
+    // Bounded fixtures avoid arbitrarily deep recursive Value clone/serialize/drop stacks.
+    for depth in [200, 125, 126, 127, 1001] {
+        let id = EntityId::new_v7();
+        let body = nested_body(depth);
+        let readable = serde_json::from_str::<Value>(&body.to_string()).is_ok();
+        let result = writer.put(put("view_state", id, body)).await;
+        if readable {
+            let record = result.unwrap();
+            let stored = docs.get("view_state".into(), id).await.unwrap().unwrap();
+            assert_eq!(record.document, stored.document);
+        } else {
+            let error = result.unwrap_err();
+            assert!(matches!(error, DocumentError::InvalidInput(_)), "{error:?}");
+            assert_eq!(error.code(), ErrorCode::new(ErrorCode::INVALID_PARAMS));
+            assert!(docs.get("view_state".into(), id).await.unwrap().is_none());
+        }
+    }
+    worker.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn unreadable_update_preserves_body_revision_and_all_metadata() {
+    let (_temp, worker, docs) = harness().await;
+    let (writer, clock) = writer(&docs);
+    let id = EntityId::new_v7();
+    let before = writer.put(action(id, "before")).await.unwrap();
+    *clock.0.lock().unwrap() = Timestamp::parse("2026-10-20T12:00:00Z").unwrap();
+    let mut invalid = action(id, "after");
+    invalid.document.data["deep"] = nested_body(200);
+    invalid.expected_revision = Some(1);
+    invalid.updated_by = UpdatedBy::Mcp;
+    let error = writer.put(invalid).await.unwrap_err();
+    assert!(matches!(error, DocumentError::InvalidInput(_)));
+    assert_eq!(error.code(), ErrorCode::new(ErrorCode::INVALID_PARAMS));
+    let after = docs.get("action".into(), id).await.unwrap().unwrap();
+    assert_eq!(after.document, before.document);
+    assert_eq!(after.revision, before.revision);
+    assert_eq!(after.created_at, before.created_at);
+    assert_eq!(after.updated_at, before.updated_at);
+    assert_eq!(after.updated_by, before.updated_by);
+    raw(&worker.handle, |c| {
+        let metadata: (String, String, bool) = c
+            .config
+            .query_row("SELECT name,name_key,enabled FROM documents", [], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
+            .unwrap();
+        assert_eq!(metadata, ("before".into(), "before".into(), true));
+    })
+    .await;
+    let mut valid = action(id, "recovered");
+    valid.expected_revision = Some(1);
+    assert_eq!(writer.put(valid).await.unwrap().revision, 2);
+    assert_eq!(
+        docs.get("action".into(), id)
+            .await
+            .unwrap()
+            .unwrap()
+            .revision,
+        2
+    );
+    worker.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn command_and_timer_body_revisions_are_server_assigned() {
+    let (_temp, worker, docs) = harness().await;
+    let (writer, _) = writer(&docs);
+    for kind in ["command", "timer"] {
+        for supplied in [None, Some(77)] {
+            let id = EntityId::new_v7();
+            let mut body = json!({"name":id.to_string(),"enabled":true});
+            if let Some(revision) = supplied {
+                body["revision"] = json!(revision);
+            }
+            for revision in [1, 2] {
+                let mut input = put(kind, id, body.clone());
+                input.expected_revision = (revision > 1).then_some(revision - 1);
+                let returned = writer.put(input).await.unwrap();
+                let stored = docs.get(kind.into(), id).await.unwrap().unwrap();
+                assert_eq!(returned.revision, revision);
+                assert_eq!(stored.revision, revision);
+                assert_eq!(returned.document.data["revision"], revision);
+                assert_eq!(stored.document, returned.document);
+                raw(&worker.handle, move |c| {
+                    let revisions: (i64, i64) = c.config.query_row(
+                        "SELECT revision,json_extract(data,'$.revision') FROM documents WHERE kind=?1 AND id=?2",
+                        params![kind, id.to_string()], |r| Ok((r.get(0)?, r.get(1)?)),
+                    ).unwrap();
+                    assert_eq!(revisions, (revision as i64, revision as i64));
+                }).await;
+            }
+            let mut stale = put(kind, id, body);
+            stale.expected_revision = Some(1);
+            conflict(writer.put(stale).await.unwrap_err(), id);
+            assert_eq!(
+                docs.get(kind.into(), id).await.unwrap().unwrap().revision,
+                2
+            );
+        }
+    }
+    // Kinds without a contracted body revision retain caller data exactly.
+    for kind in ["queue", "view_state"] {
+        for supplied in [None, Some(77)] {
+            let id = EntityId::new_v7();
+            let mut body = json!({"name":id.to_string()});
+            if let Some(revision) = supplied {
+                body["revision"] = json!(revision);
+            }
+            for revision in [1, 2] {
+                let returned = writer.put(put(kind, id, body.clone())).await.unwrap();
+                assert_eq!(returned.revision, revision);
+                assert_eq!(returned.document.data, body);
+                assert_eq!(
+                    docs.get(kind.into(), id)
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .document
+                        .data,
+                    body
+                );
+            }
+        }
+    }
+    worker.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn failed_after_insert_rolls_back_entire_new_row() {
+    let (_temp, worker, docs) = harness().await;
+    let (writer, _) = writer(&docs);
+    let id = EntityId::new_v7();
+    raw(&worker.handle, |c| {
+        c.config
+            .execute_batch(
+                "CREATE TRIGGER fail_insert AFTER INSERT ON documents
+             BEGIN SELECT RAISE(ABORT,'injected insert'); END",
+            )
+            .unwrap();
+    })
+    .await;
+    let error = writer.put(action(id, "insert")).await.unwrap_err();
+    assert!(matches!(error, DocumentError::Sqlite(_)));
+    assert_eq!(error.code(), ErrorCode::new(ErrorCode::INTERNAL));
+    assert!(docs.get("action".into(), id).await.unwrap().is_none());
+    raw(&worker.handle, |c| {
+        let count: i64 = c
+            .config
+            .query_row("SELECT count(*) FROM documents", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+        c.config.execute_batch("DROP TRIGGER fail_insert").unwrap();
+    })
+    .await;
+    assert_eq!(writer.put(action(id, "insert")).await.unwrap().revision, 1);
+    worker.close().await.unwrap();
+}
+
+struct LockProbeClock {
+    path: std::path::PathBuf,
+    observed: Arc<Mutex<Option<bool>>>,
+}
+impl Clock for LockProbeClock {
+    fn monotonic(&self) -> tokio::time::Instant {
+        tokio::time::Instant::now()
+    }
+    fn wall(&self) -> Timestamp {
+        // Called after BEGIN and before read/prepare: the second writer must already be blocked.
+        let conn = Connection::open(&self.path).unwrap();
+        conn.busy_timeout(std::time::Duration::ZERO).unwrap();
+        let result = conn.execute_batch("BEGIN IMMEDIATE");
+        let blocked = matches!(&result, Err(rusqlite::Error::SqliteFailure(e, _))
+            if e.code == rusqlite::ErrorCode::DatabaseBusy);
+        if result.is_ok() {
+            conn.execute_batch("ROLLBACK").unwrap();
+        }
+        *self.observed.lock().unwrap() = Some(blocked);
+        clock().wall()
+    }
+}
+
+#[tokio::test]
+async fn immediate_write_lock_precedes_read_and_prepare() {
+    let (temp, worker, docs) = harness().await;
+    let path = temp.path().join("config.db");
+    let conn = Connection::open(&path).unwrap();
+    conn.busy_timeout(std::time::Duration::ZERO).unwrap();
+    conn.execute_batch("BEGIN IMMEDIATE; ROLLBACK").unwrap();
+    let observed = Arc::new(Mutex::new(None));
+    let writer = docs.writer(
+        policy(),
+        Arc::new(LockProbeClock {
+            path,
+            observed: observed.clone(),
+        }),
+    );
+    let id = EntityId::new_v7();
+    for revision in [1, 2] {
+        *observed.lock().unwrap() = None;
+        assert_eq!(
+            writer.put(action(id, "locked")).await.unwrap().revision,
+            revision
+        );
+        assert_eq!(*observed.lock().unwrap(), Some(true));
+        // Successful commit releases the lock, including on the update path.
+        conn.execute_batch("BEGIN IMMEDIATE; ROLLBACK").unwrap();
+    }
+    worker.close().await.unwrap();
+}

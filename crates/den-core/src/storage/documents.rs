@@ -275,7 +275,7 @@ impl WritePolicy {
             }
         }
         let action = put.document.kind == "action";
-        if action {
+        if matches!(put.document.kind.as_str(), "action" | "command" | "timer") {
             body.insert("revision".into(), revision.into());
         }
         let draft =
@@ -358,6 +358,10 @@ fn write(tx: &Transaction<'_>, policy: &WritePolicy, put: Put, now: Timestamp) -
     let prepared = policy.prepare(put, old.as_ref(), now)?;
     let record = prepared.record;
     let kind = &record.document.kind;
+    let body = serde_json::to_string(&record.document.data)?;
+    // Use the same decoder as read(): never persist a body it cannot load again.
+    serde_json::from_str::<Value>(&body)
+        .map_err(|_| DocumentError::InvalidInput("document body cannot be decoded"))?;
     if !prepared.draft && matches!(kind.as_str(), "action" | "queue" | "command") {
         let clash: Option<String> = tx
             .query_row(
@@ -382,6 +386,6 @@ fn write(tx: &Transaction<'_>, policy: &WritePolicy, put: Put, now: Timestamp) -
          name=excluded.name,name_key=excluded.name_key,enabled=excluded.enabled,data=excluded.data,
          updated_at=excluded.updated_at,updated_by=excluded.updated_by",
         params![kind,record.id.to_string(),record.document.schema_version,record.revision as i64,prepared.name,prepared.key,prepared.enabled,
-            serde_json::to_string(&record.document.data)?,record.created_at.to_string(),record.updated_at.to_string(),serde_json::to_string(&record.updated_by)?])?;
+            body,record.created_at.to_string(),record.updated_at.to_string(),serde_json::to_string(&record.updated_by)?])?;
     Ok(record)
 }
