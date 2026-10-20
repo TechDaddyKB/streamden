@@ -475,3 +475,90 @@ fn write(tx: &Transaction<'_>, policy: &WritePolicy, put: Put, now: Timestamp) -
             body,record.created_at.to_string(),record.updated_at.to_string(),serde_json::to_string(&record.updated_by)?])?;
     Ok(record)
 }
+
+/// Local diagnostic only. Raw SQLite values preserve malformed IDs and non-JSON bodies.
+/// DEN-116 owns disabled installation and safe event construction, never Debug forwarding.
+#[derive(Debug)]
+pub struct Invalid {
+    pub id: rusqlite::types::Value,
+    pub kind: String,
+    pub error: DocumentError,
+    pub data: rusqlite::types::Value,
+}
+impl Documents {
+    /// Decode every row without installing, migrating, validating or repairing it.
+    /// A malformed row is isolated; query/I/O and transport failures still fail the call.
+    pub async fn inspect_rows(
+        &self,
+        kind: String,
+    ) -> Result<Vec<std::result::Result<Record, Invalid>>> {
+        check_kind(&kind)?;
+        run(&self.handle, move |conns| {
+            let mut statement = conns.config.prepare(
+                "SELECT id,schema_version,revision,data,created_at,updated_at,updated_by
+                 FROM documents WHERE kind=?1 ORDER BY id COLLATE BINARY",
+            )?;
+            let mut rows = statement.query([&kind])?;
+            let mut reports = Vec::new();
+            while let Some(row) = rows.next()? {
+                let id = diagnostic_field(row, 0)?;
+                let data = diagnostic_field(row, 3)?;
+                reports.push(decode_row(row, &kind).map_err(|error| Invalid {
+                    id,
+                    kind: kind.clone(),
+                    error,
+                    data,
+                }));
+            }
+            Ok(reports)
+        })
+        .await
+    }
+}
+fn decode_row(row: &rusqlite::Row<'_>, kind: &str) -> Result<Record> {
+    let stored: String = row.get(0)?;
+    let id = stored
+        .parse::<EntityId>()
+        .ok()
+        .filter(|id| id.to_string() == stored)
+        .ok_or(DocumentError::InvalidStored("invalid listed id"))?;
+    let schema_version = row.get(1)?;
+    let revision: i64 = row.get(2)?;
+    let data: String = row.get(3)?;
+    let created: String = row.get(4)?;
+    let updated: String = row.get(5)?;
+    let by: String = row.get(6)?;
+    Ok(Record {
+        id,
+        document: StoredDocument {
+            kind: kind.into(),
+            schema_version,
+            data: serde_json::from_str(&data)?,
+        },
+        revision: u64::try_from(revision)
+            .ok()
+            .filter(|r| *r > 0)
+            .ok_or(DocumentError::InvalidStored("invalid stored revision"))?,
+        created_at: Timestamp::parse(&created)
+            .map_err(|_| DocumentError::InvalidStored("invalid stored timestamp"))?,
+        updated_at: Timestamp::parse(&updated)
+            .map_err(|_| DocumentError::InvalidStored("invalid stored timestamp"))?,
+        updated_by: serde_json::from_str(&by)?,
+    })
+}
+
+// Invalid UTF-8 TEXT is preserved as bytes; the decoder error retains its TEXT class.
+fn diagnostic_field(
+    row: &rusqlite::Row<'_>,
+    index: usize,
+) -> rusqlite::Result<rusqlite::types::Value> {
+    use rusqlite::types::{Value as SqlValue, ValueRef};
+    let field = row.get_ref(index)?;
+    if let ValueRef::Text(bytes) = field {
+        return Ok(match std::str::from_utf8(bytes) {
+            Ok(text) => SqlValue::Text(text.to_owned()),
+            Err(_) => SqlValue::Blob(bytes.to_vec()),
+        });
+    }
+    row.get(index)
+}
