@@ -735,3 +735,89 @@ defaults.
 Action History and the event log (`engine.history.maxAgeDays` maximum `365`;
 `engine.events.maxAgeHours` maximum `8760`). Existing defaults and the separate Q-H1 / D-054 chat-retention
 policy remain unchanged.
+
+### Q-E11 — Should reversed `between` bounds be rejected? 🟥 (DEN-340)
+Raised by [DEN-338 / DEN-340](agents/board.md), Claude review project file 256
+(`context/den338-claude-review-cb634fd3.md`), question Q1, reviewing DEN-318 at `cb634fd3`.
+[Spec 03 §6.2](spec/03-engine.md#62-filters) defines inclusive numeric or RFC 3339 `[min, max]`
+comparisons but is silent when `min > max`. The reviewed code accepts comparable reversed bounds
+(e.g. `[3, 1]` or later-to-earlier timestamps) at compile time and they never match.
+Options: (a) accept the current empty-range behavior; (b) reject reversed bounds at compile/save time
+with `INVALID_PARAMS`, making the authoring error visible before the trigger is used.
+**Recommendation:** (b), as recommended by the reviewer; a filter that can never match is usually an
+unintentional authoring error. This is a recommendation, not an accepted policy or implementation authorization.
+**Impact / owner readiness:** DEN-341 is the queued human decision card on the
+[streamden board](agents/board.md). Choose (a) or (b), or identify an already accepted normative clarification,
+before DEN-319 fixes expectations for this case and before full DEN-80 acceptance. Bounded DEN-318's
+review and CI/integration gates remain as described under Q-E14.
+**Status:** UNANSWERED.
+**Answer:**
+
+### Q-E12 — Which case rule applies to array `contains`? 🟥 (DEN-340)
+Raised by [DEN-338 / DEN-340](agents/board.md), Claude review project file 256, question Q2,
+reviewing DEN-318 at `cb634fd3`. [Spec 03 §6.2](spec/03-engine.md#62-filters) says array `contains`
+uses element `eq`, whose string comparison follows the field's `caseInsensitive` flag. The reviewed code
+follows that table: `user.roles contains "Moderator"` does not match `"moderator"` unless the field is
+case-insensitive. [Spec 02 §6.2 / A5](spec/02-protocol.md#62-trigger) and the current
+[`FilterableField` comment](../crates/den-protocol/src/catalog.rs) instead describe `contains` as
+case-insensitive regardless, without restricting that wording to string substring matching.
+Options: (a) keep array element `eq`, including the field's case flag; (b) always fold array string elements
+for `contains`, regardless of that flag. String substring `contains` already folds case under the table.
+**Recommendation:** (a), the reviewer's recommendation: follow the table and clarify A5 to say
+"string `contains`". Neither that clarification nor a spec change is enacted here.
+**Impact / owner readiness:** [DEN-341](agents/board.md) needs a choice or an accepted clarification that
+reconciles the sources before DEN-319's ambiguous array-case assertions, full DEN-80 acceptance and consumer
+expectations are settled. DEN-318's independent review and CI/integration gates remain unchanged.
+**Status:** UNANSWERED.
+**Answer:**
+
+### Q-E13 — What should a bare `user` filter path mean? 🟥 (DEN-340)
+Raised by [DEN-338 / DEN-340](agents/board.md), Claude review project file 256, question Q3 and
+**F1 Low**, reviewing DEN-318 at `cb634fd3`. [Spec 02 §6.2 / A5](spec/02-protocol.md#62-trigger)
+and [Spec 03 §6.2](spec/03-engine.md#62-filters) reserve `user.*` for the envelope; the reviewed code
+routes those paths to `Event.user`, but bare `user` falls through to `event.payload.user`.
+[Spec 02 §6.3](spec/02-protocol.md#63-variables-and-the-run-context) forbids a top-level payload `user`.
+The review's probe shows a catalog field literally named `user` can match a spoofed payload object if that
+non-conforming payload bypasses validation; on a conforming payload, `user exists true` is false even with
+an envelope user. Those exposure prerequisites are why the reviewer rated this Low, not a blocking DEN-318 defect.
+Options: (a) reject bare `user` at compile time with `INVALID_PARAMS`; (b) define it as the whole envelope
+[`UserRef`](../crates/den-protocol/src/shared.rs), with normative whole-root semantics;
+(c) retain the current payload fallback. Option (c) crosses the untrusted payload boundary and depends on
+non-conforming data; it is explicitly not recommended. Existing `user.*` paths stay envelope paths.
+**Recommendation:** (a) until normative whole-root support is needed. This is the parent/reviewer follow-up
+recommendation only, not an owner answer, an approved contract or implementation authorization; the review
+itself left the choice open.
+**Impact / owner readiness:** [DEN-341](agents/board.md) needs a choice or accepted clarification before
+DEN-319 encodes bare-root expectations, full DEN-80 acceptance or consumers rely on whole-root behavior.
+Keep the Low finding distinct from Q-E14's field-schema contract gap; DEN-318's remaining gates are unchanged.
+**Status:** UNANSWERED.
+**Answer:**
+
+### Q-E14 — Where does filter operand field-schema validation come from? 🟥 (DEN-340)
+Raised by [DEN-338 / DEN-340](agents/board.md), Claude review project file 256, question Q4,
+reviewing DEN-318 at `cb634fd3`. [Spec 02 §6.2](spec/02-protocol.md#62-trigger) says `Filter.value`
+is validated against the field's schema; [Spec 03 §6.2](spec/03-engine.md#62-filters) describes evaluation
+with the catalog field's type. Current [`FilterableField`](../crates/den-protocol/src/catalog.rs) has
+`field`, `ops`, `optionsFrom`, `specificity` and `caseInsensitive`, with no schema/type member.
+`EventDef.payload` does carry a payload schema; [`Event`](../crates/den-protocol/src/events.rs) carries
+normalized `user` and `platform` separately. Operator-shape checks exist, but schema-known field/operand
+validation is unresolved: e.g. `contains 1` on a string field compiles and never matches. This is the full
+schema-validation contract gap identified by the review, not a new Medium or blocking DEN-318 finding.
+Options: (a) resolve the field constraint from the existing event payload schema and supply a compiled
+validator internally without a wire addition, **if** that source can cover reserved `user`/`platform` and each
+operator's operand shape; (b) use a dedicated ADR and contract task to design a catalog type constraint.
+Before choosing either, define the exact constraint source, reserved-envelope mapping and operator-operand
+coverage; no public field, API or typing policy is invented by these options.
+**Recommendation:** investigate (a) only if the existing schemas can express all of that coverage; otherwise
+use dedicated contract design under (b). This conditional recommendation is not an accepted design, and the
+reviewer's contract-task warning remains applicable to any public contract change.
+**Impact / owner readiness:** [DEN-341](agents/board.md) is queued for the owner's choice or an accepted
+normative clarification, with the exact source/coverage evidence needed to resolve this question. Full
+DEN-80 acceptance, DEN-319 expectations on these ambiguous cases and consumer contracts need that resolution.
+Public type changes still require an approved ADR and a dedicated contract task before implementation.
+Claude DEN-338 approved bounded DEN-318 per the current Spec 03 table; mandatory independent Grok DEN-339 QA,
+current Linux and native Windows CI (matcher 8 and protocol timestamp 7), and exact merge-content integration
+remain required. Recording Q-E11–Q-E14 neither waives those gates nor completes DEN-80 / DEN-319.
+No account, key or console operation is needed to answer these questions, so no registration runbook is needed.
+**Status:** UNANSWERED.
+**Answer:**
