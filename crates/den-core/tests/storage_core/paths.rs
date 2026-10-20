@@ -397,6 +397,12 @@ fn missing_dotdot_preserves_nonprivate_ancestors() {
             panic!("missing/../sd under {parent_mode:04o} must succeed: {error}");
         }
         let paths = result.unwrap();
+        let existing = parent.join("existing");
+        fs::create_dir(&existing).unwrap();
+        fs::set_permissions(&existing, fs::Permissions::from_mode(parent_mode)).unwrap();
+        prepare(parent.join("missing-again/../existing/sd")).unwrap();
+        assert_eq!(mode(&existing), parent_mode);
+        validate_private_dir(&existing.join("sd")).unwrap();
         assert_eq!(paths.root(), fs::canonicalize(&root).unwrap());
         for db in [paths.config(), paths.history()] {
             fs::write(db, b"preserve database bytes").unwrap();

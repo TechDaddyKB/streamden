@@ -32,10 +32,12 @@ pub fn create_private_dir(path: &Path) -> io::Result<()> {
         }
     }
     for directory in missing.into_iter().rev() {
-        // `..` traverses an existing ancestor, not a directory we create.
-        // Keep it in subsequent OS paths; never collapse through symlinks.
-        if directory.components().next_back() == Some(std::path::Component::ParentDir) {
-            continue;
+        // Earlier creations can make `..` and following ancestors resolve.
+        // Recheck with the OS; never collapse components through symlinks.
+        match fs::symlink_metadata(directory) {
+            Ok(_) => continue,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
         }
         let mut builder = DirBuilder::new();
         private_mode(ModeTarget::Directory(&mut builder))?;
