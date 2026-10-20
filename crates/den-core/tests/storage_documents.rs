@@ -1324,3 +1324,178 @@ async fn batch_sql_failure_rolls_back_other_kinds_and_success_keeps_view_state_s
     }
     worker.close().await.unwrap();
 }
+
+use den_core::storage::documents::{Filter, Record};
+
+async fn listed(
+    docs: &Documents,
+    kind: &str,
+    name: Option<&str>,
+    enabled: Option<bool>,
+) -> Vec<Record> {
+    docs.list(
+        kind.into(),
+        Filter {
+            name: name.map(str::to_owned),
+            enabled,
+        },
+    )
+    .await
+    .unwrap()
+}
+fn ids(records: &[Record]) -> Vec<EntityId> {
+    records.iter().map(|record| record.id).collect()
+}
+
+#[tokio::test]
+async fn all_kinds_get_list_delete_and_filters() {
+    let (_temp, worker, docs) = harness().await;
+    let (writer, _) = writer(&docs);
+    let kinds = [
+        "action",
+        "queue",
+        "command",
+        "timer",
+        "settings",
+        "view_state",
+        "pending_change",
+        "export_meta",
+    ];
+    let keys: Vec<EntityId> = [
+        "00000000-0000-7000-8000-000000000001",
+        "00000000-0000-7000-8000-000000000002",
+        "00000000-0000-7000-8000-000000000003",
+    ]
+    .into_iter()
+    .map(|s| s.parse().unwrap())
+    .collect();
+    for kind in kinds {
+        assert!(listed(&docs, kind, None, None).await.is_empty());
+        for index in (0..3).rev() {
+            let name = ["Straße", "other", "third"][index];
+            let mut data = json!({"name":name, "extra":{"kind":kind}});
+            if index < 2 {
+                data["enabled"] = json!(index == 0);
+            }
+            writer.put(put(kind, keys[index], data)).await.unwrap();
+        }
+    }
+    for kind in kinds {
+        let all = listed(&docs, kind, None, None).await;
+        assert_eq!(ids(&all), keys);
+        assert_eq!(ids(&listed(&docs, kind, None, None).await), keys);
+        for record in all {
+            let got = docs.get(kind.into(), record.id).await.unwrap().unwrap();
+            assert_eq!(record.document, got.document);
+            assert_eq!(record.revision, got.revision);
+            assert_eq!(record.created_at, got.created_at);
+            assert_eq!(record.updated_at, got.updated_at);
+            assert_eq!(record.updated_by, got.updated_by);
+            assert_eq!(record.document.data["extra"]["kind"], kind);
+        }
+        for (name, enabled, expected) in [
+            (None, Some(true), vec![keys[0]]),
+            (None, Some(false), vec![keys[1]]),
+            (Some("STRASSE"), None, vec![keys[0]]),
+            (Some("strasse"), Some(true), vec![keys[0]]),
+            (Some("STRASSE"), Some(false), vec![]),
+            (Some("missing"), None, vec![]),
+        ] {
+            assert_eq!(ids(&listed(&docs, kind, name, enabled).await), expected);
+        }
+        assert!(writer.delete(kind.into(), keys[0], Some(1)).await.unwrap());
+        assert!(docs.get(kind.into(), keys[0]).await.unwrap().is_none());
+        assert_eq!(ids(&listed(&docs, kind, None, None).await), keys[1..]);
+        assert!(listed(&docs, kind, Some("STRASSE"), None).await.is_empty());
+        // All not-yet-deleted kinds retain the same ID and revision.
+        for other in kinds.into_iter().skip_while(|other| *other != kind).skip(1) {
+            assert_eq!(
+                docs.get(other.into(), keys[0])
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .revision,
+                1
+            );
+        }
+    }
+    worker.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn raw_listing_preserves_unknown_versions_and_reports_local_errors() {
+    let (_temp, worker, docs) = harness().await;
+    let (writer, _) = writer(&docs);
+    let id = EntityId::new_v7();
+    writer
+        .put(put("timer", id, json!({"enabled":true,"unknown":[1,null]})))
+        .await
+        .unwrap();
+    raw(&worker.handle, |c| {
+        c.config
+            .execute_batch("UPDATE documents SET schema_version=99")
+            .unwrap();
+    })
+    .await;
+    let row = listed(&docs, "timer", None, None).await.remove(0);
+    assert_eq!(row.document.schema_version, 99);
+    assert_eq!(row.document.data["unknown"], json!([1, null]));
+    for (sql, expected) in [
+        ("UPDATE documents SET revision=0", "revision"),
+        (
+            "UPDATE documents SET revision=1,created_at='bad'",
+            "timestamp",
+        ),
+        (
+            "UPDATE documents SET created_at='2026-10-20T10:00:00Z',updated_by='{}'",
+            "json",
+        ),
+        (
+            "UPDATE documents SET updated_by='{\"kind\":\"system\"}',id='bad'",
+            "id",
+        ),
+    ] {
+        raw(&worker.handle, move |c| {
+            c.config.execute_batch(sql).unwrap();
+        })
+        .await;
+        let error = docs
+            .list("timer".into(), Filter::default())
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::new(ErrorCode::INTERNAL));
+        assert!(match expected {
+            "revision" => matches!(
+                error,
+                DocumentError::InvalidStored("invalid stored revision")
+            ),
+            "timestamp" => matches!(
+                error,
+                DocumentError::InvalidStored("invalid stored timestamp")
+            ),
+            "json" => matches!(error, DocumentError::Json(_)),
+            "id" => matches!(error, DocumentError::InvalidStored("invalid listed id")),
+            _ => unreachable!(),
+        });
+        // Failure rolls back the read snapshot and leaves unrelated kinds listable.
+        assert!(listed(&docs, "queue", None, None).await.is_empty());
+    }
+    let error = docs
+        .list("export".into(), Filter::default())
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), ErrorCode::new(ErrorCode::INVALID_PARAMS));
+    raw(&worker.handle, |c| {
+        c.config.execute_batch("DROP TABLE documents").unwrap();
+    })
+    .await;
+    assert!(matches!(
+        docs.list("timer".into(), Filter::default()).await,
+        Err(DocumentError::Sqlite(_))
+    ));
+    worker.close().await.unwrap();
+    assert!(matches!(
+        docs.list("timer".into(), Filter::default()).await,
+        Err(DocumentError::Transport(StorageError::Disconnected))
+    ));
+}
