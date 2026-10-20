@@ -266,10 +266,12 @@ impl WritePolicy {
         let body = data.as_object_mut().ok_or(DocumentError::InvalidInput(
             "document body must be an object",
         ))?;
-        if let Some(id) = body.get("id")
-            && serde_json::from_value::<EntityId>(id.clone())? != put.id
-        {
-            return Err(DocumentError::InvalidInput("document id mismatch"));
+        if let Some(id) = body.get("id") {
+            let id = serde_json::from_value::<EntityId>(id.clone())
+                .map_err(|_| DocumentError::InvalidInput("document id must be an entity id"))?;
+            if id != put.id {
+                return Err(DocumentError::InvalidInput("document id mismatch"));
+            }
         }
         let action = put.document.kind == "action";
         if action {
@@ -277,9 +279,6 @@ impl WritePolicy {
         }
         let draft =
             action && data.pointer("/origin/kind").and_then(Value::as_str) == Some("ai_draft");
-        if draft {
-            data["enabled"] = false.into();
-        }
         let named = matches!(put.document.kind.as_str(), "action" | "queue" | "command");
         let name = match data.get("name") {
             Some(Value::String(name)) => Some(name.clone()),
@@ -291,6 +290,10 @@ impl WritePolicy {
             None => None,
             _ => return Err(DocumentError::InvalidInput("enabled must be a boolean")),
         };
+        if draft {
+            data["enabled"] = false.into();
+        }
+        let enabled = if draft { Some(false) } else { enabled };
         let key = name.as_deref().map(|name| name.case_fold().collect());
         let record = Record {
             id: put.id,

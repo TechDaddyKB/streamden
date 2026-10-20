@@ -392,3 +392,83 @@ fn pure_registered_versions_and_full_unicode_casefold() {
         assert_eq!(prepared.key.as_deref(), Some(expected));
     }
 }
+
+#[test]
+fn caller_body_ids_are_input_errors() {
+    let policy = policy();
+    let now = clock().wall();
+    let id = EntityId::new_v7();
+    for body_id in [json!("not-a-uuid"), json!(null), json!(42)] {
+        let mut input = action(id, "body id");
+        input.document.data["id"] = body_id;
+        let error = policy.prepare(input, None, now).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::new(ErrorCode::INVALID_PARAMS));
+        assert!(matches!(
+            error,
+            DocumentError::InvalidInput("document id must be an entity id")
+        ));
+    }
+    let mut input = action(id, "different id");
+    input.document.data["id"] = json!(EntityId::new_v7());
+    let error = policy.prepare(input, None, now).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::new(ErrorCode::INVALID_PARAMS));
+    assert!(matches!(
+        error,
+        DocumentError::InvalidInput("document id mismatch")
+    ));
+}
+
+#[test]
+fn expected_revision_on_absent_row_conflicts_with_input_id() {
+    let id = EntityId::new_v7();
+    let mut input = action(id, "absent row");
+    input.expected_revision = Some(1);
+    conflict(
+        policy().prepare(input, None, clock().wall()).unwrap_err(),
+        id,
+    );
+}
+
+#[test]
+fn enabled_is_validated_before_draft_safety_override() {
+    let policy = policy();
+    let now = clock().wall();
+    let id = EntityId::new_v7();
+    for origin in ["user", "ai_draft"] {
+        for enabled in [json!("yes"), json!(null), json!(42), json!({}), json!([])] {
+            let input = put(
+                "action",
+                id,
+                json!({"name":"enabled type","enabled":enabled,"origin":{"kind":origin}}),
+            );
+            let error = policy.prepare(input, None, now).unwrap_err();
+            assert_eq!(error.code(), ErrorCode::new(ErrorCode::INVALID_PARAMS));
+            assert!(matches!(
+                error,
+                DocumentError::InvalidInput("enabled must be a boolean")
+            ));
+        }
+        for enabled in [None, Some(false), Some(true)] {
+            let mut input = put(
+                "action",
+                id,
+                json!({"name":"optional enabled","origin":{"kind":origin}}),
+            );
+            if let Some(enabled) = enabled {
+                input.document.data["enabled"] = json!(enabled);
+            }
+            let prepared = policy.prepare(input, None, now).unwrap();
+            let expected = if origin == "ai_draft" {
+                Some(false)
+            } else {
+                enabled
+            };
+            assert_eq!(prepared.enabled, expected);
+            assert_eq!(prepared.draft, origin == "ai_draft");
+            assert_eq!(
+                prepared.record.document.data.get("enabled"),
+                expected.map(|v| json!(v)).as_ref()
+            );
+        }
+    }
+}
