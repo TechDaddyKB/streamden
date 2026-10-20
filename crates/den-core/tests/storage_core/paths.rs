@@ -443,3 +443,103 @@ fn missing_dotdot_uses_symlink_target_parent() {
     validate_private_dir(&target.join("missing")).unwrap();
     assert!(prepare(alias).unwrap_err().to_string().contains("symlink"));
 }
+
+#[test]
+fn data_dir_override_order() {
+    use den_core::storage::paths::DataDir;
+    let temp = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let relative = temp
+        .path()
+        .strip_prefix(std::env::current_dir().unwrap())
+        .unwrap()
+        .join("data");
+    let paths = DataDir::resolve(Some(relative.clone())).unwrap();
+    assert_eq!(paths.root(), fs::canonicalize(&relative).unwrap());
+    let mut entries = vec![paths.config(), paths.history()];
+    for dir in [paths.backups(), paths.exports()] {
+        entries.push(dir.join("preserved"));
+        drop(create_private_file(entries.last().unwrap()).unwrap());
+    }
+    for db in [paths.config(), paths.history()] {
+        for suffix in ["-wal", "-shm"] {
+            entries.push(db.with_extension(format!("db{suffix}")));
+            drop(create_private_file(entries.last().unwrap()).unwrap());
+        }
+    }
+    for path in &entries {
+        fs::write(path, b"unchanged").unwrap();
+    }
+    DataDir::resolve(Some(relative)).unwrap();
+    for path in entries {
+        assert_eq!(fs::read(path).unwrap(), b"unchanged");
+    }
+    let file = temp.path().join("file");
+    fs::write(&file, b"preserved").unwrap();
+    assert!(DataDir::resolve(Some(file.clone())).is_err());
+    assert_eq!(fs::read(file).unwrap(), b"preserved");
+}
+
+#[cfg(unix)]
+#[test]
+fn preparation_rejects_linked_databases_and_sidecars() {
+    use std::os::unix::fs::symlink;
+    for name in [
+        "config.db",
+        "history.db",
+        "config.db-wal",
+        "config.db-shm",
+        "history.db-wal",
+        "history.db-shm",
+    ] {
+        for hard in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let root = temp.path().join("data");
+            create_private_dir(&root).unwrap();
+            let target = temp.path().join("private-target/target");
+            create_private_file(&target)
+                .unwrap()
+                .write_all(b"preserved")
+                .unwrap();
+            let link = root.join(name);
+            if hard {
+                fs::hard_link(&target, &link).unwrap();
+            } else {
+                symlink(&target, &link).unwrap();
+            }
+            let error = prepare(root).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains(if hard { "hard-linked" } else { "symlink" })
+            );
+            assert_eq!(fs::read(target).unwrap(), b"preserved");
+            assert!(fs::symlink_metadata(link).is_ok());
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn access_denial_keeps_raw_os_error() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = tempfile::tempdir().unwrap();
+    let parent = temp.path().join("denied");
+    fs::create_dir(&parent).unwrap();
+    fs::set_permissions(&parent, fs::Permissions::from_mode(0o0)).unwrap();
+    let denied = match fs::read_dir(&parent) {
+        Ok(_) => {
+            fs::set_permissions(&parent, fs::Permissions::from_mode(0o700)).unwrap();
+            eprintln!("SKIPPED denial assertion: host can read the owned 0o000 fixture");
+            return;
+        }
+        Err(error) => error,
+    };
+    let result = prepare(parent.join("data"));
+    fs::set_permissions(&parent, fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(denied.kind(), std::io::ErrorKind::PermissionDenied);
+    let error = result.unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+    assert!(error.raw_os_error().is_some());
+    assert_eq!(error.raw_os_error(), denied.raw_os_error());
+    eprintln!("actual fixture denial: {error:?}; read_dir: {denied:?}");
+}

@@ -358,3 +358,405 @@ fn directory_probe_preserves_actual_os_errors() {
     assert!(error.raw_os_error().is_some());
     assert_eq!(fs::read(file).unwrap(), b"untouched");
 }
+
+/// Resolved startup storage paths and advisory warnings from Spec 03 §19.
+/// Call on a dedicated `std::thread` outside entered Tokio (including
+/// `spawn_blocking`). Mount enumeration can block in statvfs indefinitely;
+/// this synchronous API offers no cancellation or latency bound. Detection is
+/// heuristic, including on Windows: mapped remote-drive coverage is not promised.
+/// Sync markers match whole components, ignoring ASCII case; enterprise/suffixed
+/// names such as `OneDrive - Org` and `Dropbox (Team)` may be missed. Windows
+/// volume-GUID roots and mount-path case mismatches can also miss advisories.
+/// PreparedPaths' snapshot, ACL, trusted-namespace and failure-leftover limits apply.
+#[derive(Debug)]
+pub struct DataDir {
+    paths: PreparedPaths,
+    warnings: Vec<&'static str>,
+}
+
+impl DataDir {
+    pub fn resolve(explicit: Option<PathBuf>) -> io::Result<Self> {
+        Self::resolve_with(
+            explicit,
+            |key| std::env::var_os(key),
+            std::env::current_dir,
+            || {
+                mountpoints::mountinfos()
+                    .map(|mounts| mounts.into_iter().map(|m| (m.path, m.format)).collect())
+                    .map_err(|e| e.to_string())
+            },
+        )
+    }
+
+    fn resolve_with(
+        explicit: Option<PathBuf>,
+        environment: impl FnMut(&str) -> Option<std::ffi::OsString>,
+        current_dir: impl FnOnce() -> io::Result<PathBuf>,
+        discovery: impl FnOnce() -> Result<Vec<MountRecord>, String>,
+    ) -> io::Result<Self> {
+        // Preparation rejects entered runtimes before reading any input or doing IO.
+        let paths = PreparedPaths::prepare(explicit, environment, current_dir)?;
+        let warnings = discover(&paths.root, discovery());
+        Ok(Self { paths, warnings })
+    }
+
+    pub fn root(&self) -> PathBuf {
+        self.paths.root()
+    }
+    pub fn config(&self) -> PathBuf {
+        self.paths.config()
+    }
+    pub fn history(&self) -> PathBuf {
+        self.paths.history()
+    }
+    pub fn backups(&self) -> PathBuf {
+        self.paths.backups()
+    }
+    pub fn exports(&self) -> PathBuf {
+        self.paths.exports()
+    }
+    pub fn warnings(&self) -> &[&'static str] {
+        &self.warnings
+    }
+}
+
+type MountRecord = (PathBuf, Option<String>);
+
+fn mount_path(path: &Path) -> PathBuf {
+    let spelling = path.as_os_str().to_string_lossy();
+    // Windows canonicalization uses verbatim roots; mount records may not.
+    if spelling
+        .get(..8)
+        .is_some_and(|s| s.eq_ignore_ascii_case(r"\\?\UNC\"))
+    {
+        return PathBuf::from(format!(r"\\{}", &spelling[8..]));
+    }
+    spelling
+        .strip_prefix(r"\\?\")
+        .map_or_else(|| path.to_owned(), PathBuf::from)
+}
+
+fn is_unc(path: &Path) -> bool {
+    let spelling = path.as_os_str().to_string_lossy().replace('\\', "/");
+    let lower = spelling.to_ascii_lowercase();
+    let rest = if let Some(rest) = lower.strip_prefix("//?/unc/") {
+        rest
+    } else if lower.starts_with("//?/") || lower.starts_with("//./") {
+        return false;
+    } else if let Some(rest) = lower.strip_prefix("//") {
+        rest
+    } else {
+        return false;
+    };
+    let mut parts = rest.split('/');
+    parts.next().is_some_and(|p| !p.is_empty()) && parts.next().is_some_and(|p| !p.is_empty())
+}
+
+fn discover(root: &Path, records: Result<Vec<MountRecord>, String>) -> Vec<&'static str> {
+    let mut network = is_unc(root);
+    match records {
+        Ok(records) => {
+            let root = mount_path(root);
+            let selected = records
+                .iter()
+                .filter(|(path, _)| root.starts_with(mount_path(path)))
+                .max_by_key(|(path, _)| mount_path(path).components().count());
+            match selected {
+                Some((_, Some(format))) => {
+                    let format = format.to_ascii_lowercase();
+                    if [
+                        "nfs",
+                        "nfs4",
+                        "cifs",
+                        "smb",
+                        "smbfs",
+                        "smb3",
+                        "9p",
+                        "sshfs",
+                        "fuse.sshfs",
+                        "afpfs",
+                        "davfs",
+                        "davfs2",
+                        "fuse.davfs",
+                    ]
+                    .contains(&format.as_str())
+                    {
+                        network = true;
+                    } else {
+                        tracing::debug!(
+                            format,
+                            "mount format not classified as network; advisory only"
+                        );
+                    }
+                }
+                Some((_, None)) => {
+                    tracing::debug!("mount format missing; network status incomplete")
+                }
+                None => tracing::debug!("no matching mount; network status incomplete"),
+            }
+        }
+        Err(error) => tracing::debug!(error, "mount enumeration failed; network status incomplete"),
+    }
+    let spelling = root.as_os_str().to_string_lossy();
+    let synced = spelling.split(['/', '\\']).any(|part| {
+        [
+            "Dropbox",
+            "OneDrive",
+            "iCloud Drive",
+            "iCloudDrive",
+            "com~apple~CloudDocs",
+            "Nextcloud",
+        ]
+        .iter()
+        .any(|marker| part.eq_ignore_ascii_case(marker))
+    });
+    let mut warnings = Vec::new();
+    if network {
+        warnings.push("network_share");
+    }
+    if synced {
+        warnings.push("synced_folder");
+    }
+    warnings
+}
+
+#[cfg(test)]
+mod discovery_tests {
+    use super::*;
+
+    fn resolve(root: PathBuf, format: Option<&str>) -> DataDir {
+        DataDir::resolve_with(
+            Some(root.clone()),
+            |_| panic!("env read"),
+            || panic!("cwd read"),
+            || {
+                Ok(vec![(
+                    fs::canonicalize(root).unwrap(),
+                    format.map(str::to_owned),
+                )])
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn resolver_precedence_and_lazy_inputs() {
+        let temp = tempfile::tempdir().unwrap();
+        let (variable, suffix) = match std::env::consts::OS {
+            "linux" => ("XDG_DATA_HOME", "streamden"),
+            "windows" => ("LOCALAPPDATA", "StreamDen"),
+            "macos" => ("HOME", "Library/Application Support/StreamDen"),
+            other => panic!("unsupported platform: {other}"),
+        };
+        for priority in 0..3 {
+            let base = temp.path().join(priority.to_string());
+            let explicit = base.join("explicit");
+            let portable = base.join("portable");
+            let platform = base.join("platform");
+            let expected = [&explicit, &portable, &platform.join(suffix)][priority].clone();
+            let mut reads = Vec::new();
+            let mut discovered = false;
+            let paths = DataDir::resolve_with(
+                (priority == 0).then(|| explicit.clone()),
+                |key| {
+                    reads.push(key.to_owned());
+                    match key {
+                        "STREAMDEN_DATA_DIR" if priority == 1 => {
+                            Some(portable.clone().into_os_string())
+                        }
+                        "STREAMDEN_DATA_DIR" if priority == 2 => None,
+                        key if priority == 2 && key == variable => {
+                            Some(platform.clone().into_os_string())
+                        }
+                        _ => panic!("lower-priority environment read: {key}"),
+                    }
+                },
+                || panic!("absolute roots must not read cwd"),
+                || {
+                    assert!(expected.join("config.db").is_file());
+                    discovered = true;
+                    Ok(vec![])
+                },
+            )
+            .unwrap();
+            assert_eq!(paths.root(), fs::canonicalize(&expected).unwrap());
+            assert!(discovered);
+            let expected_reads: &[&str] = match priority {
+                0 => &[],
+                1 => &["STREAMDEN_DATA_DIR"],
+                _ => &["STREAMDEN_DATA_DIR", variable],
+            };
+            assert_eq!(reads, expected_reads);
+            for unselected in [explicit, portable, platform.join(suffix)] {
+                if unselected != expected {
+                    assert!(!unselected.exists());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn mixed_case_sync_markers_require_whole_components() {
+        let temp = tempfile::tempdir().unwrap();
+        for marker in [
+            "dRoPbOx",
+            "oNeDrIvE",
+            "iClOuD dRiVe",
+            "IcLoUdDrIvE",
+            "CoM~ApPlE~cLoUdDoCs",
+            "nExTcLoUd",
+        ] {
+            assert_eq!(
+                resolve(temp.path().join(marker).join("data"), Some("ext4")).warnings(),
+                ["synced_folder"]
+            );
+            for name in [format!("prefix{marker}"), format!("{marker}suffix")] {
+                assert!(
+                    resolve(temp.path().join(name), Some("ext4"))
+                        .warnings()
+                        .is_empty()
+                );
+            }
+        }
+        for name in ["OneDrive - Org", "Dropbox (Team)"] {
+            assert!(
+                resolve(temp.path().join(name), Some("ext4"))
+                    .warnings()
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
+    fn network_and_sync_are_warnings_without_refusal() {
+        let temp = tempfile::tempdir().unwrap();
+        for format in [
+            "nfs",
+            "nfs4",
+            "cifs",
+            "smb",
+            "smbfs",
+            "smb3",
+            "9p",
+            "sshfs",
+            "fuse.sshfs",
+            "afpfs",
+            "davfs",
+            "davfs2",
+            "fuse.davfs",
+        ] {
+            for marker in [
+                "Dropbox",
+                "OneDrive",
+                "iCloud Drive",
+                "iCloudDrive",
+                "com~apple~CloudDocs",
+                "Nextcloud",
+            ] {
+                let paths = resolve(
+                    temp.path().join(format).join(marker),
+                    Some(&format.to_uppercase()),
+                );
+                assert_eq!(paths.warnings(), ["network_share", "synced_folder"]);
+                assert!(paths.config().is_file() && paths.history().is_file());
+            }
+        }
+        for format in [None, Some("ext4"), Some("unknown")] {
+            assert!(
+                resolve(temp.path().join("local/Dropboxish"), format)
+                    .warnings()
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
+    fn longest_mount_boundaries_and_incomplete_discovery() {
+        let root = std::env::current_dir().unwrap().join("network/local/data");
+        let network = root.parent().unwrap().parent().unwrap().to_owned();
+        let local = root.parent().unwrap().to_owned();
+        let records = vec![
+            (network.clone(), Some("nfs".into())),
+            (local, Some("ext4".into())),
+        ];
+        assert!(discover(&root, Ok(records)).is_empty());
+        assert!(
+            discover(
+                &network.with_file_name("network-other"),
+                Ok(vec![(network.clone(), Some("nfs".into()))])
+            )
+            .is_empty()
+        );
+        for records in [
+            Ok(vec![]),
+            Ok(vec![(network.clone(), None)]),
+            Ok(vec![(network.clone(), Some("futurefs".into()))]),
+            Err("unavailable".into()),
+        ] {
+            assert!(discover(&root, records).is_empty());
+        }
+        for path in [
+            r"\\server\share\data",
+            r"\\?\UNC\server\share\data",
+            "//server/share/data",
+        ] {
+            assert_eq!(
+                discover(Path::new(path), Err("unavailable".into())),
+                ["network_share"]
+            );
+        }
+        for path in [r"\\?\C:\data", r"\\.\C:\data", "local/data", "//server"] {
+            assert!(!is_unc(Path::new(path)));
+        }
+        assert_eq!(mount_path(Path::new(r"\\?\C:\data")), Path::new(r"C:\data"));
+        assert_eq!(
+            mount_path(Path::new(r"\\?\UNC\server\share")),
+            Path::new(r"\\server\share")
+        );
+    }
+
+    #[test]
+    fn runtime_gate_precedes_all_inputs_including_discovery() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let public_root = temp.path().join("public-runtime-guard");
+        let attempt = || {
+            DataDir::resolve_with(
+                None,
+                |_| panic!("env"),
+                || panic!("cwd"),
+                || panic!("mounts"),
+            )
+        };
+        {
+            let _entered = runtime.enter();
+            assert!(attempt().unwrap_err().to_string().contains("outside Tokio"));
+            assert!(
+                DataDir::resolve(Some(public_root.clone()))
+                    .unwrap_err()
+                    .to_string()
+                    .contains("outside Tokio")
+            );
+            assert!(!public_root.exists());
+        }
+        runtime.block_on(async {
+            tokio::task::spawn_blocking(move || {
+                assert!(attempt().unwrap_err().to_string().contains("outside Tokio"));
+            })
+            .await
+            .unwrap();
+        });
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("Dropbox");
+        let data = DataDir::resolve_with(
+            Some(root),
+            |_| unreachable!(),
+            || unreachable!(),
+            || Err("enumeration failure".into()),
+        )
+        .unwrap();
+        assert_eq!(data.warnings(), ["synced_folder"]);
+    }
+}
