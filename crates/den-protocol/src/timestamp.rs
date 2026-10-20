@@ -56,8 +56,13 @@ impl Timestamp {
     }
 
     /// Parses any RFC 3339 timestamp and normalises it to UTC.
+    /// Returns an error if the normalised UTC instant is outside the supported range.
     pub fn parse(s: &str) -> Result<Self, time::error::Parse> {
-        OffsetDateTime::parse(s, &Rfc3339).map(Self::new)
+        let instant = OffsetDateTime::parse(s, &Rfc3339)?;
+        // Validate UTC representability before entering the infallible constructor.
+        let utc = OffsetDateTime::from_unix_timestamp_nanos(instant.unix_timestamp_nanos())
+            .map_err(time::error::TryFromParsed::from)?;
+        Ok(Self::new(utc))
     }
 }
 
@@ -143,5 +148,116 @@ mod tests {
     #[test]
     fn rejects_non_rfc3339() {
         assert!(serde_json::from_str::<Timestamp>("\"yesterday\"").is_err());
+    }
+}
+
+#[cfg(test)]
+mod utc_range_regressions {
+    use super::*;
+
+    #[test]
+    fn utc_overflow_is_a_parse_error_at_both_ingresses() {
+        for text in [
+            "9999-12-31T23:00:00-01:00",
+            "9999-12-31T23:00:00.000000001-01:00",
+            "9999-12-31T23:59:59.999999999999-00:01",
+            "9999-12-31T00:01:00-23:59",
+            "9999-12-31T23:59:60-00:01",
+        ] {
+            let parsed = Timestamp::parse(text);
+            assert!(
+                matches!(
+                    parsed,
+                    Err(time::error::Parse::TryFromParsed(
+                        time::error::TryFromParsed::ComponentRange(_)
+                    ))
+                ),
+                "{text}: {parsed:?}"
+            );
+            let json = serde_json::to_string(text).unwrap();
+            let error = serde_json::from_str::<Timestamp>(&json).unwrap_err();
+            assert!(error.is_data(), "{text}: {error}");
+        }
+    }
+
+    #[test]
+    fn supported_boundaries_and_existing_normalization_are_preserved() {
+        for (input, wire) in [
+            ("9999-12-31T22:59:59-01:00", "9999-12-31T23:59:59.000Z"),
+            (
+                "9999-12-31T22:59:59.999999999999-01:00",
+                "9999-12-31T23:59:59.999Z",
+            ),
+            ("9999-12-31T23:59:59.999999999Z", "9999-12-31T23:59:59.999Z"),
+            ("9999-12-31T23:59:60Z", "9999-12-31T23:59:59.999Z"),
+            (
+                "9999-12-31T23:59:60.123456789012Z",
+                "9999-12-31T23:59:59.999Z",
+            ),
+            (
+                "2026-10-31T23:59:60.123456789012Z",
+                "2026-10-31T23:59:59.999Z",
+            ),
+            ("2026-11-01T00:59:60+01:00", "2026-10-31T23:59:59.999Z"),
+            ("1969-12-31T23:59:59.9995Z", "1969-12-31T23:59:59.999Z"),
+            (
+                "2026-10-18T22:15:03.120456+02:00",
+                "2026-10-18T20:15:03.120Z",
+            ),
+            ("0000-01-01T00:00:00Z", "0000-01-01T00:00:00.000Z"),
+        ] {
+            let parsed = Timestamp::parse(input).unwrap();
+            assert_eq!(parsed.to_string(), wire, "{input}");
+            let json = serde_json::to_string(input).unwrap();
+            assert_eq!(serde_json::from_str::<Timestamp>(&json).unwrap(), parsed);
+            assert_eq!(
+                serde_json::to_string(&parsed).unwrap(),
+                format!("\"{wire}\"")
+            );
+            assert_eq!(Timestamp::parse(wire).unwrap(), parsed);
+        }
+        // Year -1 UTC is already accepted; do not impose a new four-digit range policy here.
+        let lower = Timestamp::parse("0000-01-01T00:00:00+23:59").unwrap();
+        assert_eq!(lower.as_datetime().year(), -1);
+        assert_eq!(lower.as_datetime().offset(), UtcOffset::UTC);
+        for separator in ['T', 't', ' ', 'X', '_', '\n', '0'] {
+            let text = format!("2026-10-20{separator}00:00:00z");
+            assert_eq!(
+                Timestamp::parse(&text).unwrap().to_string(),
+                "2026-10-20T00:00:00.000Z"
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_unicode_and_control_strings_return_errors_without_panicking() {
+        for text in [
+            "",
+            "yesterday",
+            "💥",
+            "2026-10-20💥00:00:00Z",
+            "\0",
+            "9999-12-31T23:00:00-01:💥",
+            "2026-10-30T23:59:60Z",
+            "10000-01-01T00:00:00Z",
+            "2026-10-20T00:00:00+24:00",
+            "9999-12-31T23:00:00-01:00trailing",
+        ] {
+            assert!(Timestamp::parse(text).is_err(), "{text:?}");
+            assert!(
+                serde_json::from_str::<Timestamp>(&serde_json::to_string(text).unwrap()).is_err()
+            );
+        }
+        for replacement in ['\0', 'é', '中', '💥', '\u{7f}'] {
+            for position in [0, 4, 5, 7, 8, 11, 13, 14, 16, 17, 19] {
+                let mut text = String::from("2026-10-20T00:00:00Z");
+                text.replace_range(position..position + 1, &replacement.to_string());
+                assert!(Timestamp::parse(&text).is_err(), "{text:?}");
+                assert!(
+                    serde_json::from_str::<Timestamp>(&serde_json::to_string(&text).unwrap())
+                        .is_err()
+                );
+            }
+        }
     }
 }
