@@ -1,6 +1,6 @@
 # Discord: application, bot user and server invite
 
-Last verified against official docs: 2026-10-18. Part of the [owner runbooks](../README.md).
+Last verified against official docs: 2026-10-18; connection model re-verified 2026-10-19 (DEN-244, D-059). Part of the [owner runbooks](../README.md).
 
 ## Purpose
 
@@ -10,6 +10,11 @@ Discord has two integration levels in StreamDen:
 2. **Bring-your-own bot (optional).** Reads Discord channel chat into the multichat and can send or moderate. This needs a Discord **application with a bot user**, a bot token, one privileged intent, and an invite to a server. Discord OAuth cannot be done from a desktop app without a secret, so a shared bot is not planned.
 
 Everything below is for the owner's own testing and for the wizard text we will give users.
+
+## How users connect (D-059 applied)
+
+- **Go-live posts (P2):** no login flow exists without a client secret (`webhook.incoming` needs a code exchange with the secret: [OAuth2](https://docs.discord.com/developers/topics/oauth2), re-read 2026-10-19). The official pattern is the user pasting a **channel webhook URL** (step 0). That paste *is* the default, not a fallback.
+- **Bot (P4, Q-S7):** the **invite link** opens in the browser and is a consent-only flow (no token exchange). The bot token itself is still pasted once from the user's own application (bring-your-own bot, D-024 research), because Discord has no secret-free OAuth and a shared bot would need hosting and verification.
 
 ## Prerequisites
 

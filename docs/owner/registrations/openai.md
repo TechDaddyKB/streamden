@@ -1,6 +1,6 @@
 # OpenAI: API key, spend limits and "Sign in with ChatGPT"
 
-Last verified against official docs: 2026-10-18. Part of the [owner runbooks](../README.md). Phase P4 (AI layer), decision **Q-A1**.
+Last verified against official docs: 2026-10-18; connection model re-verified 2026-10-19 (DEN-244, D-059). Part of the [owner runbooks](../README.md). Phase P4 (AI layer), decision **Q-A1**.
 
 ## Purpose
 
@@ -8,6 +8,12 @@ OpenAI is used in two different ways, and they need different things:
 
 1. **API key (bring your own).** The user's own key pays per token. Works for everything (Responses API, also the wire format xAI and the ChatGPT-plan route share). The owner needs one for development.
 2. **"Sign in with ChatGPT" (SIWC) with "ChatGPT plan usage".** A user signs in with their ChatGPT Plus or Pro account and the *plan* pays for eligible Responses API requests. This is an official OpenAI program for **open-source projects and personal projects that run locally**. Q-A1 option (b) recommends offering it in v1.
+
+## How users connect (D-059: browser login first)
+
+- **Default:** **Continue with ChatGPT** (SIWC): the app opens `auth.openai.com` in the browser, registers itself dynamically on first sign-in, uses PKCE and a `127.0.0.1` loopback, and holds no client secret ([token-sharing-open-source](https://developers.openai.com/siwc/token-sharing-open-source), re-read 2026-10-19). The user's Plus/Pro plan then pays for eligible Responses API calls, within the preview constraints listed under Cost and limits.
+- **Fallback (Advanced):** paste an **API key**. This is a different product: pay-as-you-go API billing, not a consumer subscription. The UI must say so, and must never read the Codex CLI's stored login.
+- **Provider gate:** open-source/local apps need no registration; a paid or remotely hosted StreamDen would need OpenAI's interest-form approval first.
 
 ## Prerequisites
 

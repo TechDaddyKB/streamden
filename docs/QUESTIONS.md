@@ -232,6 +232,12 @@ policies)?
 **Recommendation:** bring-your-own with a guided wizard as the default, an optional shared project, and no scraping
 in core (could be a community plugin).
 **Answer:** Bring-your-own Google project via wizard; shared project optional; no scraping in core (D-031).
+**Update (owner, 2026-10-19, DEN-244):** the owner now prefers **browser login first, manual connection as the
+fallback** for every service (D-059). For YouTube that flips the default order: "Sign in with Google" against a
+shared, Google-verified StreamDen project becomes the default **once that project is verified**, and the
+bring-your-own-project wizard becomes the advanced fallback. Until verification exists, BYO is the only working
+path, so D-031's wizard is still required. Whether the owner commits to the verification and quota work is
+Q-C12. The historical answer above is unchanged.
 
 ### Q-C3 — Kick unofficial chat WebSocket fallback? 🟩 (Round 2)
 It's the only way to get deleted-message sync, but Kick staff call it unsupported.
@@ -307,6 +313,36 @@ TikTok a community plugin. Options: (a) no TikTok sending anywhere; first-party 
 mandatory warning that the session goes to a third party); (c) first-party opt-in sending like Q-C8 (b).
 **Recommendation:** (b). The composer shows TikTok as "read-only (no official API)" unless a community plugin
 declares a send capability.
+**Answer:**
+
+### Q-C12 — Shared StreamDen Google project: commit to OAuth verification and the quota audit? 🟥 (Round 4)
+D-059 makes "Sign in with Google" against a **shared, verified** StreamDen project the default YouTube path, with the
+bring-your-own project as the advanced fallback. A shared project only works for the public after two owner-only
+processes ([google-youtube.md](owner/registrations/google-youtube.md)): Google **OAuth app verification** for the
+sensitive `youtube.readonly` / `youtube` scopes (domain, public homepage and privacy policy on it, demo video, 3 to
+5 business days or more; an unverified production app is capped at 100 users for ever) and the separate **YouTube
+API Services audit and quota extension** (otherwise all users share one 10,000-unit daily quota, about 1 to 2
+concurrent 4-hour streams on `streamList`). Options: (a) commit now: start verification as soon as the domain
+exists (Q-B1 follow-up) and submit the quota audit before P2, so the browser-first default is live for v0.2;
+(b) ship P2 with BYO-only and start verification later, accepting that D-059's YouTube default is a paper default
+until then; (c) stay BYO-only permanently and withdraw the YouTube part of D-059.
+**Recommendation:** (a). The owner already asked for browser-first, and Streamer.bot's shared-quota pain is the
+reason to file the quota audit early rather than never. Keep the BYO wizard regardless.
+**Answer:**
+
+### Q-C13 — Kick browser-first needs the hosted token broker: pull it earlier, or accept BYO-only until then? 🟥 (Round 4)
+Kick's OAuth needs a `client_secret` for every token exchange and refresh, with no public/native client type
+(verified 2026-10-19: [generating-tokens-oauth2-flow](https://docs.kick.com/getting-started/generating-tokens-oauth2-flow.md);
+[KickDevDocs #413](https://github.com/KickEngineering/KickDevDocs/issues/413) is open with no Kick reply). A
+"Sign in with Kick" button that needs no user-side setup therefore requires StreamDen's own Kick app plus the
+**official hosted relay's token broker** (D-019 says "later", unfunded) and Kick app verification (email to
+developers@kick.com) to lift the 1,000-chat-subscription cap. Until then the only working paths are bring-your-own
+Kick app plus a self-hosted relay or tunnel ([kick.md](owner/registrations/kick.md)). Options: (a) accept BYO-only
+for P2 and revisit when the hosted relay is funded (D-059 default stays a paper default for Kick); (b) pull the
+hosted broker forward into P2 with a budget and privacy policy (changes D-019's "later"); (c) ship the secret inside
+the app (rejected by the research and by Kick's terms: not offered).
+**Recommendation:** (a). Document the dependency honestly in the UI ("needs your own Kick app until the StreamDen
+relay exists") and keep the relay's broker endpoint in the P2 self-host design so (b) is a deployment, not a rewrite.
 **Answer:**
 
 ---

@@ -260,6 +260,8 @@ Make **polling opt-in per trigger** with a visible cost estimator and a default 
 
 **Recommendation:** implement **OAuth loopback (scoped, `transition:generic` initially)** as the standard option and **app password** as an "unattended / long-running" option, since the 2-week public-client cap is awkward for a streaming PC that is never opened for weeks. A confidential client (180-day refresh tokens, unlimited session) would need an HTTPS-hosted client metadata and a private key on a server, which conflicts with local-first (the self-hosted relay could do it; open question for the owner).
 
+> **Owner decision 2026-10-19 (D-059, DEN-244):** confirmed in this order: atproto OAuth in the browser is the default, the app password is the advanced "unattended" fallback. Re-read 2026-10-19: the [atproto OAuth spec](https://atproto.com/specs/oauth) still caps public-client sessions and refresh tokens at 2 weeks and makes PKCE, PAR and DPoP mandatory, so the UI must expect a fortnightly re-login on OAuth.
+
 ### 3.2 Posting and rich posts
 
 All **[official]** ([Creating a post](https://bsky.network/docs/bluesky-api/creating-a-post), [Posts in depth](https://bsky.network/docs/about-bluesky-content/posts), lexicons in `bluesky-social/atproto`):

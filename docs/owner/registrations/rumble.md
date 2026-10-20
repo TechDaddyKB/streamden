@@ -1,10 +1,15 @@
 # Rumble: Live Stream API URL (no registration)
 
-Last verified against official docs: 2026-10-19 (chat-send section added for DEN-54). Part of the [owner runbooks](../README.md). Phase P5 (later), subject to Q-S1; an earlier phase and unofficial chat sending are open owner questions (Q-S8, Q-C8).
+Last verified against official docs: 2026-10-19 (chat-send section added for DEN-54); connection model re-verified 2026-10-19 (DEN-244, D-059). Part of the [owner runbooks](../README.md). Phase P5 (later), subject to Q-S1; an earlier phase and unofficial chat sending are open owner questions (Q-S8, Q-C8).
 
 ## Purpose
 
 Rumble has **no developer app registration and no OAuth**. It offers a per-streamer **Live Stream API URL**: a secret URL that returns JSON (followers, subscribers, gifted subs, "rants", recent chat, title, likes, categories and "watching now"). StreamDen polls that URL. Each streamer pastes their own URL into the settings. There is nothing for the project owner to register.
+
+## How users connect (D-059 applied)
+
+- Rumble has **no OAuth and no developer app**, so there is no browser login for reading: the user pastes the **Live Stream API URL** (default, step 3; re-read 2026-10-19: the URL embeds the stream key and needs no auth).
+- For the opt-in unofficial **send** path (Q-C8), the browser-like **StreamDen sign-in window** is the default and the pasted `u_s` cookie is the advanced fallback, exactly as the optional section below says. This is the one place where "browser login" means a real web session, which is why it stays opt-in and off by default.
 
 ## Prerequisites
 

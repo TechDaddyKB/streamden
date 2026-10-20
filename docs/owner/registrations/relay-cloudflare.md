@@ -1,6 +1,6 @@
 # Cloudflare: account, Workers, Durable Objects and `wrangler` (the optional relay)
 
-Last verified against official docs: 2026-10-18. Part of the [owner runbooks](../README.md). **Phase P2, and only if Q-C1 chooses option (b) or (c).** Until Q-C1 is answered you can create the account, but do not deploy anything.
+Last verified against official docs: 2026-10-18; connection model re-verified 2026-10-19 (DEN-244, D-059). Part of the [owner runbooks](../README.md). **Phase P2, and only if Q-C1 chooses option (b) or (c).** Until Q-C1 is answered you can create the account, but do not deploy anything.
 
 ## Purpose
 
@@ -16,6 +16,10 @@ Desktop app --wss://<relay>/ws/<mailboxId> (outbound only, bearer = mailbox secr
 ```
 
 It is a dumb pipe: the **desktop verifies signatures**, so vendor secrets (Kick RSA key, Ko-fi token, Throne public key) never live on the relay. A token-broker endpoint adds a `client_secret` for Kick's code exchange and never stores tokens.
+
+## How the owner signs in (D-059 applied)
+
+`wrangler login` is already browser-first (it opens the OAuth page; `--browser=false` prints the link for Hyprland/Wayland quirks) and an API token is the CI fallback ([wrangler commands](https://developers.cloudflare.com/workers/wrangler/commands/general/), re-read 2026-10-19). For end users the relay matters because it is the only place a **shared** confidential secret may live (the Kick token broker). D-019 keeps the official hosted relay "later"; until it runs, Kick stays bring-your-own (Q-C13).
 
 ## Prerequisites
 

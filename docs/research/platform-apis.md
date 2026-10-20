@@ -1,6 +1,6 @@
 # Platform API Research: Streamer.live
 
-Research date: **2026-10-18**. Updated **2026-10-19** (DEN-54): Rumble chat (8.1) and the chat send capability matrix (14). Scope: what a local-first, cross-platform desktop streaming automation app (Streamer.bot / SAMMI class, with a combined multichat shown as an OBS dock and an overlay, plus alerts and automations) can do against each platform's **current** APIs. It covers what works without a vendor cloud backend and what needs a relay.
+Research date: **2026-10-18**. Updated **2026-10-19** (DEN-54): Rumble chat (8.1) and the chat send capability matrix (14). Updated **2026-10-19** (DEN-244): owner decision D-059 (browser login first, manual fallback) annotated in 4.6, 5.3, 7.2, 11.1 and 13; the findings themselves are unchanged. Scope: what a local-first, cross-platform desktop streaming automation app (Streamer.bot / SAMMI class, with a combined multichat shown as an OBS dock and an overlay, plus alerts and automations) can do against each platform's **current** APIs. It covers what works without a vendor cloud backend and what needs a relay.
 
 **Method and confidence tags**
 - Facts were checked against official docs, changelogs, product-lifecycle pages, GitHub repos/issues, and package registries (npm / crates.io / PyPI) on or around 2026-10-18. URLs are cited inline.
@@ -279,6 +279,8 @@ streamList guidance (2025-07-14). `list` docs now push streamList. Upload cost c
 
 **Recommendation:** Desktop OAuth client (loopback + PKCE, with device flow as fallback). Use streamList over gRPC for chat. Poll `subscriptions.list?myRecentSubscribers` only while live, at 30–60 s. Use `superChatEvents.list` for reconciliation. Apply for a quota extension and OAuth verification early, and offer **BYO API project** as an advanced setting. Treat InnerTube scraping as an explicit opt-in "unofficial mode" (or skip it).
 
+> **Owner decision 2026-10-19 (D-059, DEN-244):** the shared, Google-verified project is now the **default** sign-in path ("Sign in with Google" in the system browser) and the BYO project is the **advanced fallback**, reversing D-031's order. The BYO wizard stays mandatory because it is the only working path until verification and the quota audit are done (Q-C12). Scraping stays out of core.
+
 ---
 
 ## 5. Kick
@@ -305,6 +307,8 @@ streamList guidance (2025-07-14). `list` docs now push streamList. Upload cost c
 - Streamer.bot users report delays ("Kick API Delay" indicator on its status page) ([Streamer.bot](https://docs.streamer.bot/guide/platforms/kick)).
 
 ### 5.3 OAuth 2.1 + PKCE (still needs a secret)
+
+> **Re-checked 2026-10-19 (DEN-244):** still true; the Kick changelog has no auth change since 2026-01-15 and [#413](https://github.com/KickEngineering/KickDevDocs/issues/413) is open without a Kick reply. Under D-059 a "Sign in with Kick" button exists only through the hosted relay's token broker (Q-C13); BYO app is the P2 path.
 
 - `https://id.kick.com/oauth/authorize` requires `code_challenge` (S256) and `state`. **Token exchange requires `client_id` + `client_secret` + `code_verifier`. Refresh also requires `client_secret`.** App tokens come via client credentials ([official](https://docs.kick.com/getting-started/generating-tokens-oauth2-flow.md)).
 - "Made refresh tokens reusable/flexible" (2025-11-25). The token introspect endpoint moved under `/oauth` (2026-01-15) ([changelog](https://docs.kick.com/changelog.md)).
@@ -377,6 +381,8 @@ Maturity is low across the board. Expect to own the integration.
 - 2026-04-20: following, likes, and quote-posts via API were removed from all self-serve tiers ([changelog](https://docs.x.com/changelog)).
 
 ### 7.2 Auth for desktop
+
+> **D-059 (2026-10-19):** the browser PKCE consent is the default end-user step; the BYO X app is the unavoidable manual part (D-046), so the in-app wizard repeats the console steps and asks for one public value, the Client ID.
 
 - OAuth 2.0 Authorization Code + **PKCE**. **Native App** and **Single page App** are public clients with no secret. Access tokens last 2 h. `offline.access` gives a refresh token. The auth code expires in 30 s ([official](https://docs.x.com/fundamentals/authentication/oauth-2-0/authorization-code)).
 - Callback: use `http://127.0.0.1` ("not `localhost`"), exact match, max 10 callback URLs per app ([official](https://docs.x.com/fundamentals/developer-apps)).
@@ -508,6 +514,8 @@ Streamer.bot routes **Ko-fi, Patreon, Fourthwall, Throne, Shopify** (and Kick) t
 
 ### 11.1 Features that cannot work purely locally
 
+> **D-059 (2026-10-19):** "browser login first" does not change this table. Where the only secret-free path is a paste (Discord webhook, Streamlabs/SE tokens, Patreon creator token, Rumble URL, Ko-fi/Throne/Fourthwall), the paste *is* the default; a browser button for those would need a server-held secret, i.e. the hosted relay (D-019, later).
+
 | Feature | Why | Workaround without our relay |
 |---|---|---|
 | **Kick events** (chat read, follows, subs, gifts, KICKs, rewards, bans, live status) | Webhooks are the only official delivery. One URL per app. 1,000 chat subs per unverified app | BYO Kick app + user tunnel (section 11.2a). Or unofficial Pusher (read-only, unsupported) |
@@ -609,10 +617,10 @@ Run option (b) as a default "Streamer.live Relay" so Kick and Ko-fi "just work".
 
 1. **Hosted relay appetite:** will the project operate an optional hosted relay (cost, privacy policy, abuse handling, Kick app verification), or only ship a self-hostable relay plus tunnel guidance?
 2. **Kick strategy:** accept the relay dependency for official events, offer BYO-Kick-app + tunnel for purists, and decide whether to include the **unsupported** Pusher read-only fallback that Kick staff explicitly discourage.
-3. **YouTube credentials:** one shared Google project (needs OAuth verification + quota audit, all users share 10k/day until approved) vs BYO project/key (policy gray zone, 7-day testing-token trap) vs both. Is an InnerTube/scraping "unofficial mode" acceptable given it violates YouTube's Developer Policies?
+3. *(Answered: D-031, amended by D-059 on 2026-10-19: shared verified project first, BYO fallback, no scraping; Q-C12 covers the verification commitment.)* **YouTube credentials:** one shared Google project (needs OAuth verification + quota audit, all users share 10k/day until approved) vs BYO project/key (policy gray zone, 7-day testing-token trap) vs both. Is an InnerTube/scraping "unofficial mode" acceptable given it violates YouTube's Developer Policies?
 4. **TikTok:** include an unofficial connector at all? **AGPL-3.0** (TikTok-Live-Connector) and "modified AGPL" (TikTokLive) licensing conflicts with most app licenses unless it's isolated as a separate process/plugin. There's also the dependency on Euler Stream (free tier 2,500 req/day) and the ban risk for chat sending.
 5. **X:** fine to require users to bring their own X developer app and pay-per-use credits ($0.20 per go-live tweet with a link)?
-6. **Twitch client registration:** confirm a **Public** client + DCF (no secret, refresh tokens single-use with 30-day inactivity expiry). This rules out the Chat Bot badge and conduits unless we add the relay. Client IDs are effectively permanent because rewards are bound to them.
+6. *(Confirmed by the runbook and D-059: Public client + DCF is the browser-login default.)* **Twitch client registration:** confirm a **Public** client + DCF (no secret, refresh tokens single-use with 30-day inactivity expiry). This rules out the Chat Bot badge and conduits unless we add the relay. Client IDs are effectively permanent because rewards are bound to them.
 7. **Linux/Wayland:** OBS custom browser docks don't work on native Wayland. Should the app ship its own native multichat window for Wayland users, or document the XWayland workaround?
 8. **Platform priority:** Trovo is dead (drop it). Meld Studio is Windows/macOS-only with an undocumented protocol. Facebook Live needs App Review + Business Verification. Which of these are in scope for v1?
 9. **Core language:** Rust has solid Twitch (`twitch_api` / `twitch_oauth2`), gRPC (`tonic`), and OBS (`obws`, though its repo moved off GitHub) support. TypeScript has more mature platform libraries (Twurple, `googleapis`, `youtubei.js`, TikTok-Live-Connector, `obs-websocket-js`). Rust core with TS plugins, or all TS?

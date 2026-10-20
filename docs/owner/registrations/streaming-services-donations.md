@@ -1,6 +1,6 @@
 # Donation, tip and commerce services
 
-Last verified against official docs: 2026-10-18. Part of the [owner runbooks](../README.md). Phase P5, except the relay-dependent ones which also wait on **Q-C1**.
+Last verified against official docs: 2026-10-18; connection model re-verified 2026-10-19 (DEN-244, D-059). Part of the [owner runbooks](../README.md). Phase P5, except the relay-dependent ones which also wait on **Q-C1**.
 
 ## Purpose
 
@@ -10,6 +10,12 @@ These services deliver tips, subscriptions, merch orders and gifts to StreamDen 
 - **Webhook only, needs a public HTTPS URL:** Ko-fi, Throne, Fourthwall (and Patreon webhooks). These need the relay (Q-C1) or a user-run tunnel. Patreon can also be polled locally with a creator token.
 
 You only need accounts on services **you actually use**. For the project owner this means: pick the ones you want to test with, or none and rely on test fixtures.
+
+## How users connect (D-059 applied)
+
+- **Streamlabs and StreamElements:** the pasted **socket token / JWT** is the default *and* the only sensible path. A Streamlabs OAuth app only works for 10 whitelisted users until Streamlabs approves it ([register](https://dev.streamlabs.com/docs/register-your-application), re-read 2026-10-19); StreamElements documents `oauth2` socket tokens but no third-party app registration ([websockets](https://docs.streamelements.com/websockets), re-read 2026-10-19). A "Sign in with Streamlabs/StreamElements" button is possible only after app approval and a server-side secret, so it is **not** planned.
+- **Ko-fi, Throne, Fourthwall:** webhook-only; the user pastes the relay URL into the vendor and a token/secret into StreamDen. No login flow exists.
+- **Patreon:** the pasted **Creator's Access Token** (polling) is the default. Patreon's OAuth needs the client secret server-side ([docs](https://docs.patreon.com/), re-read 2026-10-19), so a browser "Sign in with Patreon" would need the hosted broker (D-019, later) and is not planned.
 
 ## Prerequisites
 

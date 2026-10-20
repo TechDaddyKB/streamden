@@ -1,6 +1,6 @@
 # Google Cloud and YouTube Data API
 
-Last verified against official docs: 2026-10-18. Part of the [owner runbooks](../README.md).
+Last verified against official docs: 2026-10-18; connection model re-verified 2026-10-19 (DEN-244, D-059). Part of the [owner runbooks](../README.md).
 
 ## Purpose
 
@@ -14,6 +14,12 @@ Which project the end users sign in through is **Q-C2** (shared project, or each
 
 - **Part A**: the project's own Google project (needed for the shared-project option and for your own testing).
 - **Part B**: the short "end-user version" that the in-app wizard will walk users through.
+
+## How users connect (D-059: browser login first)
+
+- **Default (once Q-C12 is done):** one **Sign in with Google** button. StreamDen opens the Google consent page in the **system browser** with a loopback `http://127.0.0.1:<port>` redirect and PKCE, using the **shared, verified StreamDen project** from Part A. Google blocks embedded webviews and custom URI schemes for this ([native-app](https://developers.google.com/identity/protocols/oauth2/native-app), re-read 2026-10-19). The device flow (step 20) is the secondary browser path for the `youtube` and `youtube.readonly` scopes only.
+- **Fallback (Advanced):** the **bring-your-own project** wizard in Part B (the historical D-031 default). The user creates a Cloud project and a Desktop client, pastes its Client ID and secret, then still finishes with the same browser consent. This is the **only working path until the shared project passes verification**, and it stays available afterwards for users who want their own 10,000-unit quota.
+- **Provider gates that decide it:** sensitive-scope OAuth verification (domain, privacy policy, demo video; unverified production apps are capped at 100 users for ever), the separate quota audit (one 10,000-unit pool for all users until approved), and the 7-day token expiry while a project is in Testing ([app audience](https://support.google.com/cloud/answer/15549945), re-read 2026-10-19). None of these can be skipped; Q-C12 asks the owner to commit to them.
 
 ## Prerequisites
 

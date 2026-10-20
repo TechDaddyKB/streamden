@@ -174,8 +174,8 @@ Phases overlap where dependencies allow. **Exit criteria are what "done" means**
 | OBS browser sources blank or crashing on NVIDIA Linux with browser HW acceleration on (S-2) | The setup wizard detects Linux + NVIDIA and walks the user through turning it off; troubleshooting docs. |
 | WebKit memory with the UI closed (S-1: 184 MB PSS / 332 MB RSS closed to tray) | Engine + tray process never loads WebKit; the UI is a separate on-demand process (spec 07). |
 | Platform API churn (Twitch removals, Kick's webhook-only events, YouTube quota, X pricing) | WS-18 ecosystem watch (Grok), golden payload tests, connectors behind the plugin interface |
-| YouTube quota (10k units/day per Google project) | Users bring their own Google project (wizard), with a shared project as an option, and use `streamList` streaming |
-| Kick requires a public webhook URL and a client secret | Self-hostable relay (Cloudflare Worker) in P2; users can bring their own Kick app |
+| YouTube quota (10k units/day per Google project) | Shared, Google-verified StreamDen project as the default sign-in (D-059; verification and quota audit are owner actions, Q-C12), bring-your-own Google project wizard as the fallback, and `streamList` streaming |
+| Kick requires a public webhook URL and a client secret | Self-hostable relay (Cloudflare Worker) in P2; users bring their own Kick app until the hosted token broker exists (D-019 later, Q-C13) |
 | Scope explosion (~900 triggers and sub-actions across competitors) | FEATURE-PARITY priorities, schema-driven generation, integrations as plugins |
 | Multi-vendor agents stepping on each other | Contracts-first, path leases, single-writer files, cross-vendor review, CI as arbiter ([AGENTS.md](AGENTS.md)) |
 | GPL interplay (espeak-ng via Piper/Kokoro) | License decision (Q-L1) |

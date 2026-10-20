@@ -13,7 +13,7 @@ Written 2026-10-18 against current official developer docs. Developer consoles c
 | File | What it covers |
 |---|---|
 | [registrations/twitch.md](registrations/twitch.md) | Twitch developer app (Public client, Device Code Flow), optional bot account, reward-ownership caveat |
-| [registrations/google-youtube.md](registrations/google-youtube.md) | Google Cloud project, YouTube Data API v3, consent screen, Desktop OAuth client, 7-day token trap, verification, quota extension, end-user version |
+| [registrations/google-youtube.md](registrations/google-youtube.md) | Google Cloud project, YouTube Data API v3, consent screen, Desktop OAuth client, 7-day token trap, verification, quota extension, end-user (BYO fallback) version |
 | [registrations/kick.md](registrations/kick.md) | Kick developer app, scopes, PKCE, webhooks (pending relay decision) |
 | [registrations/x-twitter.md](registrations/x-twitter.md) | X developer app, pay-per-use credits, OAuth 2.0 Native App, posting |
 | [registrations/discord.md](registrations/discord.md) | Webhook path, application, bot token, intents, invite permissions |
@@ -28,7 +28,7 @@ Written 2026-10-18 against current official developer docs. Developer consoles c
 | [registrations/relay-cloudflare.md](registrations/relay-cloudflare.md) | Cloudflare account, Workers, Durable Objects, `wrangler`, the optional relay |
 | [go-live-requirements.md](go-live-requirements.md) | What you need to be able to **stream** on each platform, stream keys, safe testing |
 
-Related planning docs: [QUESTIONS.md](../QUESTIONS.md) (open decisions), [platform-apis.md](../research/platform-apis.md), [mcp-and-ai-providers.md](../research/mcp-and-ai-providers.md), [tech-stack.md](../research/tech-stack.md), [PLAN.md](../../PLAN.md) (phases P0 to P6).
+Related planning docs: [decisions.md](../decisions.md) (D-059: browser login first), [QUESTIONS.md](../QUESTIONS.md) (open decisions), [platform-apis.md](../research/platform-apis.md), [mcp-and-ai-providers.md](../research/mcp-and-ai-providers.md), [tech-stack.md](../research/tech-stack.md), [PLAN.md](../../PLAN.md) (phases P0 to P6).
 
 ## Conventions in these files
 
@@ -69,6 +69,52 @@ Related planning docs: [QUESTIONS.md](../QUESTIONS.md) (open decisions), [platfo
 8. **Check scopes and permissions before clicking Authorize** on your own apps. Keep your own channels' sensitive scopes (like `streamkey:read` on Kick) out of anything you do not need.
 9. **Test on throwaway targets first**: a test Discord server, a second Twitch/Kick account, unlisted YouTube streams. See [go-live-requirements.md](go-live-requirements.md).
 
+## Connection model (D-059, owner 2026-10-19)
+
+The owner's standing preference for **every** service: **browser login first, manual connection as the fallback.**
+"Browser login" means the app sends the user to the provider's own sign-in and consent page in the **system
+browser** (device code, loopback + PKCE, or the provider's "Sign in with …" program) against a developer app that
+**StreamDen** registered once; the user copies nothing. "Manual" means the user pastes a token, key or URL, or
+registers their own developer app ("bring your own", BYO) and types its IDs into **Settings > Connections >
+Advanced**. Three different things are easy to mix up in these runbooks:
+
+1. **One-time developer registration** (this folder): the owner creates the StreamDen app in a provider console.
+   Done once per provider, never by end users, unless the provider forces BYO.
+2. **End-user consent**: what a streamer clicks in StreamDen. With browser login this is one button and a
+   provider web page; with manual connection it is a console walk-through plus a paste.
+3. **Provider gates**: app verification, review, quota audits and secret requirements that decide whether 2 can be
+   browser-only. D-059 does not skip them, and it does not invent flows a provider lacks.
+
+Shared OAuth **confidential** secrets (Kick client secret, future Twitch app token) never ship inside the desktop
+app; they live only on a server (the relay's token broker, `wrangler secret put`). Desktop-native public clients
+(Twitch Public, Google Desktop, X Native App, OpenAI SIWC, Bluesky loopback) carry no secret by design.
+"Browser login" never means reusing the user's **browser cookies or session**: Rumble's opt-in sign-in window is
+the one exception the owner may accept (Q-C8), TikTok and X cookie login stay out (Q-C9, D-046).
+
+| Service | Default (browser login) | Fallback (manual / BYO, under **Advanced**) | Provider gate that decides it (verified 2026-10-19) |
+|---|---|---|---|
+| Twitch | **Device Code Flow**: StreamDen shows a code, the user approves at `twitch.tv/activate` in the browser. Public client, no secret. | None needed; a BYO Client ID field only for developers. | Public clients get DCF only (no PKCE, no app tokens, no Chat Bot badge). Client ID permanent (rewards). |
+| YouTube | **"Sign in with Google"** (loopback + PKCE, system browser) against the **shared StreamDen project**, once Google verifies it (Q-C12). | **BYO Google project** wizard (Part B of the runbook): the only working path until verification; still browser consent at the end. | Sensitive-scope verification (domain, privacy policy, demo video); 10,000 units/day per project until the quota audit; Testing-mode tokens die after 7 days. |
+| Kick | "Sign in with Kick" (PKCE in the browser) **only through the official hosted relay's token broker**: D-019 says later, so this is not available at P2 (Q-C13). | **BYO Kick app** + self-hosted relay or tunnel: the only path at P2. | `client_secret` required for every exchange and refresh; no public client ([#413](https://github.com/KickEngineering/KickDevDocs/issues/413) open); events webhook-only. |
+| X | Browser PKCE consent (Native App, `127.0.0.1` callback) **on the user's own X developer app** (D-046: BYO app, BYO credits). | The BYO app *is* the manual step; there is no shared-app default because X bills per app. | Pay-per-use credits per app; exact callback match; no cookie login. |
+| Bluesky | **atproto OAuth** loopback (public client: PKCE, PAR, DPoP) in the browser. | **App password** (paste) for unattended rigs: public-client OAuth sessions are capped at 2 weeks. | Spec: 2-week session and refresh lifetime for public clients; app passwords are "for bots and CLI tools". |
+| Discord go-live posts | Nothing to sign in to: the user pastes a **channel webhook URL** (Discord's `webhook.incoming` OAuth needs a client secret). | Same (paste). | No secret-free OAuth; webhook paste is the official pattern. |
+| Discord bot (P4, Q-S7) | **Bot invite link** opens in the browser (consent, no token exchange); the bot token is still pasted once from the user's own app (BYO bot). | Same. | Token exchange needs a secret; privileged intents gate at 10,000 users. |
+| Facebook Live (P5) | **Login for Devices** (code shown, approve at `facebook.com/device`) with the StreamDen app. | None. | Standard vs Advanced Access (App Review + Business Verification) decides who can consent; device tokens last up to 60 days, no refresh. |
+| Rumble | No OAuth exists. Read: paste the **Live Stream API URL**. Send (Q-C8, opt-in): StreamDen **sign-in window** on rumble.com, cookie to the keychain. | Paste the session cookie (advanced, warned). | No developer program; automated access is against Rumble's terms (hence opt-in). |
+| TikTok | Nothing official. Community plugin only (D-024, Q-C9). | Plugin settings. | No LIVE API; session cookies would go to a third-party signer. |
+| Streamlabs | Paste the **Socket API token** (official, no app). An OAuth app needs Streamlabs approval and is limited to 10 whitelisted users before that. | Same (paste). | OAuth app approval gate; socket token is the documented route. |
+| StreamElements | Paste the **JWT** (or overlay token). OAuth2 tokens work on the socket but third-party app registration is undocumented. | Same (paste). | No documented OAuth2 app registration. |
+| Ko-fi, Throne, Fourthwall | Paste a verification token or secret **and** a public webhook URL (relay or tunnel). No login flow exists. | Same. | Webhook-only; relay dependency (Q-C1). |
+| Patreon | Local polling with the pasted **Creator's Access Token**. Full OAuth needs the client secret server-side, so a "Sign in with Patreon" button needs the hosted broker (not planned). | Same (paste). | Secret required for exchange and refresh. |
+| OpenAI | **"Continue with ChatGPT"** (SIWC: dynamic registration, PKCE, `127.0.0.1` loopback, no secret) for Plus/Pro plan usage, with its preview request constraints. | Paste an **API key** (pay-as-you-go; a key is not a subscription and a subscription is not a key). | Open-source/local apps need no registration; paid or hosted apps need OpenAI's interest form. |
+| Anthropic | No browser login: Anthropic prohibits Claude.ai login or Pro/Max credentials in third-party apps (D-021). | Paste an **API key** (the only path). "Connect your AI": the user's Claude Desktop/Code talks to our MCP server. | Policy, not technology. |
+| xAI | No published program for SuperGrok/X Premium inside third-party apps (gray, Q-A1 c). | Paste an **API key** (prepaid credits). Grok Build connects to our MCP server. | Policy gap. |
+| Cloudflare relay (owner only) | `wrangler login` opens the browser (`--browser=false` prints the link). | API token in CI. | n/a (owner tooling). |
+
+Paid AI APIs are **not** consumer subscriptions: an API key bills the key owner per token, and a Plus/Pro/Max/SuperGrok
+plan never funds it. Only OpenAI publishes a plan-usage sign-in for local apps.
+
 ## Master checklist
 
 Phases are from [PLAN.md](../../PLAN.md): P0 Foundations, P1 Core (Twitch, v0.1), P2 Chat + TTS (YouTube, Kick, X posting, Discord, relay), P4 Integrations/SDK/AI, P5 Decks + donation services, P6 Ecosystem. "Blocked by decision" refers to [QUESTIONS.md](../QUESTIONS.md). All are still open at the time of writing.
@@ -84,8 +130,8 @@ Phases are from [PLAN.md](../../PLAN.md): P0 Foundations, P1 Core (Twitch, v0.1)
 | 6 | Apple Developer Program ([distribution](registrations/distribution-and-signing.md)) | Developer ID signing + notarization | P0 build, signing at v0.5 (or earlier if Q-P2 says so) | $99/year | Q-P2 | ✅ Account exists (owner, 2026-10-19, D-055); signing is still gated by Q-P2 |
 | 7 | Twitch developer app ([twitch](registrations/twitch.md)) | All Twitch features: EventSub, chat, moderation, rewards | P1 | Free | Q-B1 | ☐ |
 | 8 | Stream-ready test accounts and eligibility ([go-live](go-live-requirements.md)) | Test against real platforms; some have waiting periods | P1 onward (start the clocks now) | Free; X Premium is paid | Q-S1 (which platforms) | ☐ |
-| 9 | Google Cloud + YouTube Data API ([google-youtube](registrations/google-youtube.md)) | YouTube chat, events, moderation | P2 | Free; quota 10,000 units/day | Q-B1, Q-C2, Q-S1; domain for verification | ☐ |
-| 10 | Kick developer app ([kick](registrations/kick.md)) | Kick chat send, moderation, events (webhooks) | P2 | Free | Q-B1, Q-C1 (webhooks/secret), Q-S1, Q-C3 | ☐ |
+| 9 | Google Cloud + YouTube Data API ([google-youtube](registrations/google-youtube.md)) | YouTube chat, events, moderation; the **shared verified project is the D-059 default** sign-in | P2 | Free; quota 10,000 units/day | Q-C2 answered; **Q-C12** (verification + quota audit); Q-S1; domain for verification | ☐ |
+| 10 | Kick developer app ([kick](registrations/kick.md)) | Kick chat send, moderation, events (webhooks); "Sign in with Kick" only via the hosted broker (Q-C13) | P2 | Free | Q-C1 (webhooks/secret), Q-S1, Q-C3, **Q-C13** | ☐ |
 | 11 | Cloudflare account + `wrangler` ([relay](registrations/relay-cloudflare.md)) | Optional self-hostable relay for Kick events and webhook-only donation services | P2 | Free tier (Workers Free + Durable Objects SQLite) | Q-C1 | ✅ Account exists (owner, 2026-10-19, D-055); deployment still P2 |
 | 12 | X developer app + credits ([x-twitter](registrations/x-twitter.md)) | Post go-live and clip tweets | P2 | Pay-per-use: $0.015 per post, $0.20 per post with a link; buy about $5-10 to test | Q-B1, Q-C4 | ☐ |
 | 13 | Discord: webhook and (optional) bot application ([discord](registrations/discord.md)) | Go-live posts (webhook, no app) and optional chat bridge (bot) | P2 | Free | Q-B1 (bot name), Q-S1 | ☐ |
@@ -128,7 +174,7 @@ Not covered yet (write a runbook when the feature enters scope): ElevenLabs/Azur
 | Q-B3 monetization | Whether SIWC needs OpenAI's paid/hosted waitlist approval |
 | Q-B4 git hosting/visibility | GitHub plan (branch protection on private repos is paid), SignPath (public repo), free Actions minutes |
 | Q-C1 relay | Cloudflare deployment, Kick webhooks, Ko-fi, Throne, Fourthwall, Patreon webhooks, Kick token brokering |
-| Q-C2 YouTube project | Shared project (needs Google verification and a quota audit) or only the end-user wizard |
+| Q-C2 YouTube project (answered) / **Q-C12** | Shared project is the D-059 default but needs Google verification and a quota audit (Q-C12); the end-user BYO wizard is the fallback |
 | Q-C4 X | Whether you bother registering an X app at all |
 | Q-P2 macOS tier | Apple Developer Program purchase |
 | Q-S1 platform scope | Which of Kick, Rumble, Facebook, TikTok, Discord runbooks you actually run |

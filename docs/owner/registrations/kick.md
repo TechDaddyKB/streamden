@@ -1,6 +1,6 @@
 # Kick: developer app
 
-Last verified against official docs: 2026-10-18. Part of the [owner runbooks](../README.md).
+Last verified against official docs: 2026-10-18; connection model re-verified 2026-10-19 (DEN-244, D-059). Part of the [owner runbooks](../README.md).
 
 ## Purpose
 
@@ -10,6 +10,12 @@ Kick's official API (launched 2025) gives StreamDen chat sending, moderation, ch
 2. **OAuth needs a client secret even with PKCE.** There is no public/native client type yet (request is open: KickDevDocs issue #413). So either each user registers **their own Kick app** (bring-your-own, secret stays on their PC) or a relay acts as the token broker.
 
 What you do now: register **your own dev app** for testing. What you do not do yet: wire a production webhook URL.
+
+## How users connect (D-059: browser login first, where possible)
+
+- **Wanted default:** a **Sign in with Kick** button that opens Kick's PKCE consent page in the browser against StreamDen's own app. Kick requires the `client_secret` for every token exchange and refresh and has **no public/native client type** ([OAuth flow](https://docs.kick.com/getting-started/generating-tokens-oauth2-flow.md), [#413](https://github.com/KickEngineering/KickDevDocs/issues/413) open, re-read 2026-10-19; the changelog has no auth change since 2026-01-15). So a no-setup button exists **only through the official hosted relay's token broker**, which D-019 schedules "later" (Q-C13). The desktop app never ships the secret.
+- **Working path at P2 (fallback, Advanced):** **bring your own Kick app**: the user registers an app as in section B, pastes its Client ID and secret into StreamDen (keychain), points its webhook at a self-hosted relay or a tunnel, and then completes the same browser consent. Events are webhook-only either way.
+- **Provider gates:** secret requirement, 1,000 `chat.message.sent` subscriptions per unverified app (email verification needed for a shared app), webhooks auto-unsubscribed after a day of failures.
 
 ## Prerequisites
 

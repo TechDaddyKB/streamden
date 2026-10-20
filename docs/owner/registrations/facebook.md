@@ -1,10 +1,16 @@
 # Facebook Live (Meta developer app): later phase
 
-Last verified against official docs: 2026-10-18. Part of the [owner runbooks](../README.md). **P5 or later, low priority** (Q-S1 recommendation: Rumble and Facebook in P5). Do not start this until Q-S1 confirms Facebook is in scope.
+Last verified against official docs: 2026-10-18; connection model re-verified 2026-10-19 (DEN-244, D-059). Part of the [owner runbooks](../README.md). **P5 or later, low priority** (Q-S1 recommendation: Rumble and Facebook in P5). Do not start this until Q-S1 confirms Facebook is in scope.
 
 ## Purpose
 
 To read live comments and reactions (Graph API: Server-Sent Events from `streaming-graph.facebook.com/{live-video-id}/live_comments`, or polling `/comments`) and to comment as a Page, StreamDen needs a **Meta developer app**. Users authorize with **Login for Devices** (a device-code style flow using `APP_ID|CLIENT_TOKEN`) or the manual login flow. Long-lived token exchange needs the **app secret**, so device tokens (up to 60 days, no refresh) are the secret-free option.
+
+## How users connect (D-059: browser login first)
+
+- **Default:** **Login for Devices**: StreamDen shows a code and the user approves at `facebook.com/device` in the browser; the app polls `device/login_status` with `APP_ID|CLIENT_TOKEN` and no app secret ([for-devices](https://developers.facebook.com/docs/facebook-login/for-devices), re-read 2026-10-19: tokens up to 60 days, no refresh, re-login afterwards).
+- **Fallback:** none that avoids the app secret (long-lived exchange needs it, so it would need the hosted broker). Users do not create their own Meta app.
+- **Provider gate:** who may consent is decided by **Standard vs Advanced Access** (App Review plus Business Verification), not by the flow.
 
 ## Prerequisites
 
