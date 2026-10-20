@@ -38,7 +38,7 @@ pub mod values {
     }
 
     fn integer_float(integer: i128, float: f64) -> Ordering {
-        // All JSON integers fit i128. The saturating cast also safely orders huge finite floats.
+        // All serde_json stored integers (i64/u64) fit i128; huge finite floats saturate safely.
         integer.cmp(&(float as i128)).then_with(|| {
             if float.fract() > 0.0 {
                 Ordering::Less
@@ -59,7 +59,29 @@ pub mod values {
         }
     }
 
+    fn past_max_utc(value: &str) -> bool {
+        // Until DEN-325 fixes Timestamp::parse, UTC conversion can panic above year 9999.
+        // Only the final local date and a negative offset can exceed the upper UTC bound.
+        let Some(rest) = value.strip_prefix("9999-12-31") else {
+            return false;
+        };
+        // Search after seconds: even '-' is an accepted date/time separator.
+        let Some((_, offset)) = rest.get(9..).and_then(|tail| tail.rsplit_once('-')) else {
+            return false;
+        };
+        // Every slice is at most two bytes: malformed input cannot overflow this arithmetic.
+        // Calendar, offset, and fractional syntax validation remains the existing parser's job.
+        let n = |part: Option<&str>| part.and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
+        // The parser represents a leap second as second 59 with maximal nanoseconds.
+        let local = n(rest.get(1..3)) * 3600 + n(rest.get(4..6)) * 60 + n(rest.get(7..9)).min(59);
+        let offset = n(offset.get(..2)) * 3600 + n(offset.get(3..5)) * 60;
+        local + offset >= 86_400
+    }
+
     fn instant(value: &str) -> Option<(i64, bool, &str)> {
+        if past_max_utc(value) {
+            return None;
+        }
         let timestamp = Timestamp::parse(value).ok()?;
         // The wire Timestamp truncates to milliseconds. Preserve the validated original fraction,
         // including more than nine digits, so distinct instants never collapse at that boundary.

@@ -211,3 +211,94 @@ fn recursive_equality_keeps_json_types_keys_and_array_order() {
         false
     ));
 }
+
+#[test]
+fn timestamp_utc_boundaries_reject_overflow_without_narrowing_parser_inputs() {
+    let last = "9999-12-31T23:59:59.999999999999Z";
+    for invalid in [
+        "9999-12-31T23:00:00-01:00",
+        "9999-12-31T23:59:60-00:01",
+        "9999-12-31T00:01:00-23:59",
+        "9999-12-31_23:59:59.999999999999-00:01",
+        "9999-12-31T23:59:59-24:00",
+        "9999-12-31T23:59:59-00:60",
+        "9999-12-31T23:59:59-99:99",
+        "9999-12-31T23:59:59-01:00extra",
+        "9999-12-31T23:59:59-é:00",
+        "9999-12-31T23:59:59-00:é",
+        "9999-12-31é23:59:59-01:00",
+        "9999-12-31Té:59:59-01:00",
+        "9999-12-31T23:é:59-01:00",
+        "9999-12-31T23:59:é-01:00",
+    ] {
+        assert_eq!(
+            values::compare(&json!(invalid), &json!(last)),
+            None,
+            "{invalid}"
+        );
+        assert_eq!(
+            values::compare(&json!(last), &json!(invalid)),
+            None,
+            "{invalid}"
+        );
+        assert_eq!(values::compare(&json!(invalid), &json!(invalid)), None);
+    }
+    for (a, b, order) in [
+        (
+            "9999-12-31T22:59:59-01:00",
+            "9999-12-31T23:59:59Z",
+            Ordering::Equal,
+        ),
+        (
+            "9999-12-31T00:00:59-23:59",
+            "9999-12-31T23:59:59Z",
+            Ordering::Equal,
+        ),
+        (
+            "9999-12-31T22:59:60.1-01:00",
+            "9999-12-31T23:59:60.1000Z",
+            Ordering::Equal,
+        ),
+        (last, "9999-12-31T23:59:60Z", Ordering::Less),
+        (
+            "9999-12-31T23:59:60.1Z",
+            "9999-12-31T23:59:60.2Z",
+            Ordering::Less,
+        ),
+        (
+            "0000-01-01T00:00:00+23:59",
+            "0000-01-01T00:00:00Z",
+            Ordering::Less,
+        ),
+    ] {
+        assert!(den_protocol::Timestamp::parse(a).is_ok());
+        assert!(den_protocol::Timestamp::parse(b).is_ok());
+        assert_eq!(
+            values::compare(&json!(a), &json!(b)),
+            Some(order),
+            "{a} / {b}"
+        );
+        assert_eq!(values::compare(&json!(b), &json!(a)), Some(order.reverse()));
+    }
+    // time 0.3.55 skips any single separator byte, including X, _, newline, and '-'.
+    for separator in 0_u8..=127 {
+        let a = format!("9999-12-31{}23:59:59Z", char::from(separator));
+        let b = format!("9999-12-31{}22:59:59-01:00", char::from(separator));
+        for value in [a, b] {
+            assert!(den_protocol::Timestamp::parse(&value).is_ok());
+            assert_eq!(
+                values::compare(&json!(value), &json!("9999-12-31T23:59:59Z")),
+                Some(Ordering::Equal)
+            );
+        }
+    }
+    let fraction = "9".repeat(100_000);
+    let valid = json!(format!("9999-12-31T22:59:59.{fraction}-01:00"));
+    let overflow = json!(format!("9999-12-31T23:59:59.{fraction}-00:01"));
+    assert_eq!(
+        values::compare(&valid, &json!(last)),
+        Some(Ordering::Greater)
+    );
+    assert_eq!(values::compare(&overflow, &valid), None);
+    assert_eq!(values::compare(&valid, &overflow), None);
+}
