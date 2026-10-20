@@ -1861,3 +1861,228 @@ async fn list_filters_are_literal_and_null_is_not_false_or_empty_name() {
     }
     worker.close().await.unwrap();
 }
+
+use den_core::storage::documents::Invalid;
+use rusqlite::types::Value as SqlValue;
+
+async fn seed_document(
+    worker: &StorageWorker,
+    kind: &str,
+    id: EntityId,
+    version: u32,
+    data: Value,
+) {
+    let kind = kind.to_owned();
+    raw(&worker.handle, move |c| {
+        c.config.execute(
+            "INSERT INTO documents(kind,id,schema_version,revision,data,created_at,updated_at,updated_by)
+             VALUES(?1,?2,?3,1,?4,'2026-10-20T10:00:00Z','2026-10-20T10:00:00Z','{\"kind\":\"system\"}')",
+            params![kind, id.to_string(), version, data.to_string()],
+        ).unwrap();
+    }).await;
+}
+
+async fn raw_snapshot(worker: &StorageWorker) -> Vec<Vec<(rusqlite::types::Type, SqlValue)>> {
+    let result = Arc::new(Mutex::new(Vec::new()));
+    let output = result.clone();
+    raw(&worker.handle, move |c| {
+        let mut query = c
+            .config
+            .prepare("SELECT * FROM documents ORDER BY kind,id")
+            .unwrap();
+        let columns = query.column_count();
+        *output.lock().unwrap() = query
+            .query_map([], |r| {
+                (0..columns)
+                    .map(|i| {
+                        let field = r.get_ref(i)?;
+                        let value = match field {
+                            rusqlite::types::ValueRef::Text(bytes) => {
+                                SqlValue::Blob(bytes.to_vec())
+                            }
+                            _ => r.get(i)?,
+                        };
+                        Ok((field.data_type(), value))
+                    })
+                    .collect::<rusqlite::Result<Vec<_>>>()
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+    })
+    .await;
+    Arc::try_unwrap(result).unwrap().into_inner().unwrap()
+}
+
+#[tokio::test]
+async fn row_corruption_is_nonfatal_but_query_and_transport_failures_are_not() {
+    let (_temp, worker, docs) = harness().await;
+    let good = EntityId::new_v7();
+    seed_document(&worker, "view_state", good, 3, json!({"ok":true})).await;
+    let expected_good = docs.get("view_state".into(), good).await.unwrap().unwrap();
+    // Corruption fixture has no affinities/checks so every wrong storage class stays wrong.
+    raw(&worker.handle, |c| c.config.execute_batch(
+        "ALTER TABLE documents RENAME TO saved_documents;
+         CREATE TABLE documents(kind,id,schema_version,revision,data,created_at,updated_at,updated_by);
+         INSERT INTO documents SELECT kind,id,schema_version,revision,data,created_at,updated_at,updated_by FROM saved_documents;
+         DROP TABLE saved_documents;"
+    ).unwrap()).await;
+    let cases = [
+        ("schema_version", "-1"),
+        ("schema_version", "4294967296"),
+        ("schema_version", "1.5"),
+        ("schema_version", "'bad'"),
+        ("schema_version", "X'01'"),
+        ("revision", "0"),
+        ("revision", "-1"),
+        ("revision", "1.5"),
+        ("revision", "'bad'"),
+        ("revision", "X'01'"),
+        ("created_at", "'bad'"),
+        ("updated_at", "'bad'"),
+        ("created_at", "1.5"),
+        ("updated_at", "X'01'"),
+        ("data", "'broken'"),
+        ("data", "1.5"),
+        ("data", "X'01'"),
+        ("updated_by", "'{\"kind\":\"unknown\"}'"),
+        ("updated_by", "'broken'"),
+        ("updated_by", "1.5"),
+        ("updated_by", "X'01'"),
+        ("id", "'bad'"),
+        ("id", "1.5"),
+        ("id", "X'01'"),
+        ("id", "CAST(X'FF' AS TEXT)"),
+        ("data", "CAST(X'FF' AS TEXT)"),
+        ("updated_by", "CAST(X'FF' AS TEXT)"),
+    ];
+    for (column, value) in cases {
+        let bad = EntityId::new_v7();
+        seed_document(&worker, "view_state", bad, 3, json!({"secret":"local"})).await;
+        raw(&worker.handle, move |c| {
+            c.config
+                .execute(
+                    &format!("UPDATE documents SET {column}={value} WHERE id=?1"),
+                    [bad.to_string()],
+                )
+                .unwrap();
+        })
+        .await;
+    }
+    let before = raw_snapshot(&worker).await;
+    let reports = docs.inspect_rows("view_state".into()).await.unwrap();
+    assert_eq!(reports.len(), cases.len() + 1);
+    assert_eq!(reports.iter().filter(|r| r.is_ok()).count(), 1);
+    // Compare every diagnostic ID/body to the original SQLite bytes, including invalid UTF-8.
+    let bytes = |value: SqlValue| match value {
+        SqlValue::Text(text) => SqlValue::Blob(text.into_bytes()),
+        other => other,
+    };
+    let expected_raw: Vec<_> = before
+        .iter()
+        .filter(|row| row[1].1 != SqlValue::Blob(good.to_string().into_bytes()))
+        .map(|row| (row[1].1.clone(), row[4].1.clone()))
+        .collect();
+    let actual_raw: Vec<_> = reports
+        .iter()
+        .filter_map(|report| report.as_ref().err())
+        .map(|invalid| (bytes(invalid.id.clone()), bytes(invalid.data.clone())))
+        .collect();
+    assert_eq!(actual_raw, expected_raw);
+    let mut json_errors = 0;
+    let mut class_errors = 0;
+    for report in reports {
+        match report {
+            Ok(record) => same_record(&record, &expected_good),
+            Err(Invalid {
+                kind,
+                error,
+                id,
+                data,
+            }) => {
+                assert_eq!(kind, "view_state");
+                assert_ne!(id, SqlValue::Text(good.to_string()));
+                assert_ne!(data, SqlValue::Null);
+                match error {
+                    DocumentError::Json(e) => {
+                        assert!(e.line() > 0);
+                        json_errors += 1;
+                    }
+                    DocumentError::Sqlite(_) => class_errors += 1,
+                    DocumentError::InvalidStored(_) => (),
+                    other => panic!("unexpected local error: {other:?}"),
+                }
+            }
+        }
+    }
+    assert_eq!(json_errors, 3);
+    assert_eq!(class_errors, 19);
+    assert_eq!(raw_snapshot(&worker).await, before);
+    assert!(
+        docs.list("view_state".into(), Default::default())
+            .await
+            .is_err()
+    );
+    assert!(docs.inspect_rows("queue".into()).await.unwrap().is_empty());
+    raw(&worker.handle, |c| {
+        c.config.execute_batch("DROP TABLE documents").unwrap()
+    })
+    .await;
+    assert!(matches!(docs.inspect_rows("view_state".into()).await,
+        Err(DocumentError::Sqlite(rusqlite::Error::SqliteFailure(_,Some(message)))) if message.contains("no such table")));
+    worker.close().await.unwrap();
+    assert!(matches!(
+        docs.inspect_rows("view_state".into()).await,
+        Err(DocumentError::Transport(StorageError::Disconnected))
+    ));
+    assert!(matches!(
+        docs.inspect_rows("plugin_data".into()).await,
+        Err(DocumentError::InvalidInput(_))
+    ));
+}
+
+#[tokio::test]
+async fn load_report_rejects_all_uuid_aliases_without_repair_or_deduplication() {
+    let (_temp, worker, docs) = harness().await;
+    let id: EntityId = "abcdef01-2345-6789-abcd-ef0123456789".parse().unwrap();
+    seed_document(&worker, "view_state", id, 3, json!({"canonical":true})).await;
+    let text = id.to_string();
+    for alias in [
+        text.to_uppercase(),
+        format!("{{{text}}}"),
+        text.replace('-', ""),
+        format!("urn:uuid:{text}"),
+    ] {
+        let stored = alias.clone();
+        raw(&worker.handle, move |c| {
+            c.config.execute("INSERT INTO documents SELECT kind,?1,schema_version,revision,name,name_key,enabled,data,created_at,updated_at,updated_by FROM documents WHERE id=?2",
+                params![stored,id.to_string()]).unwrap();
+        }).await;
+    }
+    let before = raw_snapshot(&worker).await;
+    let reports = docs.inspect_rows("view_state".into()).await.unwrap();
+    assert_eq!(reports.len(), 5);
+    assert_eq!(reports.iter().filter(|r| r.is_ok()).count(), 1);
+    for invalid in reports.into_iter().filter_map(|r| r.err()) {
+        assert!(matches!(
+            invalid.error,
+            DocumentError::InvalidStored("invalid listed id")
+        ));
+        assert_ne!(invalid.id, SqlValue::Text(text.clone()));
+    }
+    assert!(matches!(
+        docs.list("view_state".into(), Default::default()).await,
+        Err(DocumentError::InvalidStored("invalid listed id"))
+    ));
+    assert_eq!(
+        docs.get("view_state".into(), id)
+            .await
+            .unwrap()
+            .unwrap()
+            .document
+            .data,
+        json!({"canonical":true})
+    );
+    assert_eq!(raw_snapshot(&worker).await, before);
+    worker.close().await.unwrap();
+}
