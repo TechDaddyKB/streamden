@@ -32,6 +32,11 @@ pub fn create_private_dir(path: &Path) -> io::Result<()> {
         }
     }
     for directory in missing.into_iter().rev() {
+        // `..` traverses an existing ancestor, not a directory we create.
+        // Keep it in subsequent OS paths; never collapse through symlinks.
+        if directory.components().next_back() == Some(std::path::Component::ParentDir) {
+            continue;
+        }
         let mut builder = DirBuilder::new();
         private_mode(ModeTarget::Directory(&mut builder))?;
         match builder.create(directory) {
@@ -151,9 +156,11 @@ fn private_mode(target: ModeTarget<'_>) -> io::Result<()> {
 }
 
 /// Prepared owned paths, before advisory discovery or SQLite opening.
-/// This startup-only building block performs blocking IO outside entered Tokio contexts.
+/// This startup-only building block performs blocking IO on a dedicated `std::thread`
+/// outside any entered Tokio context. Tokio `spawn_blocking` is also rejected.
 /// Validation is a snapshot: trusted ancestors, ownership/ACL and TOCTOU limits above apply.
-/// Failure may leave newly created directories or empty DBs; existing bytes/modes are kept.
+/// Failure may leave newly created empty directories, DBs or owned access probes;
+/// existing bytes/modes are kept. No foreign entries are removed on failure.
 #[derive(Debug)]
 pub struct PreparedPaths {
     root: PathBuf,

@@ -376,3 +376,64 @@ fn prepared_owned_paths_reject_wrong_types() {
         assert!(prepare(root).unwrap_err().to_string().contains("type"));
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn missing_dotdot_preserves_nonprivate_ancestors() {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = |path: &std::path::Path| fs::metadata(path).unwrap().permissions().mode() & 0o7777;
+    for parent_mode in [0o755, 0o750] {
+        let temp = tempfile::tempdir().unwrap();
+        let parent = temp.path().join("parent");
+        fs::create_dir(&parent).unwrap();
+        fs::set_permissions(&parent, fs::Permissions::from_mode(parent_mode)).unwrap();
+        let root = parent.join("sd");
+        let selected = parent.join("missing/../sd");
+        let result = prepare(selected.clone());
+        if let Err(error) = &result {
+            assert_eq!(mode(&parent), parent_mode);
+            assert_eq!(mode(&parent.join("missing")), 0o700);
+            assert_eq!(fs::read_dir(parent.join("missing")).unwrap().count(), 0);
+            panic!("missing/../sd under {parent_mode:04o} must succeed: {error}");
+        }
+        let paths = result.unwrap();
+        assert_eq!(paths.root(), fs::canonicalize(&root).unwrap());
+        for db in [paths.config(), paths.history()] {
+            fs::write(db, b"preserve database bytes").unwrap();
+        }
+        prepare(selected).unwrap();
+        for dir in [
+            parent.join("missing"),
+            root,
+            paths.backups(),
+            paths.exports(),
+        ] {
+            assert_eq!(mode(&dir), 0o700);
+        }
+        assert_eq!(mode(&parent), parent_mode);
+        assert_eq!(fs::read_dir(parent.join("missing")).unwrap().count(), 0);
+        for db in [paths.config(), paths.history()] {
+            assert_eq!(mode(&db), 0o600);
+            assert_eq!(fs::read(db).unwrap(), b"preserve database bytes");
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn missing_dotdot_uses_symlink_target_parent() {
+    use std::os::unix::fs::symlink;
+    let temp = tempfile::tempdir().unwrap();
+    let target = temp.path().join("actual/nested");
+    create_private_dir(&target).unwrap();
+    let alias = temp.path().join("alias");
+    symlink(&target, &alias).unwrap();
+    let paths = prepare(alias.join("missing/../../sd")).unwrap();
+    assert_eq!(
+        paths.root(),
+        fs::canonicalize(temp.path().join("actual/sd")).unwrap()
+    );
+    assert!(!temp.path().join("sd").exists());
+    validate_private_dir(&target.join("missing")).unwrap();
+    assert!(prepare(alias).unwrap_err().to_string().contains("symlink"));
+}
