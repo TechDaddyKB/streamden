@@ -321,7 +321,8 @@ declares a send capability.
 D-059 makes browser consent the preferred target for five providers whose OAuth needs a confidential client secret:
 Kick (no public client; verified 2026-10-19: [OAuth flow](https://docs.kick.com/getting-started/generating-tokens-oauth2-flow.md),
 [KickDevDocs #413](https://github.com/KickEngineering/KickDevDocs/issues/413) open with no Kick reply), Discord
-`webhook.incoming`, Streamlabs, StreamElements and Patreon. The secret may only live in the official hosted relay's
+`webhook.incoming`, Streamlabs, StreamElements and Patreon (Shopify's merchant authorization would join them if that
+connector is ever sliced). The secret may only live in the official hosted relay's
 token broker, which D-019 schedules "later" (unfunded). Until it runs, each of them ships with its manual path (BYO
 Kick app plus self-hosted relay or tunnel; pasted webhook URL, socket token, JWT, creator token) and the docs say so.
 This is not a request to re-confirm browser-first, and it does not block the DEN-244 docs or story plan: D-019 stands

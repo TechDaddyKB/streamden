@@ -91,12 +91,21 @@ Optional additions (only when you enable moderation features): **Manage Messages
 
 Recommendation: always develop against a throwaway test server. A bot bug then spams only you.
 
+### 6. OAuth2 client for `webhook.incoming` (D-059 target; prepare now, finalize after the broker exists)
+
+This is a different credential from the bot token. The bot token (step 2) authenticates the bot user; the **OAuth2 client secret** authenticates the application in token exchanges, and Discord requires it for every OAuth2 token call ([OAuth2](https://docs.discord.com/developers/topics/oauth2), re-read 2026-10-19). It therefore lives only in the hosted broker.
+
+15. In the same application open **OAuth2** in the sidebar (labels: verify on screen). The **Client ID** equals the Application ID. Under **Client Secret** click **Reset Secret** (2FA prompt), copy it once and store it in the password manager. Never put it in the desktop app, the repo or a chat.
+16. **Redirects:** add exactly one entry, the hosted broker's callback URL. That URL is fixed by the broker design (DEN-244 artifact, N2) and **does not exist yet**: leave the list empty until then. Do not invent a hostname.
+17. The scope `webhook.incoming` is requested at authorization time, not toggled in the portal. Once the redirect exists, the consent URL is `https://discord.com/oauth2/authorize?client_id=<APPLICATION_ID>&response_type=code&scope=webhook.incoming&redirect_uri=<BROKER_CALLBACK>` (URL-encode the redirect). The user picks a channel on Discord's page; the broker's token response carries `webhook.id`, `webhook.token` and `webhook.url`, "a new webhook is created each time".
+
 ## What to copy and where it goes
 
 | Value | Secret? | Where it goes |
 |---|---|---|
 | **Bot token** | **Yes** | `SL_DISCORD_BOT_TOKEN` in `.env.local` (gitignored), or the OS keychain through Settings > Connections > Discord. Never in chat or the repo. |
 | Application ID | No | `SL_DISCORD_APP_ID` (same places) |
+| **OAuth2 Client Secret** (step 15) | **Yes** | Password manager now; the broker's secret store (`wrangler secret put`) once it exists. Never the desktop. |
 | Public Key | No | Not needed now |
 | Webhook URL | Yes (acts as a credential) | The StreamDen settings for the "post to Discord" action |
 
