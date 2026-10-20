@@ -192,7 +192,7 @@ async fn malformed_persisted_fields_and_raw_errors_are_distinct() {
 
 use den_core::{
     clock::Clock,
-    storage::documents::{Put, WritePolicy},
+    storage::documents::{DocumentWriter, Put, WritePolicy},
 };
 use den_protocol::StoredDocument;
 use serde_json::Value;
@@ -232,6 +232,10 @@ fn policy() -> WritePolicy {
     .map(|(k, v)| (k.to_owned(), v))
     .collect();
     WritePolicy::new(versions).unwrap()
+}
+fn writer(docs: &Documents) -> (DocumentWriter, TestClock) {
+    let clock = clock();
+    (docs.writer(policy(), Arc::new(clock.clone())), clock)
 }
 fn put(kind: &str, id: EntityId, data: Value) -> Put {
     Put {
@@ -471,4 +475,298 @@ fn enabled_is_validated_before_draft_safety_override() {
             );
         }
     }
+}
+
+#[tokio::test]
+async fn put_bumps_revision_atomically() {
+    let (_temp, worker, docs) = harness().await;
+    let (writer, clock) = writer(&docs);
+    let id = EntityId::new_v7();
+    let first = writer.put(action(id, "before")).await.unwrap();
+    assert_eq!(
+        (first.revision, first.document.data["revision"].as_u64()),
+        (1, Some(1))
+    );
+    assert_eq!(first.created_at, clock.wall());
+    *clock.0.lock().unwrap() = Timestamp::parse("2026-10-20T11:00:00Z").unwrap();
+    let mut change = action(id, "after");
+    change.expected_revision = Some(1);
+    change.updated_by = UpdatedBy::Mcp;
+    let second = writer.put(change).await.unwrap();
+    assert_eq!(
+        (second.revision, second.document.data["revision"].as_u64()),
+        (2, Some(2))
+    );
+    assert_eq!(second.created_at, first.created_at);
+    assert_eq!(second.updated_at, clock.wall());
+    assert_eq!(second.updated_by, UpdatedBy::Mcp);
+    assert_eq!(second.document.data["extra"], json!([1, null]));
+    raw(&worker.handle, |c| {
+        c.config
+            .execute_batch(
+                "CREATE TRIGGER fail_write AFTER UPDATE ON documents
+             BEGIN SELECT RAISE(ABORT,'injected'); END",
+            )
+            .unwrap();
+    })
+    .await;
+    *clock.0.lock().unwrap() = Timestamp::parse("2026-10-20T12:00:00Z").unwrap();
+    let error = writer.put(action(id, "failed")).await.unwrap_err();
+    assert_eq!(error.code(), ErrorCode::new(ErrorCode::INTERNAL));
+    assert!(matches!(error, DocumentError::Sqlite(_)));
+    let after = docs.get("action".into(), id).await.unwrap().unwrap();
+    assert_eq!(after.document, second.document);
+    assert_eq!(after.revision, second.revision);
+    assert_eq!(after.created_at, first.created_at);
+    assert_eq!(after.updated_at, second.updated_at);
+    assert_eq!(after.updated_by, second.updated_by);
+    worker.close().await.unwrap();
+}
+#[tokio::test]
+async fn stale_revision_conflicts() {
+    let (_temp, worker, docs) = harness().await;
+    let (writer, _) = writer(&docs);
+    let id = EntityId::new_v7();
+    writer.put(action(id, "live")).await.unwrap();
+    let mut stale = action(id, "stale");
+    stale.expected_revision = Some(0);
+    conflict(writer.put(stale).await.unwrap_err(), id);
+    let missing = EntityId::new_v7();
+    let mut request = action(missing, "missing");
+    request.expected_revision = Some(1);
+    conflict(writer.put(request).await.unwrap_err(), missing);
+    assert!(docs.get("action".into(), missing).await.unwrap().is_none());
+    let mut left = action(id, "left");
+    left.expected_revision = Some(1);
+    let mut right = action(id, "right");
+    right.expected_revision = Some(1);
+    let (left, right) = tokio::join!(writer.put(left), writer.put(right));
+    assert_ne!(left.is_ok(), right.is_ok());
+    conflict(
+        if let Err(error) = left {
+            error
+        } else {
+            right.unwrap_err()
+        },
+        id,
+    );
+    assert_eq!(
+        docs.get("action".into(), id)
+            .await
+            .unwrap()
+            .unwrap()
+            .revision,
+        2
+    );
+    worker.close().await.unwrap();
+}
+#[tokio::test]
+async fn casefold_name_uniqueness() {
+    let (_temp, worker, docs) = harness().await;
+    let (writer, _) = writer(&docs);
+    for kind in ["action", "queue", "command"] {
+        for (name, alias) in [
+            ("Straße", "STRASSE"),
+            ("Σ", "ς"),
+            ("ﬃ", "FFI"),
+            ("İ", "i\u{307}"),
+        ] {
+            let id = EntityId::new_v7();
+            writer
+                .put(put(kind, id, json!({"name":name,"enabled":true})))
+                .await
+                .unwrap();
+            let clashing = EntityId::new_v7();
+            conflict(
+                writer
+                    .put(put(kind, clashing, json!({"name":alias})))
+                    .await
+                    .unwrap_err(),
+                id,
+            );
+            assert!(docs.get(kind.into(), clashing).await.unwrap().is_none());
+            // Self-renaming to an equivalent spelling is allowed and bumps the revision.
+            assert_eq!(
+                writer
+                    .put(put(kind, id, json!({"name":alias})))
+                    .await
+                    .unwrap()
+                    .revision,
+                2
+            );
+        }
+    }
+    raw(&worker.handle, |c| {
+        let (name, key, enabled): (String, String, Option<bool>) = c.config.query_row(
+            "SELECT name,name_key,enabled FROM documents WHERE kind='action' AND name_key='strasse'",
+            [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        ).unwrap();
+        assert_eq!((name.as_str(), key.as_str(), enabled), ("STRASSE", "strasse", None));
+    }).await;
+    worker.close().await.unwrap();
+}
+#[tokio::test]
+async fn ai_draft_exempt_from_name_index() {
+    let (_temp, worker, docs) = harness().await;
+    let (writer, _) = writer(&docs);
+    let live = EntityId::new_v7();
+    writer.put(action(live, "Straße")).await.unwrap();
+    for _ in 0..2 {
+        let id = EntityId::new_v7();
+        let draft = writer.put(put(
+            "action", id,
+            json!({"name":"STRASSE","enabled":true,"origin":{"kind":"ai_draft","draftOf":live}}),
+        )).await.unwrap();
+        assert_eq!(draft.document.data["enabled"], false);
+        conflict(writer.put(action(id, "strasse")).await.unwrap_err(), live);
+        assert_eq!(
+            docs.get("action".into(), id)
+                .await
+                .unwrap()
+                .unwrap()
+                .revision,
+            1
+        );
+    }
+    raw(&worker.handle, |c| {
+        let enabled: bool = c.config.query_row(
+            "SELECT enabled FROM documents WHERE json_extract(data,'$.origin.kind')='ai_draft' LIMIT 1",
+            [], |r| r.get(0),
+        ).unwrap();
+        assert!(!enabled);
+    }).await;
+    // Attribution alone does not turn a user-origin storage input into a draft.
+    assert_eq!(
+        docs.get("action".into(), live)
+            .await
+            .unwrap()
+            .unwrap()
+            .document
+            .data["enabled"],
+        true
+    );
+    worker.close().await.unwrap();
+}
+#[tokio::test]
+async fn missing_origin_kind_not_exempt() {
+    let (_temp, worker, docs) = harness().await;
+    let (writer, _) = writer(&docs);
+    for (index, origin) in [
+        None,
+        Some(json!({})),
+        Some(json!(null)),
+        Some(json!({"kind":""})),
+        Some(json!({"kind":null})),
+        Some(json!({"kind":"future"})),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id = EntityId::new_v7();
+        let name = format!("absent{index}");
+        let mut data = json!({"name":name});
+        if let Some(origin) = origin {
+            data["origin"] = origin;
+        }
+        writer.put(put("action", id, data)).await.unwrap();
+        conflict(
+            writer
+                .put(action(EntityId::new_v7(), &name.to_uppercase()))
+                .await
+                .unwrap_err(),
+            id,
+        );
+    }
+    worker.close().await.unwrap();
+}
+#[tokio::test]
+async fn view_state_does_not_bump_action() {
+    let (_temp, worker, docs) = harness().await;
+    let (writer, _) = writer(&docs);
+    let id = EntityId::new_v7();
+    let original = writer.put(action(id, "live")).await.unwrap();
+    for x in [1, 2] {
+        let view = writer
+            .put(put("view_state", id, json!({"viewport":{"x":x}})))
+            .await
+            .unwrap();
+        assert_eq!(view.revision, x);
+        assert!(view.document.data.get("revision").is_none());
+    }
+    let after = docs.get("action".into(), id).await.unwrap().unwrap();
+    assert_eq!(after.document, original.document);
+    assert_eq!(after.revision, 1);
+    worker.close().await.unwrap();
+}
+#[tokio::test]
+async fn newer_versions_and_missing_migrations_are_write_protected() {
+    let (_temp, worker, docs) = harness().await;
+    let (writer, _) = writer(&docs);
+    for version in [2, 99] {
+        let id = EntityId::new_v7();
+        writer
+            .put(put("view_state", id, json!({"forward":{"unknown":true}})))
+            .await
+            .unwrap();
+        raw(&worker.handle, move |c| {
+            c.config
+                .execute(
+                    "UPDATE documents SET schema_version=?1 WHERE id=?2",
+                    params![version, id.to_string()],
+                )
+                .unwrap();
+        })
+        .await;
+        let before = docs.get("view_state".into(), id).await.unwrap().unwrap();
+        let error = writer
+            .put(put("view_state", id, json!({})))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::new(ErrorCode::INVALID_STATE));
+        assert!(
+            matches!(error,DocumentError::UnsupportedVersion{id:clash,stored,supported:3} if clash==id && stored==version)
+        );
+        let after = docs.get("view_state".into(), id).await.unwrap().unwrap();
+        assert_eq!(after.document, before.document);
+        assert_eq!(after.revision, before.revision);
+        assert_eq!(after.updated_at, before.updated_at);
+        assert_eq!(after.updated_by, before.updated_by);
+    }
+    worker.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn writer_rejects_invalid_ids_and_enabled_before_persistence() {
+    let (_temp, worker, docs) = harness().await;
+    let (writer, _) = writer(&docs);
+    let id = EntityId::new_v7();
+    for body_id in [
+        json!("not-a-uuid"),
+        json!(null),
+        json!(42),
+        json!(EntityId::new_v7()),
+    ] {
+        let mut input = action(id, "invalid id");
+        input.document.data["id"] = body_id;
+        let error = writer.put(input).await.unwrap_err();
+        assert!(matches!(error, DocumentError::InvalidInput(_)));
+        assert_eq!(error.code(), ErrorCode::new(ErrorCode::INVALID_PARAMS));
+    }
+    for origin in ["user", "ai_draft"] {
+        for enabled in [json!("yes"), json!(null), json!(42), json!({}), json!([])] {
+            let input = put(
+                "action",
+                id,
+                json!({"name":"invalid enabled","enabled":enabled,"origin":{"kind":origin}}),
+            );
+            let error = writer.put(input).await.unwrap_err();
+            assert!(matches!(
+                error,
+                DocumentError::InvalidInput("enabled must be a boolean")
+            ));
+            assert_eq!(error.code(), ErrorCode::new(ErrorCode::INVALID_PARAMS));
+        }
+    }
+    assert!(docs.get("action".into(), id).await.unwrap().is_none());
+    worker.close().await.unwrap();
 }

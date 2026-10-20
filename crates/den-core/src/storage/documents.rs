@@ -1,13 +1,14 @@
 //! Internal, UNFROZEN storage seam for Spec 03 §13.2; no serialized or wire contract.
 //! Reads decode persisted fields only. They do not migrate, validate, disable or install
 //! documents. DEN-302 adds those load semantics before consumers may use this as a loader.
-//! Pure preparation accepts registered current versions; no write API is exposed.
+//! Writes accept only registered current versions; older rows await DEN-302 migrations.
 //! Input attribution is server-supplied; this leaf does not authorize callers or assign Origin.
 use super::thread::{Admission, JobClass, StorageConns, StorageError, StorageHandle};
+use crate::clock::Clock;
 use den_protocol::{EntityId, StoredDocument, Timestamp, UpdatedBy, rpc::ErrorCode};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 use unicode_casefold::UnicodeCaseFold;
 
 pub type Result<T> = std::result::Result<T, DocumentError>;
@@ -315,4 +316,72 @@ impl WritePolicy {
             draft,
         })
     }
+}
+/// SQL writer, configured independently of raw reads. All admitted writes are MustLand.
+#[derive(Clone)]
+pub struct DocumentWriter {
+    handle: StorageHandle,
+    policy: WritePolicy,
+    clock: Arc<dyn Clock + Send + Sync>,
+}
+impl Documents {
+    pub fn writer(
+        &self,
+        policy: WritePolicy,
+        clock: Arc<dyn Clock + Send + Sync>,
+    ) -> DocumentWriter {
+        DocumentWriter {
+            handle: self.handle.clone(),
+            policy,
+            clock,
+        }
+    }
+}
+impl DocumentWriter {
+    pub async fn put(&self, put: Put) -> Result<Record> {
+        let policy = self.policy.clone();
+        let clock = self.clock.clone();
+        run(&self.handle, move |conns| {
+            let tx = conns
+                .config
+                .transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let record = write(&tx, &policy, put, clock.wall())?;
+            tx.commit()?;
+            Ok(record)
+        })
+        .await
+    }
+}
+
+fn write(tx: &Transaction<'_>, policy: &WritePolicy, put: Put, now: Timestamp) -> Result<Record> {
+    let old = read(tx, &put.document.kind, put.id)?;
+    let prepared = policy.prepare(put, old.as_ref(), now)?;
+    let record = prepared.record;
+    let kind = &record.document.kind;
+    if !prepared.draft && matches!(kind.as_str(), "action" | "queue" | "command") {
+        let clash: Option<String> = tx
+            .query_row(
+                "SELECT id FROM documents WHERE kind=?1 AND name_key=?2 AND id<>?3
+             AND (kind<>'action' OR json_extract(data,'$.origin.kind') IS NOT 'ai_draft')",
+                params![kind, prepared.key, record.id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(id) = clash {
+            return Err(DocumentError::Conflict {
+                id: id
+                    .parse()
+                    .map_err(|_| DocumentError::InvalidStored("invalid clashing id"))?,
+            });
+        }
+    }
+    tx.execute(
+        "INSERT INTO documents(kind,id,schema_version,revision,name,name_key,enabled,data,created_at,updated_at,updated_by)
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
+         ON CONFLICT(kind,id) DO UPDATE SET schema_version=excluded.schema_version,revision=excluded.revision,
+         name=excluded.name,name_key=excluded.name_key,enabled=excluded.enabled,data=excluded.data,
+         updated_at=excluded.updated_at,updated_by=excluded.updated_by",
+        params![kind,record.id.to_string(),record.document.schema_version,record.revision as i64,prepared.name,prepared.key,prepared.enabled,
+            serde_json::to_string(&record.document.data)?,record.created_at.to_string(),record.updated_at.to_string(),serde_json::to_string(&record.updated_by)?])?;
+    Ok(record)
 }
