@@ -63,6 +63,15 @@ pub struct Record {
     pub updated_by: UpdatedBy,
 }
 
+/// Internal UNFROZEN selection, not an operation's filter or a serialized contract.
+/// Both predicates are AND-ed; None omits a predicate. Some excludes SQL NULL.
+/// Name equality uses full Unicode case-folding, without trimming or normalization.
+#[derive(Clone, Debug, Default)]
+pub struct Filter {
+    pub name: Option<String>,
+    pub enabled: Option<bool>,
+}
+
 #[derive(Clone)]
 pub struct Documents {
     handle: StorageHandle,
@@ -87,6 +96,47 @@ pub(super) async fn run<T: Send + 'static>(
 impl Documents {
     pub fn new(handle: StorageHandle) -> Self {
         Self { handle }
+    }
+
+    /// Raw persisted rows in ascending binary ID order, including drafts and unknown versions.
+    /// One read snapshot covers selection and decoding. Like get(), this does not validate,
+    /// migrate or install documents; malformed stored fields fail with local typed errors.
+    pub async fn list(&self, kind: String, filter: Filter) -> Result<Vec<Record>> {
+        check_kind(&kind)?;
+        run(&self.handle, move |conns| {
+            let tx = conns.config.transaction()?;
+            let key = filter
+                .name
+                .as_deref()
+                .map(|name| name.case_fold().collect::<String>());
+            let ids = {
+                let mut statement = tx.prepare(
+                    "SELECT id FROM documents WHERE kind=?1 AND (?2 IS NULL OR name_key=?2)
+                     AND (?3 IS NULL OR enabled=?3) ORDER BY id COLLATE BINARY",
+                )?;
+                statement
+                    .query_map(params![kind, key, filter.enabled], |row| {
+                        row.get::<_, String>(0)
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?
+            };
+            let records = ids
+                .into_iter()
+                .map(|stored| {
+                    // read() looks up the canonical spelling; an alias could select another row.
+                    let id = stored
+                        .parse::<EntityId>()
+                        .ok()
+                        .filter(|id| id.to_string() == stored)
+                        .ok_or(DocumentError::InvalidStored("invalid listed id"))?;
+                    read(&tx, &kind, id)?
+                        .ok_or(DocumentError::InvalidStored("missing listed document"))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            tx.commit()?;
+            Ok(records)
+        })
+        .await
     }
 
     /// Fetch exactly (kind, id), preserving body, stored version and attribution unchanged.
