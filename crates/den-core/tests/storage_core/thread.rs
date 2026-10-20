@@ -399,3 +399,221 @@ async fn factory_controls_existing_read_only_files_without_bootstrap_or_wal() {
         assert!(!path.with_extension("db-shm").exists());
     }
 }
+
+struct Hook<F>(F);
+impl<F> den_core::storage::thread::FlushHook for Hook<F>
+where
+    F: Fn(&mut StorageConns) -> Result<(), StorageError> + Send + 'static,
+{
+    fn flush(&self, conns: &mut StorageConns) -> Result<(), StorageError> {
+        (self.0)(conns)
+    }
+}
+#[tokio::test]
+async fn flush_hooks_run_in_registration_order() {
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    };
+    let worker = StorageWorker::start(open, StorageConns::close)
+        .await
+        .unwrap();
+    let owner = accepted(
+        worker
+            .handle
+            .submit(JobClass::MustLand, |conns| {
+                conns
+                    .config
+                    .execute_batch("CREATE TABLE flushed (n)")
+                    .unwrap();
+                std::thread::current().id()
+            })
+            .await,
+    )
+    .wait()
+    .await
+    .unwrap();
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let fail = Arc::new(AtomicBool::new(true));
+    for id in 1..=3 {
+        let (calls, fail) = (calls.clone(), fail.clone());
+        worker
+            .handle
+            .register_flush_hook(Hook(move |conns: &mut StorageConns| {
+                assert_eq!(std::thread::current().id(), owner);
+                calls.lock().unwrap().push(id);
+                if id == 2 && fail.load(Ordering::Relaxed) {
+                    return Err(StorageError::Sqlite(rusqlite::Error::InvalidParameterName(
+                        "hook 2".into(),
+                    )));
+                }
+                conns
+                    .config
+                    .execute("INSERT INTO flushed VALUES (?)", [id])
+                    .map_err(StorageError::Sqlite)?;
+                Ok(())
+            }))
+            .await
+            .unwrap();
+    }
+    assert!(calls.lock().unwrap().is_empty()); // Registration never flushes.
+    let error = worker.handle.flush_hooks().await.unwrap_err();
+    assert!(
+        matches!(error, StorageError::Sqlite(rusqlite::Error::InvalidParameterName(name)) if name == "hook 2")
+    );
+    assert_eq!(*calls.lock().unwrap(), [1, 2]);
+    fail.store(false, Ordering::Relaxed);
+    worker.handle.flush_hooks().await.unwrap();
+    assert_eq!(*calls.lock().unwrap(), [1, 2, 1, 2, 3]);
+    let rows = accepted(
+        worker
+            .handle
+            .submit(JobClass::MustLand, |conns| {
+                conns
+                    .config
+                    .query_row("SELECT count(*) FROM flushed", [], |r| r.get::<_, i64>(0))
+                    .unwrap()
+            })
+            .await,
+    )
+    .wait()
+    .await
+    .unwrap();
+    assert_eq!(rows, 4);
+    worker.close().await.unwrap();
+    assert_eq!(*calls.lock().unwrap(), [1, 2, 1, 2, 3]); // Close adds no policy.
+}
+#[tokio::test]
+async fn hook_panic_is_terminal_and_registered_hooks_do_not_retain_sender() {
+    for panic in [false, true] {
+        let (closed, finalized) = oneshot::channel();
+        let worker = StorageWorker::start(open, move |conns| {
+            let result = conns.close();
+            let _ = closed.send(());
+            result
+        })
+        .await
+        .unwrap();
+        worker
+            .handle
+            .register_flush_hook(Hook(move |_: &mut StorageConns| {
+                assert!(!panic, "injected hook panic");
+                Ok(())
+            }))
+            .await
+            .unwrap();
+        if panic {
+            assert!(matches!(
+                worker.handle.flush_hooks().await,
+                Err(StorageError::Panicked)
+            ));
+            assert!(matches!(worker.close().await, Err(StorageError::Panicked)));
+        } else {
+            drop(worker); // Registered hooks must not create a last-sender retention cycle.
+        }
+        finalized.await.unwrap();
+    }
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn backlog_fake_time_gate_aggregates_without_idle_reports() {
+    use den_core::clock::{Clock, ClockSample};
+    use den_protocol::Timestamp;
+    use std::{
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
+    use tokio::time::Instant;
+    struct FakeClock(Mutex<ClockSample>);
+    impl Clock for FakeClock {
+        fn monotonic(&self) -> Instant {
+            self.0.lock().unwrap().monotonic
+        }
+        fn wall(&self) -> Timestamp {
+            self.0.lock().unwrap().wall
+        }
+        fn sample(&self) -> ClockSample {
+            *self.0.lock().unwrap()
+        }
+    }
+    let origin = Instant::now();
+    let clock = Arc::new(FakeClock(Mutex::new(ClockSample {
+        monotonic: origin,
+        wall: Timestamp::from_unix_millis(1000).unwrap(),
+    })));
+    let (reports, observed) = mpsc::channel();
+    let worker = StorageWorker::start_with_backlog(
+        open,
+        StorageConns::close,
+        clock.clone(),
+        move |report| {
+            reports.send(report).unwrap();
+        },
+    )
+    .await
+    .unwrap();
+    let (release, active) = held_job(&worker.handle, false).await;
+    let replies = fill(&worker.handle).await;
+    for (seconds, wall, count, since) in [
+        (0, 1000, Some(1), 1000),
+        (1, 2000, None, 0),
+        (59, 999_000, None, 0), // Wall jumps cannot bypass the monotonic gate.
+        (60, -1000, Some(19), 2000),
+        (61, 3000, None, 0),
+        (180, 4000, Some(2), 3000),
+    ] {
+        *clock.0.lock().unwrap() = ClockSample {
+            monotonic: origin + Duration::from_secs(seconds),
+            wall: Timestamp::from_unix_millis(wall).unwrap(),
+        };
+        assert!(matches!(
+            observed.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        )); // No idle report.
+        assert!(matches!(
+            worker
+                .handle
+                .submit(JobClass::Droppable, |_| ())
+                .await
+                .unwrap(),
+            Admission::Dropped
+        ));
+        if seconds == 1 {
+            let mut rejections = Vec::new();
+            for _ in 0..16 {
+                let handle = worker.handle.clone();
+                rejections.push(tokio::spawn(async move {
+                    assert!(matches!(
+                        handle.submit(JobClass::Droppable, |_| ()).await.unwrap(),
+                        Admission::Dropped
+                    ));
+                }));
+            }
+            for rejection in rejections {
+                rejection.await.unwrap();
+            }
+        }
+        if let Some(count) = count {
+            let report = observed.try_recv().unwrap();
+            assert_eq!(report.dropped, count);
+            assert_eq!(report.since.unix_millis(), since);
+        }
+        assert!(matches!(
+            observed.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+    }
+    assert_eq!(worker.handle.dropped(), 22);
+    release.send(()).unwrap();
+    drain(active, replies).await;
+    let handle = worker.handle.clone();
+    worker.close().await.unwrap();
+    assert!(matches!(
+        handle.submit(JobClass::Droppable, |_| ()).await,
+        Err(StorageError::Disconnected)
+    ));
+    assert_eq!(handle.dropped(), 22);
+    assert!(matches!(
+        observed.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+}
