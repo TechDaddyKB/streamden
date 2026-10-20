@@ -122,10 +122,13 @@ impl Documents {
             };
             let records = ids
                 .into_iter()
-                .map(|id| {
-                    let id = id
-                        .parse()
-                        .map_err(|_| DocumentError::InvalidStored("invalid listed id"))?;
+                .map(|stored| {
+                    // read() looks up the canonical spelling; an alias could select another row.
+                    let id = stored
+                        .parse::<EntityId>()
+                        .ok()
+                        .filter(|id| id.to_string() == stored)
+                        .ok_or(DocumentError::InvalidStored("invalid listed id"))?;
                     read(&tx, &kind, id)?
                         .ok_or(DocumentError::InvalidStored("missing listed document"))
                 })

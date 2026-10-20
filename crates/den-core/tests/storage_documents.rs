@@ -1499,3 +1499,153 @@ async fn raw_listing_preserves_unknown_versions_and_reports_local_errors() {
         Err(DocumentError::Transport(StorageError::Disconnected))
     ));
 }
+
+fn stored_document_rows(conn: &Connection) -> Vec<Vec<rusqlite::types::Value>> {
+    let mut statement = conn
+        .prepare("SELECT * FROM documents ORDER BY kind COLLATE BINARY,id COLLATE BINARY")
+        .unwrap();
+    let columns = statement.column_count();
+    statement
+        .query_map([], |row| {
+            (0..columns).map(|column| row.get(column)).collect()
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap()
+}
+
+fn same_record(actual: &Record, expected: &Record) {
+    assert_eq!(actual.id, expected.id);
+    assert_eq!(actual.document, expected.document);
+    assert_eq!(actual.revision, expected.revision);
+    assert_eq!(actual.created_at, expected.created_at);
+    assert_eq!(actual.updated_at, expected.updated_at);
+    assert_eq!(actual.updated_by, expected.updated_by);
+}
+
+async fn noncanonical_listed_id(alias: &str) {
+    let canonical = "0190a000-0000-7000-8000-00000000abcd";
+    let id: EntityId = canonical.parse().unwrap();
+    // Public parsing remains permissive; only stored row identity must be canonical.
+    assert_eq!(alias.parse::<EntityId>().unwrap(), id);
+    assert_ne!(alias, canonical);
+    let mut failures = Vec::new();
+    for coexist in [false, true] {
+        let (temp, worker, docs) = harness().await;
+        let (writer, _) = writer(&docs);
+        let canonical_record = if coexist {
+            Some(
+                writer
+                    .put(put(
+                        "timer",
+                        id,
+                        json!({"name":"canonical","enabled":true,"tag":"canonical"}),
+                    ))
+                    .await
+                    .unwrap(),
+            )
+        } else {
+            None
+        };
+        let unrelated = writer
+            .put(put("queue", id, json!({"name":"unrelated"})))
+            .await
+            .unwrap();
+        let stored = alias.to_owned();
+        raw(&worker.handle, move |c| {
+            c.config
+                .execute(
+                    "INSERT INTO documents(kind,id,schema_version,revision,name,name_key,enabled,
+                 data,created_at,updated_at,updated_by)
+                 VALUES('timer',?1,99,7,'alias','alias',0,'{\"tag\":\"alias\"}',
+                 '2026-10-19T10:00:00Z','2026-10-20T11:00:00Z','{\"kind\":\"imported\"}')",
+                    [stored],
+                )
+                .unwrap();
+        })
+        .await;
+        let conn = Connection::open(temp.path().join("config.db")).unwrap();
+        let before = stored_document_rows(&conn);
+        assert_eq!(before.len(), if coexist { 3 } else { 2 });
+        for filter in [
+            Filter::default(),
+            Filter {
+                name: Some("alias".into()),
+                enabled: None,
+            },
+            Filter {
+                name: None,
+                enabled: Some(false),
+            },
+            Filter {
+                name: Some("alias".into()),
+                enabled: Some(false),
+            },
+        ] {
+            let result = docs.list("timer".into(), filter.clone()).await;
+            let correct = matches!(
+                &result,
+                Err(DocumentError::InvalidStored("invalid listed id"))
+            );
+            if !correct {
+                failures.push(format!(
+                    "{alias} coexist={coexist} filter={filter:?}: {result:?}"
+                ));
+            }
+            if let Err(error) = result {
+                assert_eq!(error.code(), ErrorCode::new(ErrorCode::INTERNAL));
+            }
+            // A failed list never repairs, deletes, renames or rewrites any row/metadata.
+            assert_eq!(stored_document_rows(&conn), before);
+            raw(&worker.handle, |c| assert!(c.config.is_autocommit())).await;
+            let recovered = listed(&docs, "queue", None, None).await;
+            assert_eq!(recovered.len(), 1);
+            same_record(&recovered[0], &unrelated);
+        }
+        // Either legitimate predicate can exclude the bad row before identity decoding.
+        for (name, enabled) in [
+            (Some("canonical"), None),
+            (None, Some(true)),
+            (Some("canonical"), Some(true)),
+        ] {
+            let records = listed(&docs, "timer", name, enabled).await;
+            assert_eq!(records.len(), usize::from(coexist));
+            if let Some(expected) = &canonical_record {
+                same_record(&records[0], expected);
+                same_record(
+                    &docs.get("timer".into(), id).await.unwrap().unwrap(),
+                    expected,
+                );
+            } else {
+                assert!(docs.get("timer".into(), id).await.unwrap().is_none());
+            }
+        }
+        assert_eq!(stored_document_rows(&conn), before);
+        worker.close().await.unwrap();
+    }
+    assert!(
+        failures.is_empty(),
+        "alias identity failures:\n{}",
+        failures.join("\n")
+    );
+}
+
+#[tokio::test]
+async fn listing_rejects_uppercase_stored_ids_alone_and_beside_canonical() {
+    noncanonical_listed_id("0190A000-0000-7000-8000-00000000ABCD").await;
+}
+
+#[tokio::test]
+async fn listing_rejects_braced_stored_ids_alone_and_beside_canonical() {
+    noncanonical_listed_id("{0190a000-0000-7000-8000-00000000abcd}").await;
+}
+
+#[tokio::test]
+async fn listing_rejects_simple_stored_ids_alone_and_beside_canonical() {
+    noncanonical_listed_id("0190a00000007000800000000000abcd").await;
+}
+
+#[tokio::test]
+async fn listing_rejects_urn_stored_ids_alone_and_beside_canonical() {
+    noncanonical_listed_id("urn:uuid:0190a000-0000-7000-8000-00000000abcd").await;
+}
