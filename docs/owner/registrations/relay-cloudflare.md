@@ -19,7 +19,7 @@ It is a dumb pipe: the **desktop verifies signatures**, so vendor secrets (Kick 
 
 ## How the owner signs in (D-059 applied)
 
-`wrangler login` is already browser-first (it opens the OAuth page; `--browser=false` prints the link for Hyprland/Wayland quirks) and an API token is the CI fallback ([wrangler commands](https://developers.cloudflare.com/workers/wrangler/commands/general/), re-read 2026-10-19). For end users the relay matters because it is the only place a **shared** confidential secret may live (the Kick token broker). D-019 keeps the official hosted relay "later"; until it runs, Kick stays bring-your-own (Q-C13).
+`wrangler login` is already browser-first (it opens the OAuth page; `--browser=false` prints the link for Hyprland/Wayland quirks) and an API token is the CI fallback ([wrangler commands](https://developers.cloudflare.com/workers/wrangler/commands/general/), re-read 2026-10-19). For end users the relay matters because it is the only place a **shared** confidential secret may live (the Kick token broker). D-019 keeps the official hosted relay "later"; until it runs, Kick stays bring-your-own, and the Discord webhook, Streamlabs, StreamElements and Patreon browser consents wait with it (Q-C12).
 
 ## Prerequisites
 

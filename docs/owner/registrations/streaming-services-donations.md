@@ -13,9 +13,10 @@ You only need accounts on services **you actually use**. For the project owner t
 
 ## How users connect (D-059 applied)
 
-- **Streamlabs and StreamElements:** the pasted **socket token / JWT** is the default *and* the only sensible path. A Streamlabs OAuth app only works for 10 whitelisted users until Streamlabs approves it ([register](https://dev.streamlabs.com/docs/register-your-application), re-read 2026-10-19); StreamElements documents `oauth2` socket tokens but no third-party app registration ([websockets](https://docs.streamelements.com/websockets), re-read 2026-10-19). A "Sign in with Streamlabs/StreamElements" button is possible only after app approval and a server-side secret, so it is **not** planned.
-- **Ko-fi, Throne, Fourthwall:** webhook-only; the user pastes the relay URL into the vendor and a token/secret into StreamDen. No login flow exists.
-- **Patreon:** the pasted **Creator's Access Token** (polling) is the default. Patreon's OAuth needs the client secret server-side ([docs](https://docs.patreon.com/), re-read 2026-10-19), so a browser "Sign in with Patreon" would need the hosted broker (D-019, later) and is not planned.
+- **Streamlabs and StreamElements.** **Preferred target:** a "Connect with …" button that opens the provider's consent page in the browser against a StreamDen OAuth app. Both providers need the client secret for the code exchange and the refresh, so the exchange runs in the hosted relay's token broker (D-019: later), never in the desktop. Streamlabs app registration is official; until Streamlabs approves the app only 10 whitelisted users may authorize it ([register](https://dev.streamlabs.com/docs/register-your-application), re-read 2026-10-19). StreamElements documents the whole OAuth2 flow (authorize, code exchange with `client_secret`, refresh with `client_secret`, validate, revoke; scopes `channel:read`, `tips:read`, `activities:read` and more) but not how a developer obtains `client_id` and `client_secret` ([OAuth2](https://github.com/StreamElements/api-docs/blob/main/docs/OAuth2.md), read 2026-10-19), so credential issuance is an owner request to SE. **Interim default and advanced fallback:** the pasted **socket token / JWT** below, which stays supported.
+- **Ko-fi, Throne, Fourthwall:** webhook-only; the user pastes the relay URL into the vendor and a token/secret into StreamDen. No login flow exists, so the paste is the only path.
+- **Patreon.** **Preferred target:** "Sign in with Patreon" browser consent on the StreamDen client, with the exchange and refresh in the hosted broker because both need the client secret ([docs](https://docs.patreon.com/), re-read 2026-10-19: the exchange is "performing the following request on the server"). **Interim default and advanced fallback:** the pasted **Creator's Access Token** (local polling). Webhooks need the relay either way (Q-C1).
+- **Prerequisites before any of these browser buttons can ship** (none of them moves D-019): provider app approval or credential issuance (owner), scope selection per provider, the broker's exchange, refresh and revoke endpoints with a secure token handoff to the desktop (relay design, Q-C1), and a privacy policy. Timing is Q-C12; the follow-up cards are proposed in the DEN-244 artifact.
 
 ## Prerequisites
 
@@ -33,7 +34,7 @@ You only need accounts on services **you actually use**. For the project owner t
 
 ## 1. Streamlabs
 
-**Recommended route: the Socket API token.** No application registration.
+**Interim route (the D-059 fallback): the Socket API token.** No application registration. The browser "Connect with Streamlabs" target needs the OAuth app below plus the hosted broker.
 
 1. Log in at <https://streamlabs.com>.
 2. Go to **Dashboard > Settings > API Settings > API Tokens**.
@@ -53,7 +54,7 @@ s.on('event',e=>console.log(JSON.stringify(e)));"
 
 Then send a test alert from the Streamlabs dashboard (Alert Box settings have test buttons; verify on screen). The `message` field is always an array and `for` says the platform (`twitch_account`, `youtube_account`, ...).
 
-**Not recommended: registering an OAuth app.** The registration page is <https://streamlabs.com/dashboard#/oauth-clients/register> (log in first). Until Streamlabs sets an app to **approved**, only up to **10 whitelisted users** may authorize it, and it needs a client secret. The form fields are not documented in text (verify on screen). The pasted socket token avoids all of this.
+**OAuth app: the D-059 target (owner action once the broker is scheduled).** The registration page is <https://streamlabs.com/dashboard#/oauth-clients/register> (log in first). Until Streamlabs sets an app to **approved**, only up to **10 whitelisted users** may authorize it, and the exchange needs a client secret that must live in the broker, never in the desktop. The form fields are not documented in text (verify on screen). Register and request approval early (it costs nothing); until approval and the broker exist, the pasted socket token is the working route.
 
 Pitfalls: treat the token as a password (anyone with it can read your alerts); community reports say a Streamlabs widget may need to be open for events to flow (unverified); regenerating the token on the dashboard breaks the saved one.
 
@@ -62,7 +63,7 @@ Pitfalls: treat the token as a password (anyone with it can read your alerts); c
 1. Log in at <https://streamelements.com>.
 2. Click your **avatar (top right)**, select your **channel name**, choose the correct channel, then copy the token. Secondary guides name the buttons **Channels > Show secrets** and show the **JWT Token** (verify on screen).
 3. If you have several linked accounts (Twitch, YouTube, Kick), **switch to the channel whose activities you want before copying**, or you will subscribe fine but receive nothing.
-4. Two token types work with the WebSocket: the **JWT** (`token_type: jwt`) and the channel **Overlay token** (`token_type: apikey`, found in the same place). OAuth2 access tokens (`oauth2`) also work, but access to register OAuth2 apps is unclear (research), so skip.
+4. Two token types work with the WebSocket: the **JWT** (`token_type: jwt`) and the channel **Overlay token** (`token_type: apikey`, found in the same place). OAuth2 access tokens (`oauth2`) also work and are the D-059 target once StreamElements issues StreamDen a client ID and secret (ask SE; the issuance process is undocumented) and the broker exists.
 5. Store as `SL_STREAMELEMENTS_JWT` (keychain / `.env.local`). Community reports say the JWT can rotate roughly every two weeks (unverified), so the app must handle a "token rejected, please re-paste" state.
 
 Test:
@@ -149,6 +150,7 @@ All names are suggestions; P0 decides the real storage location.
 - Streamlabs app registration: <https://dev.streamlabs.com/docs/register-your-application>
 - Socket token dashboard path (Streamer.bot guide): <https://docs.streamer.bot/guide/integrations/streamlabs>
 - StreamElements websockets: <https://docs.streamelements.com/websockets>
+- StreamElements OAuth2 (authorize, exchange, refresh, validate, revoke; secret required): <https://github.com/StreamElements/api-docs/blob/main/docs/OAuth2.md>
 - JWT location (secondary): <https://content-creator-integration.readthedocs.io/en/latest/gettingstarted/socketkey/streamelements/>
 - Ko-fi webhooks page: <https://ko-fi.com/manage/webhooks>
 - Patreon API docs (clients, webhooks): <https://docs.patreon.com/>

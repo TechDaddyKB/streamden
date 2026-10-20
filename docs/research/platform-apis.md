@@ -279,7 +279,7 @@ streamList guidance (2025-07-14). `list` docs now push streamList. Upload cost c
 
 **Recommendation:** Desktop OAuth client (loopback + PKCE, with device flow as fallback). Use streamList over gRPC for chat. Poll `subscriptions.list?myRecentSubscribers` only while live, at 30–60 s. Use `superChatEvents.list` for reconciliation. Apply for a quota extension and OAuth verification early, and offer **BYO API project** as an advanced setting. Treat InnerTube scraping as an explicit opt-in "unofficial mode" (or skip it).
 
-> **Owner decision 2026-10-19 (D-059, DEN-244):** the shared, Google-verified project is now the **default** sign-in path ("Sign in with Google" in the system browser) and the BYO project is the **advanced fallback**, reversing D-031's order. The BYO wizard stays mandatory because it is the only working path until verification and the quota audit are done (Q-C12). Scraping stays out of core.
+> **Owner decision 2026-10-19 (D-059, DEN-244):** the shared project is now the **default** sign-in path ("Sign in with Google" in the system browser) and the BYO project is the **advanced fallback**, reversing D-031's order. Before verification the shared project serves limited development and test use only (Google allows unverified apps for development/testing behind the warning screen and the 100-user cap: [verification requirements](https://support.google.com/cloud/answer/13464323?hl=en)); verification gates public rollout and the quota audit gates capacity, both owner actions. The BYO wizard stays mandatory as the supported path until then. Scraping stays out of core.
 
 ---
 
@@ -308,7 +308,7 @@ streamList guidance (2025-07-14). `list` docs now push streamList. Upload cost c
 
 ### 5.3 OAuth 2.1 + PKCE (still needs a secret)
 
-> **Re-checked 2026-10-19 (DEN-244):** still true; the Kick changelog has no auth change since 2026-01-15 and [#413](https://github.com/KickEngineering/KickDevDocs/issues/413) is open without a Kick reply. Under D-059 a "Sign in with Kick" button exists only through the hosted relay's token broker (Q-C13); BYO app is the P2 path.
+> **Re-checked 2026-10-19 (DEN-244):** still true; the Kick changelog has no auth change since 2026-01-15 and [#413](https://github.com/KickEngineering/KickDevDocs/issues/413) is open without a Kick reply. Under D-059 a "Sign in with Kick" button is the preferred target and exists only through the hosted relay's token broker (D-019 later, timing Q-C12); the BYO app is the interim P2 path.
 
 - `https://id.kick.com/oauth/authorize` requires `code_challenge` (S256) and `state`. **Token exchange requires `client_id` + `client_secret` + `code_verifier`. Refresh also requires `client_secret`.** App tokens come via client credentials ([official](https://docs.kick.com/getting-started/generating-tokens-oauth2-flow.md)).
 - "Made refresh tokens reusable/flexible" (2025-11-25). The token introspect endpoint moved under `/oauth` (2026-01-15) ([changelog](https://docs.kick.com/changelog.md)).
@@ -506,6 +506,8 @@ Local remote-control API: enable it under **Settings → Remote Control** (off b
 | **DonorDrive / Extra Life** | Public REST API (`/api/participants/{id}/...`) with ETag/`If-None-Match` → 304 per DonorDrive's PublicAPI overview (seen via search snippet) **[community]** | **No** | none | participant donations, milestones | **Local polling**. Streamer.bot supports it with a "custom API endpoint" option | [Streamer.bot](https://docs.streamer.bot/guide/integrations/donordrive) |
 | **Shopify** | webhooks | **YES** | verify token | orders | Relay | [Streamer.bot](https://docs.streamer.bot/guide/integrations/shopify) |
 
+> **D-059 (2026-10-19, DEN-244):** the "avoid OAuth" stance in the Streamlabs row is the interim position. Under D-059 the browser consent is the preferred target once the app is approved and the hosted broker exists (D-019 later, Q-C12). StreamElements' OAuth2 is fully documented ([OAuth2.md](https://github.com/StreamElements/api-docs/blob/main/docs/OAuth2.md): authorize, exchange and refresh with `client_secret`, validate, revoke); only its credential issuance is not. Pasted tokens remain the fallback.
+
 Streamer.bot routes **Ko-fi, Patreon, Fourthwall, Throne, Shopify** (and Kick) through its **Website Integration**. The user creates a webhook on streamer.bot, pastes that URL into the vendor, and the instance must stay logged in to receive events ([Ko-fi](https://docs.streamer.bot/guide/integrations/ko-fi), [Patreon](https://docs.streamer.bot/guide/integrations/patreon), [Fourthwall](https://docs.streamer.bot/guide/integrations/fourthwall), [Throne](https://docs.streamer.bot/guide/integrations/throne), [website integration](https://docs.streamer.bot/guide/integrations/streamerbot)). StreamElements and Streamlabs connect directly (OAuth / socket token) ([SE](https://docs.streamer.bot/guide/integrations/streamelements), [SL](https://docs.streamer.bot/guide/integrations/streamlabs)).
 
 ---
@@ -514,7 +516,7 @@ Streamer.bot routes **Ko-fi, Patreon, Fourthwall, Throne, Shopify** (and Kick) t
 
 ### 11.1 Features that cannot work purely locally
 
-> **D-059 (2026-10-19):** "browser login first" does not change this table. Where the only secret-free path is a paste (Discord webhook, Streamlabs/SE tokens, Patreon creator token, Rumble URL, Ko-fi/Throne/Fourthwall), the paste *is* the default; a browser button for those would need a server-held secret, i.e. the hosted relay (D-019, later).
+> **D-059 (2026-10-19):** "browser login first" does not change this table; it changes what the paste is. Where the provider's OAuth needs a server-held secret (Kick, Discord `webhook.incoming`, Streamlabs, StreamElements, Patreon), browser consent through the hosted relay's token broker is the preferred target and the paste (BYO Kick app, webhook URL, socket token, JWT, creator token) is the interim default until app approval and the broker exist (D-019, later; timing Q-C12). Where no sign-in exists at all (Rumble URL, Ko-fi/Throne/Fourthwall webhooks), the paste is the only path.
 
 | Feature | Why | Workaround without our relay |
 |---|---|---|

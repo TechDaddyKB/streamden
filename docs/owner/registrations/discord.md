@@ -13,7 +13,7 @@ Everything below is for the owner's own testing and for the wizard text we will 
 
 ## How users connect (D-059 applied)
 
-- **Go-live posts (P2):** no login flow exists without a client secret (`webhook.incoming` needs a code exchange with the secret: [OAuth2](https://docs.discord.com/developers/topics/oauth2), re-read 2026-10-19). The official pattern is the user pasting a **channel webhook URL** (step 0). That paste *is* the default, not a fallback.
+- **Go-live posts (P2).** **Preferred target:** Discord's `webhook.incoming` consent: StreamDen opens Discord's authorization page in the browser, the user picks the channel, and the token response returns the webhook `id` and `token` ([OAuth2 webhooks](https://docs.discord.com/developers/topics/oauth2#webhooks), re-read 2026-10-19). Every Discord token call needs the client secret ("All calls to the OAuth2 endpoints require either HTTP Basic authentication or `client_id` and `client_secret`"), so the exchange runs in the hosted relay's token broker (D-019: later, timing Q-C12), never in the desktop. **Interim default and advanced fallback:** the user pastes a **channel webhook URL** (step 0). Both paths store the same webhook credential, so the connector accepts either.
 - **Bot (P4, Q-S7):** the **invite link** opens in the browser and is a consent-only flow (no token exchange). The bot token itself is still pasted once from the user's own application (bring-your-own bot, D-024 research), because Discord has no secret-free OAuth and a shared bot would need hosting and verification.
 
 ## Prerequisites
@@ -122,7 +122,7 @@ For the gateway and intents check, use the app once it exists: connect and confi
 - **Token reset** invalidates the old token and drops running gateway sessions.
 - **IDENTIFY limit**: 1,000 per 24 hours. Reconnect loops can burn it.
 - **Webhook URL leaked** (for example in a screenshot): delete the webhook in the server settings and create a new one.
-- **`webhook.incoming` OAuth** and any OAuth token call need a `client_secret`, so we use pasted webhook URLs instead.
+- **`webhook.incoming` OAuth** and any OAuth token call need a `client_secret`, so the browser consent waits for the hosted broker and the pasted webhook URL is the interim path (D-059).
 
 ## Policy notes
 
