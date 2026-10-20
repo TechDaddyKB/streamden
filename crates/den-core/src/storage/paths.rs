@@ -129,7 +129,10 @@ fn private_mode(target: ModeTarget<'_>) -> io::Result<()> {
             ModeTarget::Existing(metadata, directory) => {
                 let expected = if directory { 0o700 } else { 0o600 };
                 let actual = metadata.permissions().mode() & 0o7777;
-                if actual != expected {
+                // mkdir may inherit setgid; on directories it grants no access.
+                // Ignore only that bit, retaining strict access, setuid and sticky checks.
+                let checked = if directory { actual & !0o2000 } else { actual };
+                if checked != expected {
                     return Err(io::Error::new(
                         io::ErrorKind::PermissionDenied,
                         format!("unsafe mode {actual:04o}; expected {expected:04o}"),

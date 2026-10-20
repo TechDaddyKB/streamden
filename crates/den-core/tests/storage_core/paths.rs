@@ -75,6 +75,29 @@ mod unix {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn inherited_setgid_directories_remain_private() {
+        let temp = tempfile::tempdir().unwrap();
+        let parent = temp.path().join("setgid");
+        create_private_dir(&parent).unwrap();
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o2700)).unwrap();
+        assert_eq!(mode(&parent), 0o2700, "filesystem must retain setgid");
+        let nested = parent.join("a/b");
+        create_private_dir(&nested).unwrap();
+        for dir in [&parent, &parent.join("a"), &nested] {
+            assert_eq!(mode(dir), 0o2700, "filesystem must inherit setgid");
+            validate_private_dir(dir).unwrap();
+            create_private_dir(dir).unwrap();
+            assert_eq!(mode(dir), 0o2700);
+        }
+        let file = nested.join("exports/data");
+        drop(create_private_file(&file).unwrap());
+        assert_eq!(mode(file.parent().unwrap()), 0o2700);
+        assert_eq!(mode(&file), 0o600);
+        validate_private_file(&file).unwrap();
+    }
+
     #[test]
     fn unsafe_existing_modes_are_never_repaired() {
         let temp = tempfile::tempdir().unwrap();
@@ -85,7 +108,7 @@ mod unix {
             .unwrap()
             .write_all(b"preserve")
             .unwrap();
-        for unsafe_mode in [0o644, 0o400, 0o1600] {
+        for unsafe_mode in [0o644, 0o400, 0o1600, 0o2600, 0o4600, 0o6600] {
             fs::set_permissions(&file, fs::Permissions::from_mode(unsafe_mode)).unwrap();
             assert!(
                 validate_private_file(&file)
@@ -97,16 +120,18 @@ mod unix {
             assert_eq!(mode(&file), unsafe_mode);
             assert_eq!(fs::read(&file).unwrap(), b"preserve");
         }
-        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
-        assert!(
-            create_private_dir(&dir)
-                .unwrap_err()
-                .to_string()
-                .contains("mode")
-        );
-        assert!(create_private_file(&dir.join("new")).is_err());
-        assert!(!dir.join("new").exists());
-        assert_eq!(mode(&dir), 0o755);
+        for unsafe_mode in [0o755, 0o2750, 0o500, 0o4700, 0o1700, 0o6700, 0o3700] {
+            fs::set_permissions(&dir, fs::Permissions::from_mode(unsafe_mode)).unwrap();
+            assert!(
+                create_private_dir(&dir)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("mode")
+            );
+            assert!(create_private_file(&dir.join("new")).is_err());
+            assert!(!dir.join("new").exists());
+            assert_eq!(mode(&dir), unsafe_mode);
+        }
     }
 
     #[test]
