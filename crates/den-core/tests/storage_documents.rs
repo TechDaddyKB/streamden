@@ -189,3 +189,286 @@ async fn malformed_persisted_fields_and_raw_errors_are_distinct() {
     assert_eq!(error.code(), ErrorCode::new(ErrorCode::INVALID_PARAMS));
     assert!(matches!(error, DocumentError::InvalidInput(_)));
 }
+
+use den_core::{
+    clock::Clock,
+    storage::documents::{Put, WritePolicy},
+};
+use den_protocol::StoredDocument;
+use serde_json::Value;
+use std::sync::{Arc, Mutex};
+
+#[derive(Clone)]
+struct TestClock(Arc<Mutex<Timestamp>>);
+impl Clock for TestClock {
+    fn monotonic(&self) -> tokio::time::Instant {
+        tokio::time::Instant::now()
+    }
+    fn wall(&self) -> Timestamp {
+        *self.0.lock().unwrap()
+    }
+}
+fn clock() -> TestClock {
+    TestClock(Arc::new(Mutex::new(
+        Timestamp::parse("2026-10-20T10:00:00Z").unwrap(),
+    )))
+}
+fn policy() -> WritePolicy {
+    // Arbitrary fixture versions for feature-owned kinds; no production defaults are declared.
+    let versions = [
+        ("action", StoredDocument::ACTION_SCHEMA_VERSION),
+        ("queue", StoredDocument::QUEUE_SCHEMA_VERSION),
+        ("command", StoredDocument::COMMAND_SCHEMA_VERSION),
+        ("timer", StoredDocument::TIMER_SCHEMA_VERSION),
+        (
+            "pending_change",
+            StoredDocument::PENDING_CHANGE_SCHEMA_VERSION,
+        ),
+        ("settings", 3),
+        ("view_state", 3),
+        ("export_meta", 3),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_owned(), v))
+    .collect();
+    WritePolicy::new(versions).unwrap()
+}
+fn put(kind: &str, id: EntityId, data: Value) -> Put {
+    Put {
+        id,
+        document: StoredDocument {
+            kind: kind.into(),
+            schema_version: if matches!(kind, "settings" | "view_state" | "export_meta") {
+                3
+            } else {
+                1
+            },
+            data,
+        },
+        expected_revision: None,
+        updated_by: UpdatedBy::System,
+    }
+}
+fn action(id: EntityId, name: &str) -> Put {
+    put(
+        "action",
+        id,
+        json!({"id":id,"name":name,"enabled":true,"origin":{"kind":"user"},"extra":[1,null]}),
+    )
+}
+fn conflict(error: DocumentError, id: EntityId) {
+    assert_eq!(error.code(), ErrorCode::new(ErrorCode::CONFLICT));
+    assert!(matches!(error,DocumentError::Conflict{id:clash} if clash==id));
+}
+
+#[test]
+fn pure_preparation_guards_versions_identity_revisions_names_and_drafts() {
+    let policy = policy();
+    let now = clock().wall();
+    let id = EntityId::new_v7();
+    let first = policy.prepare(action(id, "Straße"), None, now).unwrap();
+    assert_eq!(first.key.as_deref(), Some("strasse"));
+    assert_eq!(first.name.as_deref(), Some("Straße"));
+    assert_eq!(first.enabled, Some(true));
+    assert_eq!(first.record.revision, 1);
+    assert!(!first.draft);
+    let mut change = action(id, "STRASSE");
+    change.expected_revision = Some(1);
+    let later = Timestamp::parse("2026-10-20T11:00:00Z").unwrap();
+    let second = policy.prepare(change, Some(&first.record), later).unwrap();
+    assert_eq!(second.record.created_at, now);
+    assert_eq!(second.record.updated_at, later);
+    assert_eq!(second.record.revision, 2);
+    assert_eq!(second.record.document.data["revision"], 2);
+    for origin in [
+        None,
+        Some(json!({})),
+        Some(json!({"kind":null})),
+        Some(json!({"kind":"future"})),
+    ] {
+        let mut input = action(id, "absent");
+        input
+            .document
+            .data
+            .as_object_mut()
+            .unwrap()
+            .remove("origin");
+        if let Some(origin) = origin {
+            input.document.data["origin"] = origin;
+        }
+        assert!(!policy.prepare(input, None, now).unwrap().draft);
+    }
+    let draft = policy
+        .prepare(
+            put(
+                "action",
+                id,
+                json!({"name":"draft","enabled":true,"origin":{"kind":"ai_draft"}}),
+            ),
+            None,
+            now,
+        )
+        .unwrap();
+    assert!(draft.draft);
+    assert_eq!(draft.enabled, Some(false));
+    assert_eq!(draft.record.document.data["enabled"], false);
+    let mut old = first.record;
+    for version in [0, 99] {
+        old.document.schema_version = version;
+        assert!(
+            matches!(policy.prepare(action(id,"blocked"),Some(&old),now), Err(DocumentError::UnsupportedVersion { stored,.. }) if stored==version)
+        );
+    }
+    old.document.schema_version = StoredDocument::ACTION_SCHEMA_VERSION;
+    old.revision = i64::MAX as u64;
+    assert!(matches!(
+        policy.prepare(action(id, "overflow"), Some(&old), now),
+        Err(DocumentError::InvalidStored("revision overflow"))
+    ));
+    old.revision = 1;
+    assert!(matches!(
+        policy.prepare(action(EntityId::new_v7(), "identity"), Some(&old), now),
+        Err(DocumentError::InvalidInput(
+            "previous document identity mismatch"
+        ))
+    ));
+    let mut stale = action(id, "stale");
+    stale.expected_revision = Some(2);
+    conflict(policy.prepare(stale, Some(&old), now).unwrap_err(), id);
+    for input in [
+        put("action", id, json!({})),
+        put("timer", id, json!([])),
+        put("timer", id, json!({"enabled":"yes"})),
+    ] {
+        assert!(matches!(
+            policy.prepare(input, None, now),
+            Err(DocumentError::InvalidInput(_))
+        ));
+    }
+}
+
+#[test]
+fn pure_registered_versions_and_full_unicode_casefold() {
+    for (kind, version) in [
+        ("action", 2),
+        ("queue", 2),
+        ("command", 2),
+        ("timer", 2),
+        ("pending_change", 2),
+        ("settings", 0),
+        ("export", 1),
+    ] {
+        assert!(matches!(
+            WritePolicy::new([(kind.into(), version)].into()),
+            Err(DocumentError::InvalidInput(_))
+        ));
+    }
+    let id = EntityId::new_v7();
+    let now = clock().wall();
+    let empty = WritePolicy::new(Default::default()).unwrap();
+    assert!(matches!(
+        empty.prepare(action(id, "unregistered"), None, now),
+        Err(DocumentError::InvalidInput(
+            "document version not registered"
+        ))
+    ));
+    let policy = policy();
+    let mut future = action(id, "future");
+    future.document.schema_version = 99;
+    assert!(matches!(
+        policy.prepare(future, None, now),
+        Err(DocumentError::InvalidInput(
+            "input version must match registered version"
+        ))
+    ));
+    for (name, expected) in [
+        ("Straße", "strasse"),
+        ("Σ", "σ"),
+        ("ς", "σ"),
+        ("ﬃ", "ffi"),
+        ("İ", "i\u{307}"),
+    ] {
+        let prepared = policy.prepare(action(id, name), None, now).unwrap();
+        assert_eq!(prepared.key.as_deref(), Some(expected));
+    }
+}
+
+#[test]
+fn caller_body_ids_are_input_errors() {
+    let policy = policy();
+    let now = clock().wall();
+    let id = EntityId::new_v7();
+    for body_id in [json!("not-a-uuid"), json!(null), json!(42)] {
+        let mut input = action(id, "body id");
+        input.document.data["id"] = body_id;
+        let error = policy.prepare(input, None, now).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::new(ErrorCode::INVALID_PARAMS));
+        assert!(matches!(
+            error,
+            DocumentError::InvalidInput("document id must be an entity id")
+        ));
+    }
+    let mut input = action(id, "different id");
+    input.document.data["id"] = json!(EntityId::new_v7());
+    let error = policy.prepare(input, None, now).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::new(ErrorCode::INVALID_PARAMS));
+    assert!(matches!(
+        error,
+        DocumentError::InvalidInput("document id mismatch")
+    ));
+}
+
+#[test]
+fn expected_revision_on_absent_row_conflicts_with_input_id() {
+    let id = EntityId::new_v7();
+    let mut input = action(id, "absent row");
+    input.expected_revision = Some(1);
+    conflict(
+        policy().prepare(input, None, clock().wall()).unwrap_err(),
+        id,
+    );
+}
+
+#[test]
+fn enabled_is_validated_before_draft_safety_override() {
+    let policy = policy();
+    let now = clock().wall();
+    let id = EntityId::new_v7();
+    for origin in ["user", "ai_draft"] {
+        for enabled in [json!("yes"), json!(null), json!(42), json!({}), json!([])] {
+            let input = put(
+                "action",
+                id,
+                json!({"name":"enabled type","enabled":enabled,"origin":{"kind":origin}}),
+            );
+            let error = policy.prepare(input, None, now).unwrap_err();
+            assert_eq!(error.code(), ErrorCode::new(ErrorCode::INVALID_PARAMS));
+            assert!(matches!(
+                error,
+                DocumentError::InvalidInput("enabled must be a boolean")
+            ));
+        }
+        for enabled in [None, Some(false), Some(true)] {
+            let mut input = put(
+                "action",
+                id,
+                json!({"name":"optional enabled","origin":{"kind":origin}}),
+            );
+            if let Some(enabled) = enabled {
+                input.document.data["enabled"] = json!(enabled);
+            }
+            let prepared = policy.prepare(input, None, now).unwrap();
+            let expected = if origin == "ai_draft" {
+                Some(false)
+            } else {
+                enabled
+            };
+            assert_eq!(prepared.enabled, expected);
+            assert_eq!(prepared.draft, origin == "ai_draft");
+            assert_eq!(
+                prepared.record.document.data.get("enabled"),
+                expected.map(|v| json!(v)).as_ref()
+            );
+        }
+    }
+}
