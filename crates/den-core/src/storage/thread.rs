@@ -5,13 +5,13 @@ use rusqlite::Connection;
 use std::{
     panic::{AssertUnwindSafe, catch_unwind},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, MutexGuard,
         atomic::{AtomicU64, Ordering},
     },
     time::Duration,
 };
 use tokio::{
-    sync::{mpsc, oneshot},
+    sync::{Notify, mpsc, oneshot},
     time::Instant,
 };
 
@@ -58,6 +58,8 @@ impl<T> Reply<T> {
 }
 /// Hooks own sender-free buffer state, never a StorageHandle or command sender. Only the worker
 /// retains the registry; hook implementations must not introduce an indirect sender cycle either.
+/// Return raw Sqlite errors for retryable failures. Spawn, Panicked and Disconnected are reserved
+/// for transport; a hook must not manufacture them. A hook panic terminates the worker.
 pub trait FlushHook: Send + 'static {
     fn flush(&self, conns: &mut StorageConns) -> Result<(), StorageError>;
 }
@@ -75,35 +77,72 @@ struct BacklogState {
     since: Option<Timestamp>,
     last_report: Option<Instant>,
 }
+impl BacklogState {
+    fn deadline(&self) -> Option<Instant> {
+        self.since
+            .and(self.last_report)
+            .map(|last| last + Duration::from_secs(60))
+    }
+    fn take_due(&mut self, now: Instant) -> Option<StorageBacklog> {
+        if self.pending == 0 || self.deadline().is_some_and(|deadline| now < deadline) {
+            return None;
+        }
+        let report = StorageBacklog {
+            dropped: std::mem::take(&mut self.pending),
+            since: self.since.take().unwrap(),
+        };
+        self.last_report = Some(now);
+        Some(report)
+    }
+}
 struct Backlog {
     dropped: AtomicU64,
     state: Mutex<BacklogState>,
     clock: Arc<dyn Clock + Send + Sync>,
-    observer: Box<dyn Fn(StorageBacklog) + Send + Sync>,
+    changed: Notify,
 }
 impl Backlog {
-    fn record_drop(&self) {
-        let report = {
-            let mut state = self.state.lock().unwrap();
-            let now = self.clock.sample();
-            self.dropped.fetch_add(1, Ordering::Relaxed);
-            state.pending = state.pending.saturating_add(1);
-            let since = *state.since.get_or_insert(now.wall);
-            if state.last_report.is_some_and(|last| {
-                now.monotonic
-                    .checked_duration_since(last)
-                    .unwrap_or_default()
-                    < Duration::from_secs(60)
-            }) {
-                return;
-            }
-            let dropped = std::mem::take(&mut state.pending);
-            state.since = None;
-            state.last_report = Some(now.monotonic);
-            StorageBacklog { dropped, since }
-        };
-        // Never invoke external observer code under the accounting lock.
-        (self.observer)(report);
+    fn state(&self) -> MutexGuard<'_, BacklogState> {
+        // A clock panic occurs before any mutation; the accounting remains consistent.
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+    fn record_drop(&self) -> Option<StorageBacklog> {
+        let mut state = self.state();
+        let now = self.clock.sample();
+        self.dropped.fetch_add(1, Ordering::Relaxed);
+        let was_empty = state.pending == 0;
+        state.pending = state.pending.saturating_add(1);
+        state.since.get_or_insert(now.wall);
+        let report = state.take_due(now.monotonic);
+        if was_empty && report.is_none() {
+            self.changed.notify_one();
+        }
+        report
+    }
+}
+/// Sender-free internal port for DEN-116's single scheduler; owns neither observer nor worker.
+/// Keeping clones alive cannot keep command admission open or delay last-sender finalization.
+#[derive(Clone)]
+pub struct BacklogReporter(Arc<Backlog>);
+impl BacklogReporter {
+    /// Earliest gated report time, only while drops are pending. Recheck after every wake/take.
+    pub fn deadline(&self) -> Option<Instant> {
+        self.0.state().deadline()
+    }
+    /// Atomically retire a nonempty due window, sharing the drop-triggered report gate.
+    /// Returns data to the caller; it does not call the observer or emit a wire event.
+    pub fn take_due(&self) -> Option<StorageBacklog> {
+        let mut state = self.0.state();
+        let now = self.0.clock.sample().monotonic;
+        state.take_due(now)
+    }
+    /// Single-consumer wake when suppressed drops first become pending. A retained permit covers
+    /// the deadline-check/await race. Wakes may be stale after a competing take/drop; recheck state.
+    /// Await this alongside the scheduler's existing deadline, never in a polling loop.
+    pub async fn changed(&self) {
+        self.0.changed.notified().await;
     }
 }
 type Job = Box<dyn FnOnce(&mut StorageConns, &mut Hooks) -> bool + Send>;
@@ -115,8 +154,12 @@ enum Command {
 pub struct StorageHandle {
     tx: mpsc::Sender<Command>,
     backlog: Arc<Backlog>,
+    observer: Arc<dyn Fn(StorageBacklog) + Send + Sync>,
 }
 impl StorageHandle {
+    pub fn backlog_reporter(&self) -> BacklogReporter {
+        BacklogReporter(self.backlog.clone())
+    }
     /// Cumulative full-queue rejections, independent of report retirement.
     pub fn dropped(&self) -> u64 {
         self.backlog.dropped.load(Ordering::Relaxed)
@@ -178,7 +221,10 @@ impl StorageHandle {
             JobClass::Droppable => match self.tx.try_send(command) {
                 Ok(()) => (),
                 Err(mpsc::error::TrySendError::Full(_)) => {
-                    self.backlog.record_drop();
+                    if let Some(report) = self.backlog.record_drop() {
+                        // Never invoke external observer code under the accounting lock.
+                        (self.observer)(report);
+                    }
                     return Ok(Admission::Dropped);
                 }
                 Err(mpsc::error::TrySendError::Closed(_)) => {
@@ -202,10 +248,13 @@ impl StorageWorker {
     ) -> Result<Self, StorageError> {
         Self::start_with_backlog(open, close, Arc::new(SystemClock), |_| {}).await
     }
-    /// Drop-triggered reports: first drop immediately, then at most once per minute. Unreported
-    /// drops accumulate until another drop passes the monotonic gate, even across idle periods.
-    /// Clock/observer must be fast, nonpanicking and sender-free; observer runs on the rejecting
-    /// caller, outside locks (concurrent callbacks may overlap). No task or idle timer is created.
+    /// First drop reports immediately; later reports share a monotonic one-minute gate with
+    /// BacklogReporter::take_due. Pending tails wake the future DEN-116 scheduler via changed().
+    /// No task, timer, publisher or forced close report is created here.
+    /// Clock/observer are trusted, fast, nonpanicking and sender-free. A clock panic propagates
+    /// to that caller before counting its rejection; subsequent accounting recovers unchanged.
+    /// Observer runs outside locks on the rejecting caller (callbacks may overlap); an observer
+    /// panic propagates after report retirement, with no delivery retry.
     pub async fn start_with_backlog(
         open: impl FnOnce() -> Result<StorageConns, StorageError> + Send + 'static,
         close: impl FnOnce(StorageConns) -> Result<(), StorageError> + Send + 'static,
@@ -258,8 +307,9 @@ impl StorageWorker {
                     dropped: AtomicU64::new(0),
                     state: Mutex::new(BacklogState::default()),
                     clock,
-                    observer: Box::new(observer),
+                    changed: Notify::new(),
                 }),
+                observer: Arc::new(observer),
             },
             done,
         })

@@ -617,3 +617,241 @@ async fn backlog_fake_time_gate_aggregates_without_idle_reports() {
         Err(mpsc::TryRecvError::Empty)
     ));
 }
+
+struct ReportClock {
+    sample: std::sync::Mutex<den_core::clock::ClockSample>,
+    panic_once: std::sync::atomic::AtomicBool,
+}
+impl ReportClock {
+    fn new() -> Self {
+        Self {
+            sample: std::sync::Mutex::new(den_core::clock::ClockSample {
+                monotonic: tokio::time::Instant::now(),
+                wall: den_protocol::Timestamp::from_unix_millis(1000).unwrap(),
+            }),
+            panic_once: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+    fn set(&self, origin: tokio::time::Instant, seconds: u64, wall: i64) {
+        *self.sample.lock().unwrap() = den_core::clock::ClockSample {
+            monotonic: origin + std::time::Duration::from_secs(seconds),
+            wall: den_protocol::Timestamp::from_unix_millis(wall).unwrap(),
+        };
+    }
+}
+impl den_core::clock::Clock for ReportClock {
+    fn monotonic(&self) -> tokio::time::Instant {
+        self.sample.lock().unwrap().monotonic
+    }
+    fn wall(&self) -> den_protocol::Timestamp {
+        self.sample.lock().unwrap().wall
+    }
+    fn sample(&self) -> den_core::clock::ClockSample {
+        assert!(
+            !self
+                .panic_once
+                .swap(false, std::sync::atomic::Ordering::Relaxed),
+            "injected one-shot clock panic"
+        );
+        *self.sample.lock().unwrap()
+    }
+}
+async fn reject(handle: &StorageHandle) {
+    assert!(matches!(
+        handle.submit(JobClass::Droppable, |_| ()).await.unwrap(),
+        Admission::Dropped
+    ));
+}
+#[tokio::test]
+async fn backlog_tail_wakes_and_retires_without_new_drop_or_sender() {
+    use den_core::clock::Clock;
+    use std::{sync::Arc, time::Duration};
+    let clock = Arc::new(ReportClock::new());
+    let origin = clock.monotonic();
+    let (reports, observed) = mpsc::channel();
+    let (closed, finalized) = oneshot::channel();
+    let worker = StorageWorker::start_with_backlog(
+        open,
+        move |conns| {
+            let result = conns.close();
+            let _ = closed.send(result);
+            Ok(())
+        },
+        clock.clone(),
+        move |report| reports.send(report).unwrap(),
+    )
+    .await
+    .unwrap();
+    let reporter = worker.handle.backlog_reporter();
+    let monitor = reporter.clone();
+    assert_eq!(reporter.deadline(), None);
+    assert_eq!(reporter.take_due(), None);
+    let (release, active) = held_job(&worker.handle, false).await;
+    let replies = fill(&worker.handle).await;
+    let mut wake = pin!(reporter.changed());
+    pending(wake.as_mut()).await;
+    reject(&worker.handle).await;
+    assert_eq!(observed.try_recv().unwrap().dropped, 1);
+    assert_eq!(reporter.deadline(), None);
+    pending(wake.as_mut()).await; // An immediate report creates no pending deadline.
+    clock.set(origin, 1, 2000);
+    reject(&worker.handle).await;
+    wake.await; // First suppressed drop wakes an already waiting scheduler.
+    assert_eq!(monitor.deadline(), Some(origin + Duration::from_secs(60)));
+    let mut next_wake = pin!(reporter.changed());
+    pending(next_wake.as_mut()).await;
+    reject(&worker.handle).await;
+    pending(next_wake.as_mut()).await; // Same pending window needs no second wake.
+    clock.set(origin, 59, 999_000);
+    assert_eq!(monitor.take_due(), None);
+    clock.set(origin, 60, -1000);
+    let report = monitor.take_due().unwrap();
+    assert_eq!((report.dropped, report.since.unix_millis()), (2, 2000));
+    assert_eq!(reporter.take_due(), None);
+    assert_eq!(reporter.deadline(), None);
+    assert!(matches!(
+        observed.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+    reject(&worker.handle).await; // The take reserved the same gate as direct reports.
+    next_wake.await;
+    assert_eq!(monitor.deadline(), Some(origin + Duration::from_secs(120)));
+    assert_eq!(monitor.take_due(), None);
+    clock.set(origin, 120, 3000);
+    reject(&worker.handle).await; // Direct report wins; a subsequent take cannot duplicate it.
+    let report = observed.try_recv().unwrap();
+    assert_eq!((report.dropped, report.since.unix_millis()), (2, -1000));
+    assert_eq!(monitor.take_due(), None);
+    clock.set(origin, 121, 4000);
+    reject(&worker.handle).await;
+    reporter.changed().await; // Retained permit also covers a late subscriber.
+    clock.set(origin, 180, 5000);
+    let report = reporter.take_due().unwrap();
+    assert_eq!((report.dropped, report.since.unix_millis()), (1, 4000));
+    reject(&worker.handle).await;
+    assert_eq!(monitor.take_due(), None);
+    assert_eq!(worker.handle.dropped(), 7);
+    release.send(()).unwrap();
+    drain(active, replies).await;
+    drop(worker);
+    finalized.await.unwrap().unwrap(); // Both reporter clones remain alive.
+    clock.set(origin, 240, 6000);
+    let report = monitor.take_due().unwrap();
+    assert_eq!((report.dropped, report.since.unix_millis()), (1, 5000));
+    assert_eq!(reporter.take_due(), None);
+    assert_eq!(monitor.deadline(), None);
+    assert!(matches!(
+        observed.try_recv(),
+        Err(mpsc::TryRecvError::Disconnected)
+    ));
+    // Idle has no report or new notification after the retained pending-transition permit.
+    reporter.changed().await;
+    let mut idle = pin!(reporter.changed());
+    pending(idle.as_mut()).await;
+}
+#[tokio::test]
+async fn one_clock_panic_does_not_poison_future_admission_or_pending_take() {
+    use den_core::clock::Clock;
+    use std::{
+        panic::AssertUnwindSafe,
+        sync::{Arc, atomic::Ordering},
+    };
+    let clock = Arc::new(ReportClock::new());
+    let origin = clock.monotonic();
+    let (reports, observed) = mpsc::channel();
+    let worker = StorageWorker::start_with_backlog(
+        open,
+        StorageConns::close,
+        clock.clone(),
+        move |report| reports.send(report).unwrap(),
+    )
+    .await
+    .unwrap();
+    let reporter = worker.handle.backlog_reporter();
+    let (release, active) = held_job(&worker.handle, false).await;
+    let replies = fill(&worker.handle).await;
+    reject(&worker.handle).await;
+    assert_eq!(observed.try_recv().unwrap().dropped, 1);
+    clock.set(origin, 1, 2000);
+    reject(&worker.handle).await;
+    clock.panic_once.store(true, Ordering::Relaxed);
+    let handle = worker.handle.clone();
+    let panicked = tokio::spawn(async move { reject(&handle).await })
+        .await
+        .unwrap_err();
+    assert!(panicked.is_panic());
+    reject(&worker.handle).await; // The poisoned accounting lock recovers, including across clones.
+    assert_eq!(worker.handle.dropped(), 3); // Clock-failed attempt was not counted.
+    clock.set(origin, 60, 3000);
+    clock.panic_once.store(true, Ordering::Relaxed);
+    assert!(std::panic::catch_unwind(AssertUnwindSafe(|| reporter.take_due())).is_err());
+    let report = reporter.take_due().unwrap();
+    assert_eq!((report.dropped, report.since.unix_millis()), (2, 2000));
+    assert_eq!(reporter.take_due(), None);
+    assert!(matches!(
+        observed.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+    release.send(()).unwrap();
+    drain(active, replies).await;
+    worker.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn competing_reporter_clones_and_drop_share_one_reservation() {
+    use den_core::clock::Clock;
+    use std::sync::{Arc, Barrier};
+    let clock = Arc::new(ReportClock::new());
+    let origin = clock.monotonic();
+    let (reports, observed) = mpsc::channel();
+    let worker = StorageWorker::start_with_backlog(
+        open,
+        StorageConns::close,
+        clock.clone(),
+        move |report| reports.send(report).unwrap(),
+    )
+    .await
+    .unwrap();
+    let reporter = worker.handle.backlog_reporter();
+    let (release, active) = held_job(&worker.handle, false).await;
+    let replies = fill(&worker.handle).await;
+    reject(&worker.handle).await;
+    assert_eq!(observed.try_recv().unwrap().dropped, 1);
+    clock.set(origin, 1, 2000);
+    reject(&worker.handle).await;
+    clock.set(origin, 60, 3000);
+    let barrier = Arc::new(Barrier::new(3));
+    let mut takers = Vec::new();
+    for _ in 0..2 {
+        let (reporter, barrier) = (reporter.clone(), barrier.clone());
+        takers.push(std::thread::spawn(move || {
+            barrier.wait();
+            reporter.take_due()
+        }));
+    }
+    barrier.wait();
+    reject(&worker.handle).await;
+    let mut reports: Vec<_> = takers
+        .into_iter()
+        .filter_map(|taker| taker.join().unwrap())
+        .collect();
+    reports.extend(observed.try_iter());
+    assert_eq!(reports.len(), 1); // Exactly one winner, regardless of lock acquisition order.
+    assert_eq!(reports[0].since.unix_millis(), 2000);
+    assert_eq!(reporter.take_due(), None);
+    clock.set(origin, 120, 4000);
+    let tail = reporter.take_due();
+    if let Some(tail) = tail {
+        assert_eq!(tail.since.unix_millis(), 3000);
+    }
+    assert_eq!(
+        reports[0].dropped + tail.map_or(0, |report| report.dropped),
+        2
+    );
+    assert_eq!(reporter.take_due(), None);
+    assert_eq!(reporter.deadline(), None);
+    assert_eq!(worker.handle.dropped(), 3);
+    release.send(()).unwrap();
+    drain(active, replies).await;
+    worker.close().await.unwrap();
+}
