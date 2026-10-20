@@ -744,7 +744,8 @@ comparisons but is silent when `min > max`. The reviewed code accepts comparable
 (e.g. `[3, 1]` or later-to-earlier timestamps) at compile time and they never match.
 Options: (a) accept the current empty-range behavior; (b) reject reversed bounds at compile/save time
 with `INVALID_PARAMS`, making the authoring error visible before the trigger is used.
-**Recommendation:** (b), as recommended by the reviewer; a filter that can never match is usually an
+**Recommendation:** reject reversed bounds at save time, as recommended by the reviewer; the
+compile-time part of option (b) remains an owner choice. A filter that can never match is usually an
 unintentional authoring error. This is a recommendation, not an accepted policy or implementation authorization.
 **Impact / owner readiness:** DEN-341 is the queued human decision card on the
 [streamden board](agents/board.md). Choose (a) or (b), or identify an already accepted normative clarification,
@@ -800,9 +801,10 @@ is validated against the field's schema; [Spec 03 §6.2](spec/03-engine.md#62-fi
 with the catalog field's type. Current [`FilterableField`](../crates/den-protocol/src/catalog.rs) has
 `field`, `ops`, `optionsFrom`, `specificity` and `caseInsensitive`, with no schema/type member.
 `EventDef.payload` does carry a payload schema; [`Event`](../crates/den-protocol/src/events.rs) carries
-normalized `user` and `platform` separately. Operator-shape checks exist, but schema-known field/operand
-validation is unresolved: e.g. `contains 1` on a string field compiles and never matches. This is the full
-schema-validation contract gap identified by the review, not a new Medium or blocking DEN-318 finding.
+normalized `user` and `platform` separately. Operator-shape checks exist in the reviewed DEN-318 code
+at `cb634fd3`; schema-known field/operand validation remains unresolved: e.g. `contains 1` on a string
+field compiles and never matches. This is the full schema-validation contract gap identified by the
+review, not a new Medium or blocking DEN-318 finding.
 Options: (a) resolve the field constraint from the existing event payload schema and supply a compiled
 validator internally without a wire addition, **if** that source can cover reserved `user`/`platform` and each
 operator's operand shape; (b) use a dedicated ADR and contract task to design a catalog type constraint.
