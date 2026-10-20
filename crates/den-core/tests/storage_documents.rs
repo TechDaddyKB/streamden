@@ -994,3 +994,333 @@ async fn immediate_write_lock_precedes_read_and_prepare() {
     }
     worker.close().await.unwrap();
 }
+
+#[tokio::test]
+async fn batch_rolls_back_bodies_revisions_names_and_metadata() {
+    let (_temp, worker, docs) = harness().await;
+    let (writer, clock) = writer(&docs);
+    let id = EntityId::new_v7();
+    let before = writer.put(action(id, "original")).await.unwrap();
+    *clock.0.lock().unwrap() = Timestamp::parse("2026-10-20T12:00:00Z").unwrap();
+    let fresh = EntityId::new_v7();
+    let mut stale = action(id, "stale");
+    stale.expected_revision = Some(1);
+    conflict(
+        writer
+            .batch_put(vec![action(id, "changed"), action(fresh, "fresh"), stale])
+            .await
+            .unwrap_err(),
+        id,
+    );
+    conflict(
+        writer
+            .batch_put(vec![action(id, "changed"), action(fresh, "CHANGED")])
+            .await
+            .unwrap_err(),
+        id,
+    );
+    let after = docs.get("action".into(), id).await.unwrap().unwrap();
+    assert_eq!(after.document, before.document);
+    assert_eq!(after.revision, before.revision);
+    assert_eq!(after.created_at, before.created_at);
+    assert_eq!(after.updated_at, before.updated_at);
+    assert_eq!(after.updated_by, before.updated_by);
+    assert!(docs.get("action".into(), fresh).await.unwrap().is_none());
+    // Rollback restores the name index as well as the body.
+    writer.put(action(fresh, "changed")).await.unwrap();
+    raw(&worker.handle, move |c| {
+        let metadata: (String, String, bool) = c
+            .config
+            .query_row(
+                "SELECT name,name_key,enabled FROM documents WHERE id=?1",
+                [id.to_string()],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(metadata, ("original".into(), "original".into(), true));
+    })
+    .await;
+    assert!(writer.batch_put(vec![]).await.unwrap().is_empty());
+    worker.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn batch_success_assigns_revisions_in_order_and_keeps_draft_guards() {
+    let (_temp, worker, docs) = harness().await;
+    let (writer, clock) = writer(&docs);
+    for kind in ["action", "command", "timer"] {
+        let id = EntityId::new_v7();
+        let mut second = put(kind, id, json!({"name":kind,"revision":99}));
+        second.expected_revision = Some(1);
+        second.updated_by = UpdatedBy::Mcp;
+        let records = writer
+            .batch_put(vec![put(kind, id, json!({"name":kind})), second])
+            .await
+            .unwrap();
+        assert_eq!(
+            records.iter().map(|r| r.revision).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        for record in &records {
+            assert_eq!(record.document.data["revision"], record.revision);
+            assert_eq!(record.created_at, clock.wall());
+            assert_eq!(record.updated_at, clock.wall());
+        }
+        let stored = docs.get(kind.into(), id).await.unwrap().unwrap();
+        assert_eq!(stored.document, records[1].document);
+        assert_eq!(stored.revision, 2);
+        assert_eq!(stored.updated_by, UpdatedBy::Mcp);
+    }
+    let live = EntityId::new_v7();
+    let draft = EntityId::new_v7();
+    let draft_input = put(
+        "action",
+        draft,
+        json!({"name":"STRASSE","enabled":true,"origin":{"kind":"ai_draft","draftOf":live}}),
+    );
+    let records = writer
+        .batch_put(vec![action(live, "Straße"), draft_input])
+        .await
+        .unwrap();
+    assert_eq!(records[1].document.data["enabled"], false);
+    conflict(
+        writer
+            .batch_put(vec![action(draft, "strasse")])
+            .await
+            .unwrap_err(),
+        live,
+    );
+    assert_eq!(
+        docs.get("action".into(), draft)
+            .await
+            .unwrap()
+            .unwrap()
+            .revision,
+        1
+    );
+    worker.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn delete_checks_revision_kind_version_and_view_state_isolation() {
+    let (temp, worker, docs) = harness().await;
+    let (writer, _) = writer(&docs);
+    let id = EntityId::new_v7();
+    let kinds = [
+        "view_state",
+        "action",
+        "queue",
+        "command",
+        "timer",
+        "settings",
+        "pending_change",
+        "export_meta",
+    ];
+    for kind in kinds {
+        writer
+            .put(put(kind, id, json!({"name":"same","enabled":true})))
+            .await
+            .unwrap();
+    }
+    // A separate writer lock must prevent deletion; the row stays intact.
+    let conn = Connection::open(temp.path().join("config.db")).unwrap();
+    conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+    assert!(matches!(
+        writer.delete("action".into(), id, Some(1)).await,
+        Err(DocumentError::Sqlite(_))
+    ));
+    conn.execute_batch("ROLLBACK").unwrap();
+    for kind in kinds {
+        conflict(
+            writer.delete(kind.into(), id, Some(2)).await.unwrap_err(),
+            id,
+        );
+        assert!(docs.get(kind.into(), id).await.unwrap().is_some());
+        assert!(writer.delete(kind.into(), id, Some(1)).await.unwrap());
+        assert!(docs.get(kind.into(), id).await.unwrap().is_none());
+        assert!(!writer.delete(kind.into(), id, None).await.unwrap());
+        conflict(
+            writer.delete(kind.into(), id, Some(1)).await.unwrap_err(),
+            id,
+        );
+        if kind == "view_state" {
+            assert_eq!(
+                docs.get("action".into(), id)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .revision,
+                1
+            );
+        }
+    }
+    let empty = docs.writer(
+        WritePolicy::new(Default::default()).unwrap(),
+        Arc::new(clock()),
+    );
+    for error in [
+        empty.delete("action".into(), id, None).await.unwrap_err(),
+        empty
+            .batch_put(vec![action(id, "unregistered")])
+            .await
+            .unwrap_err(),
+        writer.delete("export".into(), id, None).await.unwrap_err(),
+    ] {
+        assert_eq!(error.code(), ErrorCode::new(ErrorCode::INVALID_PARAMS));
+    }
+    worker.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn delete_and_batch_preserve_older_and_newer_rows_without_migrations() {
+    let (_temp, worker, docs) = harness().await;
+    let (writer, _) = writer(&docs);
+    for version in [2, 99] {
+        let id = EntityId::new_v7();
+        writer
+            .put(put("view_state", id, json!({"forward":{"unknown":true}})))
+            .await
+            .unwrap();
+        raw(&worker.handle, move |c| {
+            c.config
+                .execute(
+                    "UPDATE documents SET schema_version=?1 WHERE id=?2",
+                    params![version, id.to_string()],
+                )
+                .unwrap();
+        })
+        .await;
+        let before = docs.get("view_state".into(), id).await.unwrap().unwrap();
+        let fresh = EntityId::new_v7();
+        for error in [
+            writer
+                .delete("view_state".into(), id, None)
+                .await
+                .unwrap_err(),
+            writer
+                .batch_put(vec![
+                    action(fresh, "rolled-back"),
+                    put("view_state", id, json!({})),
+                ])
+                .await
+                .unwrap_err(),
+        ] {
+            assert_eq!(error.code(), ErrorCode::new(ErrorCode::INVALID_STATE));
+            assert!(
+                matches!(error, DocumentError::UnsupportedVersion { id: clash, stored, supported: 3 } if clash == id && stored == version)
+            );
+        }
+        let after = docs.get("view_state".into(), id).await.unwrap().unwrap();
+        assert_eq!(after.document, before.document);
+        assert_eq!(after.revision, before.revision);
+        assert_eq!(after.created_at, before.created_at);
+        assert_eq!(after.updated_at, before.updated_at);
+        assert_eq!(after.updated_by, before.updated_by);
+        assert!(docs.get("action".into(), fresh).await.unwrap().is_none());
+    }
+    worker.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn batch_invalid_inputs_and_overflow_roll_back_prior_writes() {
+    let (_temp, worker, docs) = harness().await;
+    let (writer, _) = writer(&docs);
+    let id = EntityId::new_v7();
+    let mut version = action(id, "bad");
+    version.document.schema_version = 99;
+    for input in [
+        version,
+        put("export", id, json!({})),
+        put("action", id, json!({})),
+        put("queue", id, json!({"name":null})),
+        put("command", id, json!({"name":42})),
+        put("timer", id, json!(null)),
+        put("timer", id, json!({"enabled":"yes"})),
+        put("timer", id, json!({"id":EntityId::new_v7()})),
+        put("timer", id, json!({"id":"bad"})),
+        put("view_state", id, nested_body(200)),
+    ] {
+        let fresh = EntityId::new_v7();
+        let error = writer
+            .batch_put(vec![action(fresh, "rolled-back"), input])
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::new(ErrorCode::INVALID_PARAMS));
+        assert!(docs.get("action".into(), fresh).await.unwrap().is_none());
+    }
+    writer.put(action(id, "max")).await.unwrap();
+    raw(&worker.handle, move |c| {
+        c.config
+            .execute(
+                "UPDATE documents SET revision=?1 WHERE id=?2",
+                params![i64::MAX, id.to_string()],
+            )
+            .unwrap();
+    })
+    .await;
+    let fresh = EntityId::new_v7();
+    assert!(matches!(
+        writer
+            .batch_put(vec![action(fresh, "rolled-back"), action(id, "overflow")])
+            .await,
+        Err(DocumentError::InvalidStored("revision overflow"))
+    ));
+    let after = docs.get("action".into(), id).await.unwrap().unwrap();
+    assert_eq!(after.revision, i64::MAX as u64);
+    assert_eq!(after.document.data["name"], "max");
+    assert!(docs.get("action".into(), fresh).await.unwrap().is_none());
+    worker.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn batch_sql_failure_rolls_back_other_kinds_and_success_keeps_view_state_separate() {
+    let (_temp, worker, docs) = harness().await;
+    let (writer, _) = writer(&docs);
+    let id = EntityId::new_v7();
+    let before = writer.put(action(id, "before")).await.unwrap();
+    raw(&worker.handle, |c| {
+        c.config
+            .execute_batch(
+                "CREATE TRIGGER fail_timer AFTER INSERT ON documents
+            WHEN NEW.kind='timer' BEGIN SELECT RAISE(ABORT,'injected batch failure'); END",
+            )
+            .unwrap();
+    })
+    .await;
+    let requests = vec![
+        action(id, "after"),
+        put("view_state", id, json!({"x":1})),
+        put("timer", id, json!({})),
+    ];
+    assert!(matches!(
+        writer.batch_put(requests.clone()).await,
+        Err(DocumentError::Sqlite(_))
+    ));
+    let after = docs.get("action".into(), id).await.unwrap().unwrap();
+    assert_eq!(after.document, before.document);
+    assert_eq!(after.revision, before.revision);
+    for kind in ["view_state", "timer"] {
+        assert!(docs.get(kind.into(), id).await.unwrap().is_none());
+    }
+    raw(&worker.handle, |c| {
+        c.config.execute_batch("DROP TRIGGER fail_timer").unwrap();
+    })
+    .await;
+    let records = writer.batch_put(requests).await.unwrap();
+    assert_eq!(
+        records.iter().map(|r| r.revision).collect::<Vec<_>>(),
+        vec![2, 1, 1]
+    );
+    assert!(records[1].document.data.get("revision").is_none());
+    for record in records {
+        assert_eq!(
+            docs.get(record.document.kind.clone(), id)
+                .await
+                .unwrap()
+                .unwrap()
+                .document,
+            record.document
+        );
+    }
+    worker.close().await.unwrap();
+}
