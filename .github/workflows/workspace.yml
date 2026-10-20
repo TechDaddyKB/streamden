@@ -102,6 +102,9 @@ jobs:
       - name: Windows storage path unit tests
         if: runner.os == 'Windows'
         run: cargo test -p den-core --locked --lib storage::paths
+      - name: Windows document storage integration tests
+        if: runner.os == 'Windows'
+        run: cargo test -p den-core --locked --test storage_documents
       - name: Clippy
         if: runner.os == 'Linux'
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
