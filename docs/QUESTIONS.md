@@ -823,3 +823,56 @@ remain required. Recording Q-E11–Q-E14 neither waives those gates nor complete
 No account, key or console operation is needed to answer these questions, so no registration runbook is needed.
 **Status:** UNANSWERED.
 **Answer:**
+
+### Q-E15 — What precision, promotion and overflow rules should variable arithmetic use? 🟥 (DEN-372)
+Raised by [DEN-84 / DEN-372](agents/board.md), preflight project file 303
+(`context/den84-numeric-contract-hold-4f263991.json`, SHA-256
+`444b450f27f66bc38a2ea8b721b8aabef92db7cf4133c01604b8bb89e1f544e5`).
+[Spec 03 §11.2](spec/03-engine.md#112-operations) requires atomic `increment`/`decrement` on a number
+or a missing variable (already treated as `0`); [§11.4](spec/03-engine.md#114-storage-behaviour) defines
+memory and persistence behavior. [Spec 02 §6.3](spec/02-protocol.md#63-variables-and-the-run-context) allows
+JSON numbers, and actual [`VariableRecord.value`](../crates/den-protocol/src/domain.rs) is
+`serde_json::Value`. These sources do not settle integer precision, mixed integer/float promotion,
+rounding or overflow. The current JSON number representation supports `i64`/`u64` integers and finite
+`f64` values; choosing arithmetic rules over those representations remains an owner decision.
+
+**Observed reproductions, not accepted VarStore behavior:** file 303's locked JSON-library probe
+preserves stored integer `9007199254740993`, but converting it to `f64` produces `9007199254740992`.
+That route yields `9007199254740992` for both `9007199254740993 + 1` (mathematically
+`9007199254740994`) and `9007199254740993 + 0.5` (mathematically `9007199254740993.5`).
+`u64::MAX + 1` fails checked `u64` addition. Finite operands `1e308 + 1e308` produce infinity;
+`Number::from_f64` rejects it, whereas generic `serde_json::to_value` serializes it as `null`.
+These probes reproduce representation hazards only: no VarStore implementation or arithmetic policy
+was accepted, and neither null substitution nor silent wrapping/saturation is an approved response.
+
+Options (all proposed, none accepted):
+
+- **(a) Checked exact integers within the existing JSON integer domain.** For two integer operands,
+  compute exactly across the signed `i64` / unsigned `u64` domain (`-9223372036854775808` through
+  `18446744073709551615`); reject a result outside that domain atomically, rather than promote it
+  silently to float. If either operand is floating point, convert both to IEEE 754 binary64 using
+  round-to-nearest, ties-to-even, then perform binary64 arithmetic with that rounding rule. Document
+  the resulting integer-conversion and mixed-float rounding loss explicitly; reject nonfinite results.
+  On rejection, leave the entry and its metadata unchanged and emit no update. Reusing existing
+  `INVALID_PARAMS` ([Spec 02 §8.5](spec/02-protocol.md#85-errors)) is proposed for these rejections;
+  the owner must approve that mapping as well as the numeric rules.
+- **(b) Binary64 for all arithmetic.** Convert even integer-only operands to binary64; document the
+  loss of integer precision (including the examples above) and define round-to-nearest, ties-to-even
+  for conversion and arithmetic. Reject nonfinite results atomically; the rejection error mapping
+  also needs an explicit decision.
+- **(c) Exact larger-number representation.** Define an exact integer/decimal representation beyond
+  the current JSON number domain through a dedicated ADR and contract task, including serialization,
+  mixed-number rules and dependency/license review before implementation.
+
+**Recommendation:** (a), conditional on the owner's explicit approval of the integer range, promotion,
+rounding, atomic rejection and error mapping. It preserves exact integer arithmetic where the current
+representation can hold the result while making mixed-float rounding visible. This is a recommendation
+only, not an owner answer, accepted design or implementation authorization.
+**Impact / owner readiness:** [DEN-371](agents/board.md) queues the owner's choice or an already accepted
+normative clarification. DEN-84 arithmetic and full acceptance remain held until resolved; the parent
+can continue separately scoped, unblocked non-arithmetic work. This question introduces no changes to
+namespaces, provenance flags, persistence flags, defaults or operation parameters. Missing-as-`0` is
+already accepted. Independent Grok documentation QA, current Docs CI and exact integration remain
+required for DEN-372; recording the question does not complete DEN-84 or resolve DEN-371.
+**Status:** UNANSWERED.
+**Answer:**
