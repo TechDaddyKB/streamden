@@ -1,8 +1,8 @@
 use den_core::storage::thread::{
-    Admission, JobClass, Reply, StorageConns, StorageError, StorageWorker,
+    Admission, CAPACITY, JobClass, Reply, StorageConns, StorageError, StorageHandle, StorageWorker,
 };
 use rusqlite::Connection;
-use std::{future::Future, sync::mpsc, task::Poll};
+use std::{future::Future, pin::pin, sync::mpsc, task::Poll};
 use tokio::sync::oneshot;
 
 fn open() -> Result<StorageConns, StorageError> {
@@ -149,5 +149,253 @@ async fn close_failure_and_panic_are_reported() {
             handle.submit(JobClass::MustLand, |_| ()).await,
             Err(StorageError::Disconnected)
         ));
+    }
+}
+
+// The sender is the release guard: dropping it on assertion unwind also unblocks the owner.
+async fn held_job(handle: &StorageHandle, panic: bool) -> (mpsc::Sender<()>, Reply<()>) {
+    let (started, running) = oneshot::channel();
+    let (release, held) = mpsc::channel();
+    let active = accepted(
+        handle
+            .submit(JobClass::MustLand, move |_| {
+                let _ = started.send(());
+                let _ = held.recv(); // Only the dedicated storage thread blocks.
+                assert!(!panic, "injected active job panic");
+            })
+            .await,
+    );
+    running.await.unwrap();
+    (release, active)
+}
+async fn fill(handle: &StorageHandle) -> Vec<Reply<usize>> {
+    assert_eq!(CAPACITY, 4096);
+    let mut replies = Vec::new();
+    for i in 0..4096 {
+        replies.push(accepted(
+            handle.submit(JobClass::Droppable, move |_| i).await,
+        ));
+    }
+    replies
+}
+async fn drain(active: Reply<()>, replies: Vec<Reply<usize>>) {
+    active.wait().await.unwrap();
+    assert_eq!(replies.len(), 4096);
+    for (i, reply) in replies.into_iter().enumerate() {
+        assert_eq!(reply.wait().await.unwrap(), i);
+    }
+}
+#[tokio::test]
+async fn droppable_jobs_counted_when_full() {
+    let worker = StorageWorker::start(open, StorageConns::close)
+        .await
+        .unwrap();
+    let (release, active) = held_job(&worker.handle, false).await;
+    let replies = fill(&worker.handle).await;
+    let handle = worker.handle.clone();
+    assert_eq!(handle.dropped(), 0);
+    assert!(matches!(
+        handle
+            .submit(JobClass::Droppable, |_| panic!("rejected job ran"))
+            .await
+            .unwrap(),
+        Admission::Dropped
+    ));
+    assert_eq!(worker.handle.dropped(), 1);
+    release.send(()).unwrap();
+    drain(active, replies).await;
+    worker.close().await.unwrap();
+    assert!(matches!(
+        handle.submit(JobClass::Droppable, |_| ()).await,
+        Err(StorageError::Disconnected)
+    ));
+    assert_eq!(handle.dropped(), 1); // Closed is not counted as Full.
+}
+#[tokio::test]
+async fn must_land_jobs_wait_when_full() {
+    let worker = StorageWorker::start(open, StorageConns::close)
+        .await
+        .unwrap();
+    let (release, active) = held_job(&worker.handle, false).await;
+    let replies = fill(&worker.handle).await;
+    let mut canceled = Box::pin(
+        worker
+            .handle
+            .submit(JobClass::MustLand, |_| panic!("canceled admission ran")),
+    );
+    pending(canceled.as_mut()).await;
+    drop(canceled);
+    let handle = worker.handle.clone();
+    let mut waiting = pin!(handle.submit(JobClass::MustLand, |_| 42));
+    pending(waiting.as_mut()).await;
+    release.send(()).unwrap();
+    let reply = accepted(waiting.await);
+    drain(active, replies).await;
+    assert_eq!(reply.wait().await.unwrap(), 42);
+    assert_eq!(handle.dropped(), 0);
+    worker.close().await.unwrap();
+}
+#[tokio::test]
+async fn panic_disconnects_queued_replies_and_waiting_admissions() {
+    let (closed, finalized) = oneshot::channel();
+    let worker = StorageWorker::start(open, move |conns| {
+        conns.close()?;
+        let _ = closed.send(());
+        Err(StorageError::Sqlite(rusqlite::Error::InvalidQuery))
+    })
+    .await
+    .unwrap();
+    let (release, active) = held_job(&worker.handle, true).await;
+    let replies = fill(&worker.handle).await;
+    let handle = worker.handle.clone();
+    let mut waiting = pin!(handle.submit(JobClass::MustLand, |_| 42));
+    pending(waiting.as_mut()).await;
+    release.send(()).unwrap();
+    assert!(matches!(active.wait().await, Err(StorageError::Panicked)));
+    // Closing the receiver can race a waiting sender's acquisition of a freed slot.
+    match waiting.await {
+        Ok(Admission::Accepted(reply)) => assert!(matches!(
+            reply.wait().await,
+            Err(StorageError::Disconnected)
+        )),
+        Err(StorageError::Disconnected) => (),
+        _ => panic!("unexpected admission"),
+    }
+    for reply in replies {
+        assert!(matches!(
+            reply.wait().await,
+            Err(StorageError::Disconnected)
+        ));
+    }
+    assert!(matches!(worker.close().await, Err(StorageError::Panicked)));
+    finalized.await.unwrap(); // Finalizer ran, but its error did not replace the job panic.
+    assert!(matches!(
+        handle.submit(JobClass::Droppable, |_| ()).await,
+        Err(StorageError::Disconnected)
+    ));
+    assert_eq!(handle.dropped(), 0);
+}
+#[tokio::test]
+async fn canceled_close_drains_accepted_jobs_despite_live_handles() {
+    let (closed, finalized) = oneshot::channel();
+    let worker = StorageWorker::start(open, move |conns| {
+        let result = conns.close();
+        let _ = closed.send(result);
+        Ok(())
+    })
+    .await
+    .unwrap();
+    let handle = worker.handle.clone();
+    let (release, active) = held_job(&handle, false).await;
+    let queued = accepted(handle.submit(JobClass::MustLand, |_| 9).await);
+    let mut closing = Box::pin(worker.close());
+    // Queue has space: this poll admits Stop, then waits for the held worker's finalization.
+    pending(closing.as_mut()).await;
+    drop(closing);
+    release.send(()).unwrap();
+    active.wait().await.unwrap();
+    assert_eq!(queued.wait().await.unwrap(), 9);
+    finalized.await.unwrap().unwrap();
+    assert!(matches!(
+        handle.submit(JobClass::MustLand, |_| ()).await,
+        Err(StorageError::Disconnected)
+    ));
+}
+#[tokio::test]
+async fn dropping_last_sender_drains_accepted_work_and_finalizes() {
+    let (closed, finalized) = oneshot::channel();
+    let worker = StorageWorker::start(open, move |conns| {
+        let result = conns.close();
+        let _ = closed.send(result);
+        Ok(())
+    })
+    .await
+    .unwrap();
+    let (release, active) = held_job(&worker.handle, false).await;
+    let queued = accepted(worker.handle.submit(JobClass::MustLand, |_| 17).await);
+    drop(worker);
+    release.send(()).unwrap();
+    active.wait().await.unwrap();
+    assert_eq!(queued.wait().await.unwrap(), 17);
+    finalized.await.unwrap().unwrap();
+}
+#[tokio::test]
+async fn factory_controls_existing_read_only_files_without_bootstrap_or_wal() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = [dir.path().join("config.db"), dir.path().join("history.db")];
+    let fixture =
+        "CREATE TABLE sentinel (n); INSERT INTO sentinel VALUES (8); PRAGMA user_version=9001";
+    for path in &paths {
+        Connection::open(path)
+            .unwrap()
+            .execute_batch(fixture)
+            .unwrap();
+    }
+    let before: Vec<_> = paths
+        .iter()
+        .map(|path| std::fs::read(path).unwrap())
+        .collect();
+    let opening = paths.clone();
+    let worker = StorageWorker::start(
+        move || {
+            let read_only = |path| {
+                Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                    .map_err(StorageError::Sqlite)
+            };
+            Ok(StorageConns {
+                config: read_only(&opening[0])?,
+                history: read_only(&opening[1])?,
+            })
+        },
+        StorageConns::close,
+    )
+    .await
+    .unwrap();
+    accepted(
+        worker
+            .handle
+            .submit(JobClass::MustLand, |conns| {
+                for conn in [&conns.config, &conns.history] {
+                    assert!(conn.is_readonly("main").unwrap());
+                    assert_eq!(
+                        conn.query_row("SELECT n FROM sentinel", [], |r| r.get::<_, i64>(0))
+                            .unwrap(),
+                        8
+                    );
+                    let error = conn
+                        .execute_batch("INSERT INTO sentinel VALUES (9)")
+                        .unwrap_err();
+                    assert_eq!(
+                        error.sqlite_error_code(),
+                        Some(rusqlite::ErrorCode::ReadOnly)
+                    );
+                    assert_eq!(
+                        conn.query_row("SELECT count(*) FROM sentinel", [], |r| r.get::<_, i64>(0))
+                            .unwrap(),
+                        1
+                    );
+                    assert_eq!(
+                        conn.pragma_query_value(None, "journal_mode", |r| r.get::<_, String>(0))
+                            .unwrap(),
+                        "delete"
+                    );
+                    assert_eq!(
+                        conn.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
+                            .unwrap(),
+                        9001
+                    );
+                }
+            })
+            .await,
+    )
+    .wait()
+    .await
+    .unwrap();
+    worker.close().await.unwrap();
+    for (path, original) in paths.iter().zip(before) {
+        assert_eq!(&original[..16], b"SQLite format 3\0");
+        assert_eq!(std::fs::read(path).unwrap(), original); // Includes every header byte.
+        assert!(!path.with_extension("db-wal").exists());
+        assert!(!path.with_extension("db-shm").exists());
     }
 }
