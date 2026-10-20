@@ -1,5 +1,5 @@
-# DEN-19 scaffold CI (D-035): Linux checks, Windows MSVC compilation.
-# Runtime validation on Windows remains the DEN-20 gate.
+# DEN-19 scaffold CI (D-035): Linux checks, Windows MSVC compilation and storage tests.
+# Windows GUI/platform runtime validation remains the DEN-20 gate.
 name: Workspace
 
 on:
@@ -96,6 +96,12 @@ jobs:
         run: cargo fmt --all --check
       - name: Build workspace
         run: cargo build --workspace --all-targets --locked
+      - name: Windows storage integration tests
+        if: runner.os == 'Windows'
+        run: cargo test -p den-core --locked --test storage_core
+      - name: Windows storage path unit tests
+        if: runner.os == 'Windows'
+        run: cargo test -p den-core --locked --lib storage::paths
       - name: Clippy
         if: runner.os == 'Linux'
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
