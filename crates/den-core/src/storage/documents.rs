@@ -339,20 +339,56 @@ impl Documents {
 }
 impl DocumentWriter {
     pub async fn put(&self, put: Put) -> Result<Record> {
+        Ok(self.batch_put(vec![put]).await?.remove(0))
+    }
+    /// Commit every body, revision, index and attribution together or none.
+    /// Inputs run in order: repeated (kind, id) entries see earlier writes in this batch.
+    pub async fn batch_put(&self, puts: Vec<Put>) -> Result<Vec<Record>> {
         let policy = self.policy.clone();
         let clock = self.clock.clone();
         run(&self.handle, move |conns| {
             let tx = conns
                 .config
                 .transaction_with_behavior(TransactionBehavior::Immediate)?;
-            let record = write(&tx, &policy, put, clock.wall())?;
+            let now = clock.wall();
+            let records = puts
+                .into_iter()
+                .map(|put| write(&tx, &policy, put, now))
+                .collect::<Result<Vec<_>>>()?;
             tx.commit()?;
-            Ok(record)
+            Ok(records)
+        })
+        .await
+    }
+    /// Delete only a registered current-version row, checking its revision under the write lock.
+    /// A missing row returns false unless an expected revision was supplied.
+    pub async fn delete(
+        &self,
+        kind: String,
+        id: EntityId,
+        expected_revision: Option<u64>,
+    ) -> Result<bool> {
+        let policy = self.policy.clone();
+        run(&self.handle, move |conns| {
+            policy.version(&kind)?;
+            let tx = conns
+                .config
+                .transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let old = read(&tx, &kind, id)?;
+            check_revision(id, expected_revision, old.as_ref())?;
+            if let Some(old) = &old {
+                policy.check_existing(old)?;
+            }
+            let deleted = tx.execute(
+                "DELETE FROM documents WHERE kind=?1 AND id=?2",
+                params![kind, id.to_string()],
+            )?;
+            tx.commit()?;
+            Ok(deleted != 0)
         })
         .await
     }
 }
-
 fn write(tx: &Transaction<'_>, policy: &WritePolicy, put: Put, now: Timestamp) -> Result<Record> {
     let old = read(tx, &put.document.kind, put.id)?;
     let prepared = policy.prepare(put, old.as_ref(), now)?;
