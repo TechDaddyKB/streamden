@@ -203,7 +203,7 @@ This is a procedure for later authorized connector tests, not a claim tests ran 
 
 #### Prepare and submit the audit (future owner N1)
 
-Agent prepares a truthful packet describing only the implemented client: supported features, data flow and policies, independent user value, measured consumption, requested total daily quota and justified growth/reserve. Owner provides private legal/contact facts directly to Google. Public form fields were readable on 2026-10-20; conditional fields, final upload behavior and authenticated screens require **verification on screen**. The fetched form explicitly labels uploads simulated: do not count an attempted attachment as accepted evidence.
+Agent prepares a truthful packet describing only the implemented client: supported features, data flow and policies, independent user value, measured consumption, requested total daily quota and justified growth/reserve. Owner provides private legal/contact facts directly to Google. Public form fields were readable on 2026-10-20; conditional fields, final upload behavior and authenticated screens require **verification on screen**. Section 5 requires per-project uploads (privacy-policy screenshots showing the YouTube sections, Google Privacy Policy link and deletion policy; a homepage screenshot showing the privacy-policy link with YouTube branding; terms documentation; plus OAuth/dashboard screenshots where applicable) as JPEG/PNG (some slots accept PDF). Confirm each upload is accepted on screen; do not count an attempted attachment as accepted evidence.
 
 | Form section / fields | Packet mapping |
 |---|---|
@@ -211,7 +211,7 @@ Agent prepares a truthful packet describing only the implemented client: support
 | 2 **Organization and Contact Information** | Owner supplies legal identity/address, category, size and primary/technical/business contacts privately; publisher name alone is not legal proof. |
 | 3 **Business Model and Google Contacts** | Describe actual creator tooling, audience, free service and any real Google contact; no invented relationship. |
 | 4 **API Client Overview and Access Information** | **API Client Name** = `StreamDen`; **Primary Access URL**, **Privacy Policy URL**, terms URL = published packet URLs; accessibility/access instructions must match the build. |
-| 5 **Use Cases and Quota Extension Details** | Numeric **Google Cloud Project Number**, actual methods, **Above Default quota**, **Total Per Day Quota**, **Detailed Justification** = measured request, not assumed grant. |
+| 5 **Use Cases and Quota Extension Details** | Numeric **Google Cloud Project Number**, actual methods, **Above Default quota**, **Total Per Day Quota**, **Detailed Justification** = measured request, not assumed grant; required Section 5 screenshots from the published pages and working build. |
 | 6 **Additional Evidence and Documentation Requirements** | Supply requested evidence through the working on-screen route; record accepted artifact names. |
 | 7 **Attestations and Submission** | Owner reviews accurate policy/other attestations, then **Submit**. |
 
