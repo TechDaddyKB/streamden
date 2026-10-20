@@ -32,6 +32,13 @@ pub fn create_private_dir(path: &Path) -> io::Result<()> {
         }
     }
     for directory in missing.into_iter().rev() {
+        // Earlier creations can make `..` and following ancestors resolve.
+        // Recheck with the OS; never collapse components through symlinks.
+        match fs::symlink_metadata(directory) {
+            Ok(_) => continue,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
         let mut builder = DirBuilder::new();
         private_mode(ModeTarget::Directory(&mut builder))?;
         match builder.create(directory) {
@@ -148,4 +155,206 @@ fn private_mode(target: ModeTarget<'_>) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Prepared owned paths, before advisory discovery or SQLite opening.
+/// This startup-only building block performs blocking IO on a dedicated `std::thread`
+/// outside any entered Tokio context. Tokio `spawn_blocking` is also rejected.
+/// Validation is a snapshot: trusted ancestors, ownership/ACL and TOCTOU limits above apply.
+/// Failure may leave newly created empty directories, DBs or owned access probes;
+/// existing bytes/modes are kept. No foreign entries are removed on failure.
+#[derive(Debug)]
+pub struct PreparedPaths {
+    root: PathBuf,
+}
+
+impl PreparedPaths {
+    /// Inject environment/current-directory readers; lower-priority inputs are lazy.
+    /// The final root is validated before canonicalization; `..` follows OS semantics.
+    pub fn prepare(
+        explicit: Option<PathBuf>,
+        mut environment: impl FnMut(&str) -> Option<std::ffi::OsString>,
+        current_dir: impl FnOnce() -> io::Result<PathBuf>,
+    ) -> io::Result<Self> {
+        if tokio::runtime::Handle::try_current().is_ok() {
+            return Err(io::Error::other(
+                "storage preparation requires a thread outside Tokio",
+            ));
+        }
+        let selected = select_path(explicit, std::env::consts::OS, &mut environment)?;
+        let absolute = if selected.is_absolute() {
+            selected
+        } else {
+            current_dir()?.join(selected)
+        };
+        if !absolute.is_absolute() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "data directory must resolve to an absolute path",
+            ));
+        }
+        create_private_dir(&absolute)?;
+        let paths = Self {
+            root: fs::canonicalize(absolute)?,
+        };
+        for dir in [paths.root(), paths.backups(), paths.exports()] {
+            create_private_dir(&dir)?;
+            probe_directory(&dir)?;
+        }
+        for db in [paths.config(), paths.history()] {
+            match validate_private_file(&db) {
+                Ok(()) => drop(OpenOptions::new().read(true).write(true).open(&db)?),
+                Err(e) if e.kind() == io::ErrorKind::NotFound => drop(create_private_file(&db)?),
+                Err(e) => return Err(e),
+            }
+            for suffix in ["-wal", "-shm"] {
+                let mut sidecar = db.as_os_str().to_os_string();
+                sidecar.push(suffix);
+                let sidecar = PathBuf::from(sidecar);
+                match validate_private_file(&sidecar) {
+                    Ok(()) => drop(OpenOptions::new().read(true).write(true).open(sidecar)?),
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(e),
+                }
+            }
+        }
+        Ok(paths)
+    }
+
+    pub fn root(&self) -> PathBuf {
+        self.root.clone()
+    }
+    pub fn config(&self) -> PathBuf {
+        self.root.join("config.db")
+    }
+    pub fn history(&self) -> PathBuf {
+        self.root.join("history.db")
+    }
+    pub fn backups(&self) -> PathBuf {
+        self.root.join("backups")
+    }
+    pub fn exports(&self) -> PathBuf {
+        self.root.join("exports")
+    }
+}
+
+fn select_path(
+    explicit: Option<PathBuf>,
+    platform: &str,
+    environment: &mut impl FnMut(&str) -> Option<std::ffi::OsString>,
+) -> io::Result<PathBuf> {
+    let path = explicit.or_else(|| environment("STREAMDEN_DATA_DIR").map(PathBuf::from));
+    let path = match path {
+        Some(path) => path,
+        None => {
+            let mut absolute = |key| {
+                environment(key)
+                    .map(PathBuf::from)
+                    .filter(|p| p.is_absolute())
+            };
+            match platform {
+                "linux" => absolute("XDG_DATA_HOME")
+                    .map(|p| p.join("streamden"))
+                    .or_else(|| absolute("HOME").map(|p| p.join(".local/share/streamden"))),
+                "windows" => absolute("LOCALAPPDATA").map(|p| p.join("StreamDen")),
+                "macos" => {
+                    absolute("HOME").map(|p| p.join("Library/Application Support/StreamDen"))
+                }
+                _ => None,
+            }
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "missing absolute platform data directory",
+                )
+            })?
+        }
+    };
+    if path.as_os_str().is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "empty data directory",
+        ));
+    }
+    Ok(path)
+}
+
+fn probe_directory(dir: &Path) -> io::Result<()> {
+    use std::io::Write;
+    fs::read_dir(dir)?.next().transpose()?;
+    let path = dir.join(format!(".streamden-access-{}", uuid::Uuid::now_v7()));
+    let mut file = create_private_file(&path)?;
+    let result = file.write_all(b"probe");
+    drop(file);
+    let cleanup = fs::remove_file(path);
+    result.and(cleanup)
+}
+
+#[cfg(test)]
+mod resolution_tests {
+    use super::*;
+    use std::ffi::OsString;
+
+    #[test]
+    fn precedence_defaults_and_invalid_inputs() {
+        let base = std::env::current_dir().unwrap();
+        let value = base.clone().into_os_string();
+        let mut never = |_: &str| -> Option<OsString> { panic!("unexpected environment read") };
+        assert_eq!(
+            select_path(Some(base.clone()), "unused", &mut never).unwrap(),
+            base
+        );
+        assert!(select_path(Some(PathBuf::new()), "linux", &mut never).is_err());
+        let mut override_only = |key: &str| {
+            assert_eq!(key, "STREAMDEN_DATA_DIR");
+            Some(value.clone())
+        };
+        assert_eq!(
+            select_path(None, "unused", &mut override_only).unwrap(),
+            base
+        );
+        assert!(select_path(None, "unused", &mut |_| Some(OsString::new())).is_err());
+        for (platform, variable, suffix) in [
+            ("linux", "XDG_DATA_HOME", "streamden"),
+            ("linux", "HOME", ".local/share/streamden"),
+            ("windows", "LOCALAPPDATA", "StreamDen"),
+            ("macos", "HOME", "Library/Application Support/StreamDen"),
+        ] {
+            let mut env = |key: &str| (key == variable).then(|| value.clone());
+            assert_eq!(
+                select_path(None, platform, &mut env).unwrap(),
+                base.join(suffix)
+            );
+            for bad in ["", "relative"] {
+                assert!(
+                    select_path(None, platform, &mut |key| (key == variable)
+                        .then(|| OsString::from(bad)))
+                    .is_err()
+                );
+            }
+            assert!(select_path(None, platform, &mut |_| None).is_err());
+        }
+        for xdg in ["", "relative"] {
+            let mut env = |key: &str| match key {
+                "XDG_DATA_HOME" => Some(OsString::from(xdg)),
+                "HOME" => Some(value.clone()),
+                _ => None,
+            };
+            assert_eq!(
+                select_path(None, "linux", &mut env).unwrap(),
+                base.join(".local/share/streamden")
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn directory_probe_preserves_actual_os_errors() {
+    let temp = tempfile::tempdir().unwrap();
+    let file = temp.path().join("file");
+    fs::write(&file, b"untouched").unwrap();
+    let error = probe_directory(&file).unwrap_err();
+    assert!(error.raw_os_error().is_some());
+    assert_eq!(fs::read(file).unwrap(), b"untouched");
 }
