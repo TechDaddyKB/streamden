@@ -108,3 +108,184 @@ pub mod values {
         }
     }
 }
+
+use std::{borrow::Cow, collections::BTreeMap};
+
+use den_protocol::{Event, Filter, FilterOp, FilterableField, rpc::ErrorCode};
+use regex::{Regex, RegexBuilder};
+use serde_json::Value;
+use unicode_casefold::UnicodeCaseFold;
+
+use crate::error::EngineError;
+
+/// Owned captures; group zero is the whole match and unmatched groups remain absent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Captures {
+    pub groups: Vec<Option<String>>,
+    pub named: BTreeMap<String, String>,
+}
+
+/// Per-filter result; the index decides which trigger's captures survive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Outcome {
+    pub pass: bool,
+    pub captures: Option<Captures>,
+}
+
+/// A validated filter with its path, specificity and regex prepared once.
+#[derive(Debug)]
+pub struct CompiledFilter {
+    filter: Filter,
+    path: Vec<String>,
+    insensitive: bool,
+    regex: Option<Regex>,
+    specificity: u64,
+}
+
+impl CompiledFilter {
+    /// Compile without retaining malformed patterns in an error or panicking.
+    pub fn compile(filter: &Filter, field_def: &FilterableField) -> Result<Self, EngineError> {
+        let invalid = || EngineError::new(ErrorCode(ErrorCode::INVALID_PARAMS.to_owned()));
+        if filter.field != field_def.field
+            || !field_def.ops.contains(&filter.op)
+            || filter.field.split('.').any(str::is_empty)
+        {
+            return Err(invalid());
+        }
+        let regex = if filter.op == FilterOp::Regex {
+            Some(
+                RegexBuilder::new(filter.value.as_str().ok_or_else(invalid)?)
+                    .size_limit(1024 * 1024)
+                    .build()
+                    .map_err(|_| invalid())?,
+            )
+        } else {
+            None
+        };
+        let valid = match filter.op {
+            FilterOp::In | FilterOp::NotIn => filter.value.is_array(),
+            FilterOp::Exists => filter.value.is_boolean(),
+            FilterOp::Between => filter.value.as_array().is_some_and(|bounds| {
+                bounds.len() == 2 && values::compare(&bounds[0], &bounds[1]).is_some()
+            }),
+            FilterOp::Gte | FilterOp::Lte => {
+                values::compare(&filter.value, &filter.value).is_some()
+            }
+            _ => true,
+        };
+        if !valid {
+            return Err(invalid());
+        }
+        let weight = match filter.op {
+            FilterOp::Eq | FilterOp::In => 3,
+            FilterOp::Ne | FilterOp::NotIn | FilterOp::Exists => 1,
+            _ => 2,
+        };
+        Ok(Self {
+            filter: filter.clone(),
+            path: filter.field.split('.').map(str::to_owned).collect(),
+            insensitive: field_def.case_insensitive,
+            regex,
+            specificity: u64::from(field_def.specificity) * weight,
+        })
+    }
+
+    pub fn specificity(&self) -> u64 {
+        self.specificity
+    }
+
+    fn lookup<'a>(&self, event: &'a Event) -> Option<Cow<'a, Value>> {
+        fn descend<'a>(mut value: &'a Value, path: &[String]) -> Option<&'a Value> {
+            for part in path {
+                value = value.as_object()?.get(part)?;
+            }
+            Some(value)
+        }
+        match self.path.first()?.as_str() {
+            "platform" => {
+                if self.path.len() != 1 {
+                    return None;
+                }
+                Some(Cow::Owned(Value::String(
+                    event.platform.as_ref()?.to_string(),
+                )))
+            }
+            "user" if self.path.len() > 1 => {
+                let user = serde_json::to_value(event.user.as_ref()?).ok()?;
+                Some(Cow::Owned(descend(&user, &self.path[1..])?.clone()))
+            }
+            _ => descend(&event.payload, &self.path).map(Cow::Borrowed),
+        }
+    }
+
+    pub fn eval(&self, event: &Event) -> Outcome {
+        let found = self.lookup(event);
+        let mut outcome = Outcome {
+            pass: false,
+            captures: None,
+        };
+        if self.filter.op == FilterOp::Exists {
+            outcome.pass =
+                found.as_deref().is_some_and(|v| !v.is_null()) == (self.filter.value == true);
+            return outcome;
+        }
+        let Some(value) = found.as_deref() else {
+            return outcome;
+        };
+        let operand = &self.filter.value;
+        let equal = |a: &Value, b: &Value| values::equal(a, b, self.insensitive);
+        outcome.pass = match self.filter.op {
+            FilterOp::Eq => equal(value, operand),
+            FilterOp::Ne => !equal(value, operand),
+            FilterOp::In | FilterOp::NotIn => {
+                let member = operand
+                    .as_array()
+                    .is_some_and(|items| items.iter().any(|v| equal(value, v)));
+                member == (self.filter.op == FilterOp::In)
+            }
+            FilterOp::Gte => values::compare(value, operand).is_some_and(|o| o.is_ge()),
+            FilterOp::Lte => values::compare(value, operand).is_some_and(|o| o.is_le()),
+            FilterOp::Between => operand.as_array().is_some_and(|bounds| {
+                values::compare(value, &bounds[0]).is_some_and(|o| o.is_ge())
+                    && values::compare(value, &bounds[1]).is_some_and(|o| o.is_le())
+            }),
+            FilterOp::Contains => match (value, operand) {
+                (Value::String(text), Value::String(needle)) => text
+                    .case_fold()
+                    .collect::<String>()
+                    .contains(&needle.case_fold().collect::<String>()),
+                (Value::Array(items), _) => items.iter().any(|v| equal(v, operand)),
+                _ => false,
+            },
+            FilterOp::Regex => {
+                let matched = value
+                    .as_str()
+                    .and_then(|v| self.regex.as_ref()?.captures(v));
+                if let Some(matched) = matched {
+                    outcome.captures = Some(Captures {
+                        groups: matched
+                            .iter()
+                            .map(|m| m.map(|m| m.as_str().to_owned()))
+                            .collect(),
+                        named: self
+                            .regex
+                            .as_ref()
+                            .into_iter()
+                            .flat_map(|r| r.capture_names().flatten())
+                            .filter_map(|name| {
+                                matched
+                                    .name(name)
+                                    .map(|m| (name.to_owned(), m.as_str().to_owned()))
+                            })
+                            .collect(),
+                    });
+                    true
+                } else {
+                    false
+                }
+            }
+            FilterOp::Exists => unreachable!("handled above"),
+        };
+        outcome
+    }
+}
