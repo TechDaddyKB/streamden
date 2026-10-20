@@ -85,7 +85,8 @@ The key is the advanced events-polling alternative, not proof that it can authen
    These steps and permission levels follow [restricted keys](https://docs.stripe.com/keys/restricted-api-keys).
    Later, after sandbox acceptance and a separate live gate, create `StreamDen Live Events Read`
    with the same tested read permissions. Sandbox/live keys and objects are separate;
-   see [API keys](https://docs.stripe.com/keys). Live restricted values may be shown only once.
+   see [API keys](https://docs.stripe.com/keys). Restricted key values cannot be retrieved after
+   creation in either environment; save each immediately.
 3. For the test Payment Link, stay in the sandbox and open
    [Payment Links](https://dashboard.stripe.com/payment-links/create/customer-chooses-pricing),
    click **New**, select **Customers choose what to pay**. Suggested test content:
@@ -165,7 +166,8 @@ Select only the connector's tested [event names](https://developer.paypal.com/ap
 the capture-state test set is `PAYMENT.CAPTURE.COMPLETED`, `PAYMENT.CAPTURE.PENDING`,
 `PAYMENT.CAPTURE.DECLINED`, `PAYMENT.CAPTURE.REFUNDED`, `PAYMENT.CAPTURE.REVERSED`;
 include `CUSTOMER.DISPUTE.CREATED` only when dispute handling is implemented/tested.
-Save and copy the generated **Webhook ID** into that environment's desktop configuration.
+Save the generated **Webhook ID** in that environment's PayPal password-manager item.
+Import it only through the connector packet's procedure once that exists.
 Do not select all events to conceal missing connector support.
 
 [Webhook overview](https://developer.paypal.com/api/rest/webhooks/) establishes that subscriptions
