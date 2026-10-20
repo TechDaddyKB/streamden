@@ -1649,3 +1649,215 @@ async fn listing_rejects_simple_stored_ids_alone_and_beside_canonical() {
 async fn listing_rejects_urn_stored_ids_alone_and_beside_canonical() {
     noncanonical_listed_id("urn:uuid:0190a000-0000-7000-8000-00000000abcd").await;
 }
+
+#[tokio::test]
+async fn listed_names_follow_rename_conflict_and_delete_indexes() {
+    let (_temp, worker, docs) = harness().await;
+    let (writer, _) = writer(&docs);
+    for kind in ["action", "queue", "command"] {
+        for (name, alias) in [
+            ("Straße", "STRASSE"),
+            ("Σ", "ς"),
+            ("ﬃ", "FFI"),
+            ("İ", "i\u{307}"),
+        ] {
+            let first = EntityId::new_v7();
+            let second = EntityId::new_v7();
+            writer
+                .put(put(kind, first, json!({"name":name})))
+                .await
+                .unwrap();
+            assert_eq!(
+                ids(&listed(&docs, kind, Some(alias), None).await),
+                vec![first]
+            );
+            conflict(
+                writer
+                    .put(put(kind, second, json!({"name":alias})))
+                    .await
+                    .unwrap_err(),
+                first,
+            );
+            assert!(docs.get(kind.into(), second).await.unwrap().is_none());
+            // Equivalent self-renames keep the same index owner and remain listable.
+            let equivalent = writer
+                .put(put(kind, first, json!({"name":alias})))
+                .await
+                .unwrap();
+            assert_eq!(equivalent.revision, 2);
+            let rows = listed(&docs, kind, Some(name), None).await;
+            assert_eq!(ids(&rows), vec![first]);
+            same_record(&rows[0], &equivalent);
+            let renamed = writer
+                .put(put(kind, first, json!({"name":"renamed"})))
+                .await
+                .unwrap();
+            assert_eq!(renamed.revision, 3);
+            assert!(listed(&docs, kind, Some(alias), None).await.is_empty());
+            writer
+                .put(put(kind, second, json!({"name":alias})))
+                .await
+                .unwrap();
+            conflict(
+                writer
+                    .put(put(kind, first, json!({"name":name})))
+                    .await
+                    .unwrap_err(),
+                second,
+            );
+            assert_eq!(
+                ids(&listed(&docs, kind, Some("renamed"), None).await),
+                vec![first]
+            );
+            assert!(writer.delete(kind.into(), second, Some(1)).await.unwrap());
+            writer
+                .put(put(kind, first, json!({"name":alias})))
+                .await
+                .unwrap();
+            assert_eq!(
+                ids(&listed(&docs, kind, Some(name), None).await),
+                vec![first]
+            );
+            assert!(writer.delete(kind.into(), first, Some(4)).await.unwrap());
+        }
+    }
+    worker.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn listing_drafts_and_missing_origin_keeps_live_name_reservations() {
+    let (_temp, worker, docs) = harness().await;
+    let (writer, _) = writer(&docs);
+    let live = EntityId::new_v7();
+    let drafts = [EntityId::new_v7(), EntityId::new_v7()];
+    for id in drafts {
+        writer
+            .put(put(
+                "action",
+                id,
+                json!({"name":"STRASSE","enabled":true,"origin":{"kind":"ai_draft","draftOf":live}}),
+            ))
+            .await
+            .unwrap();
+    }
+    // Drafts inserted first must not prevent a subsequent live action with the same folded name.
+    writer.put(action(live, "Straße")).await.unwrap();
+    let mut all_ids = vec![live, drafts[0], drafts[1]];
+    all_ids.sort_by_key(ToString::to_string);
+    assert_eq!(
+        ids(&listed(&docs, "action", Some("strasse"), None).await),
+        all_ids
+    );
+    assert_eq!(
+        ids(&listed(&docs, "action", Some("STRASSE"), Some(true)).await),
+        vec![live]
+    );
+    let disabled = listed(&docs, "action", Some("Straße"), Some(false)).await;
+    assert_eq!(disabled.len(), 2);
+    for row in disabled {
+        assert!(drafts.contains(&row.id));
+        assert_eq!(row.document.data["enabled"], false);
+        assert_eq!(row.document.data["origin"]["kind"], "ai_draft");
+        conflict(
+            writer.put(action(row.id, "strasse")).await.unwrap_err(),
+            live,
+        );
+        same_record(
+            &docs.get("action".into(), row.id).await.unwrap().unwrap(),
+            &row,
+        );
+    }
+    assert_eq!(listed(&docs, "action", None, Some(false)).await.len(), 2);
+    assert!(writer.delete("action".into(), live, Some(1)).await.unwrap());
+    writer.put(action(drafts[0], "Straße")).await.unwrap();
+    assert_eq!(
+        ids(&listed(&docs, "action", None, Some(true)).await),
+        vec![drafts[0]]
+    );
+    assert_eq!(
+        ids(&listed(&docs, "action", None, Some(false)).await),
+        vec![drafts[1]]
+    );
+    for (index, origin) in [
+        None,
+        Some(json!({})),
+        Some(json!(null)),
+        Some(json!({"kind":null})),
+        Some(json!({"kind":"future"})),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id = EntityId::new_v7();
+        let name = format!("reserved{index}");
+        let mut data = json!({"name":name,"enabled":false});
+        if let Some(origin) = origin {
+            data["origin"] = origin;
+        }
+        writer.put(put("action", id, data)).await.unwrap();
+        conflict(
+            writer
+                .put(action(EntityId::new_v7(), &name.to_uppercase()))
+                .await
+                .unwrap_err(),
+            id,
+        );
+        assert_eq!(
+            ids(&listed(&docs, "action", Some(&name), Some(false)).await),
+            vec![id]
+        );
+    }
+    worker.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn list_filters_are_literal_and_null_is_not_false_or_empty_name() {
+    let (_temp, worker, docs) = harness().await;
+    let (writer, _) = writer(&docs);
+    for kind in [
+        "timer",
+        "settings",
+        "view_state",
+        "pending_change",
+        "export_meta",
+    ] {
+        let unnamed = EntityId::new_v7();
+        writer
+            .put(put(kind, unnamed, json!({"opaque":[1,null]})))
+            .await
+            .unwrap();
+        assert!(listed(&docs, kind, Some(""), None).await.is_empty());
+        assert!(listed(&docs, kind, None, Some(false)).await.is_empty());
+        let names = [
+            "",
+            "%_'; DROP TABLE documents;--",
+            " spaced ",
+            "é",
+            "e\u{301}",
+        ];
+        let mut named = Vec::new();
+        for name in names {
+            let id = EntityId::new_v7();
+            writer
+                .put(put(kind, id, json!({"name":name,"enabled":false})))
+                .await
+                .unwrap();
+            named.push((name, id));
+            assert_eq!(
+                ids(&listed(&docs, kind, Some(name), Some(false)).await),
+                vec![id]
+            );
+        }
+        // Recheck after both canonical-equivalent spellings exist: folding is not normalization.
+        for (name, id) in named {
+            assert_eq!(ids(&listed(&docs, kind, Some(name), None).await), vec![id]);
+        }
+        for absent in ["spaced", "%", "_", "\" OR 1=1 --"] {
+            assert!(listed(&docs, kind, Some(absent), None).await.is_empty());
+        }
+        assert_eq!(listed(&docs, kind, None, Some(false)).await.len(), 5);
+        assert_eq!(listed(&docs, kind, None, None).await.len(), 6);
+        assert!(docs.get(kind.into(), unnamed).await.unwrap().is_some());
+    }
+    worker.close().await.unwrap();
+}
