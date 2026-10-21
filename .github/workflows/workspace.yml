@@ -105,6 +105,9 @@ jobs:
       - name: Windows document storage integration tests
         if: runner.os == 'Windows'
         run: cargo test -p den-core --locked --test storage_documents
+      - name: Windows variable storage integration tests
+        if: runner.os == 'Windows'
+        run: cargo test -p den-core --locked --test vars_store
       - name: Windows matcher filter integration tests
         if: runner.os == 'Windows'
         run: cargo test -p den-core --locked --test matcher_filters
