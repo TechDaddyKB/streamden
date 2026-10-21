@@ -19,6 +19,8 @@ pub enum DocumentError {
     Transport(StorageError),
     Sqlite(rusqlite::Error),
     Json(serde_json::Error),
+    Schema(String),
+    CallbackPanicked(&'static str),
     InvalidInput(&'static str),
     InvalidStored(&'static str),
     Conflict {
@@ -561,4 +563,65 @@ fn diagnostic_field(
         });
     }
     row.get(index)
+}
+
+/// Pure owner-supplied N -> N+1 transforms and validators; no production schemas/defaults.
+pub type Migration = fn(Value) -> std::result::Result<Value, String>;
+pub type Validator = fn(&Value) -> std::result::Result<(), String>;
+#[derive(Clone)]
+pub struct DocumentSchema {
+    pub version: u32,
+    pub migrations: BTreeMap<u32, Migration>,
+    pub validate: Validator,
+}
+#[derive(Clone)]
+pub struct Registry {
+    schemas: BTreeMap<String, DocumentSchema>,
+    policy: WritePolicy,
+}
+impl Registry {
+    pub fn new(schemas: BTreeMap<String, DocumentSchema>) -> Result<Self> {
+        let policy = WritePolicy::new(
+            schemas
+                .iter()
+                .map(|(k, s)| (k.clone(), s.version))
+                .collect(),
+        )?;
+        if schemas
+            .values()
+            .any(|s| s.migrations.keys().any(|from| *from >= s.version))
+        {
+            return Err(DocumentError::InvalidInput(
+                "invalid migration registration",
+            ));
+        }
+        Ok(Self { schemas, policy })
+    }
+    /// Pure conversion of a supplied persisted record; no SQL, installation or writes.
+    pub fn migrate(&self, mut record: Record) -> Result<Record> {
+        let kind = &record.document.kind;
+        let supported = self.policy.version(kind)?;
+        if record.document.schema_version > supported {
+            return Err(DocumentError::UnsupportedVersion {
+                id: record.id,
+                stored: record.document.schema_version,
+                supported,
+            });
+        }
+        let schema = &self.schemas[kind];
+        while record.document.schema_version < supported {
+            let step = schema
+                .migrations
+                .get(&record.document.schema_version)
+                .ok_or(DocumentError::InvalidStored("missing document migration"))?;
+            record.document.data = std::panic::catch_unwind(|| step(record.document.data))
+                .map_err(|_| DocumentError::CallbackPanicked("migration"))?
+                .map_err(DocumentError::Schema)?;
+            record.document.schema_version += 1;
+        }
+        std::panic::catch_unwind(|| (schema.validate)(&record.document.data))
+            .map_err(|_| DocumentError::CallbackPanicked("validator"))?
+            .map_err(DocumentError::Schema)?;
+        Ok(record)
+    }
 }
