@@ -2314,3 +2314,307 @@ async fn supplied_registry_pure_conversion_preserves_metadata_and_contains_all_f
     assert_eq!(raw_snapshot(&worker).await, snapshot);
     worker.close().await.unwrap();
 }
+
+use den_core::storage::documents::Loaded;
+
+#[tokio::test]
+async fn invalid_document_reported_not_fatal() {
+    let (_temp, worker, docs) = harness().await;
+    let bad = EntityId::new_v7();
+    let good = EntityId::new_v7();
+    seed_document(
+        &worker,
+        "view_state",
+        bad,
+        3,
+        json!({"invalid":true,"enabled":true}),
+    )
+    .await;
+    seed_document(&worker, "view_state", good, 3, json!({"enabled":true})).await;
+    let before = raw_snapshot(&worker).await;
+    let reports = docs
+        .load("view_state".into(), &full_registry())
+        .await
+        .unwrap();
+    assert_eq!(reports.len(), 2);
+    let mut invalid_count = 0;
+    for report in reports {
+        match report {
+            Loaded::Valid(record) => assert_eq!(record.id, good),
+            Loaded::Invalid(Invalid {
+                id,
+                kind,
+                error,
+                data,
+            }) => {
+                invalid_count += 1;
+                assert_eq!(id, SqlValue::Text(bad.to_string()));
+                assert_eq!(kind, "view_state");
+                assert!(
+                    matches!(error,DocumentError::Schema(message) if message=="fixture validation failed")
+                );
+                let SqlValue::Text(body) = data else {
+                    panic!("JSON diagnostic")
+                };
+                assert_eq!(
+                    serde_json::from_str::<Value>(&body).unwrap(),
+                    json!({"invalid":true,"enabled":true})
+                );
+            }
+            _ => panic!("unexpected newer fixture"),
+        }
+    }
+    assert_eq!(invalid_count, 1);
+    assert_eq!(raw_snapshot(&worker).await, before);
+    let malformed = EntityId::new_v7();
+    seed_document(&worker, "view_state", malformed, 3, json!({})).await;
+    raw(&worker.handle, move |c| {
+        c.config
+            .pragma_update(None, "ignore_check_constraints", true)
+            .unwrap();
+        c.config
+            .execute(
+                "UPDATE documents SET data='broken JSON' WHERE id=?1",
+                [malformed.to_string()],
+            )
+            .unwrap();
+        c.config
+            .pragma_update(None, "ignore_check_constraints", false)
+            .unwrap();
+    })
+    .await;
+    let snapshot = raw_snapshot(&worker).await;
+    let reports = docs
+        .load("view_state".into(), &full_registry())
+        .await
+        .unwrap();
+    assert_eq!(reports.len(), 3);
+    assert!(reports.iter().any(|report| {
+        matches!(report, Loaded::Invalid(Invalid { id, error: DocumentError::Json(_), data, .. })
+            if *id == SqlValue::Text(malformed.to_string()) && *data == SqlValue::Text("broken JSON".into()))
+    }));
+    assert_eq!(raw_snapshot(&worker).await, snapshot);
+    worker.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn newer_versions_and_missing_migrations_are_isolated() {
+    let (_temp, worker, docs) = harness().await;
+    let old = EntityId::new_v7();
+    let newer = EntityId::new_v7();
+    let current = EntityId::new_v7();
+    seed_document(&worker, "view_state", old, 1, json!({"old":7})).await;
+    seed_document(
+        &worker,
+        "view_state",
+        newer,
+        99,
+        json!({"invalid":true,"future":[1]}),
+    )
+    .await;
+    seed_document(&worker, "view_state", current, 3, json!({"ok":true})).await;
+    let before = raw_snapshot(&worker).await;
+    let registry = schema_registry(BTreeMap::from([(
+        1,
+        fixture_step_one as den_core::storage::documents::Migration,
+    )]));
+    let reports = docs.load("view_state".into(), &registry).await.unwrap();
+    assert_eq!(reports.len(), 3);
+    assert_eq!(
+        reports
+            .iter()
+            .filter(|r| matches!(r, Loaded::Valid(_)))
+            .count(),
+        1
+    );
+    assert!(reports.iter().any(|report| {
+        matches!(report, Loaded::Newer(record)
+            if record.id == newer && record.document.schema_version == 99
+                && record.document.data["future"] == json!([1]))
+    }));
+    assert!(reports.iter().any(|report| {
+        matches!(report, Loaded::Invalid(Invalid {
+            id, error: DocumentError::InvalidStored("missing document migration"), ..
+        }) if *id == SqlValue::Text(old.to_string()))
+    }));
+    assert_eq!(raw_snapshot(&worker).await, before);
+    let unregistered = Registry::new(BTreeMap::new()).unwrap();
+    assert!(matches!(
+        docs.load("view_state".into(), &unregistered).await,
+        Err(DocumentError::InvalidInput(
+            "document version not registered"
+        ))
+    ));
+    worker.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn lazy_load_chains_golden_steps_without_persisting_or_losing_fields() {
+    let (_temp, worker, docs) = harness().await;
+    let id = EntityId::new_v7();
+    let before_body =
+        json!({"old":7,"unmapped":{"nested":[null,"x"]},"x-migrated":{"legacy":true}});
+    let after_one = json!({"new":7,"unmapped":{"nested":[null,"x"]},"x-migrated":{"legacy":true}});
+    let after_two =
+        json!({"new":7,"step2":true,"unmapped":{"nested":[null,"x"]},"x-migrated":{"legacy":true}});
+    assert_eq!(fixture_step_one(before_body.clone()).unwrap(), after_one);
+    assert_eq!(fixture_step_two(after_one).unwrap(), after_two);
+    seed_document(&worker, "view_state", id, 1, before_body).await;
+    let original = docs.get("view_state".into(), id).await.unwrap().unwrap();
+    let original_list = docs
+        .list("view_state".into(), Filter::default())
+        .await
+        .unwrap();
+    let snapshot = raw_snapshot(&worker).await;
+    for _ in 0..2 {
+        let reports = docs
+            .load("view_state".into(), &full_registry())
+            .await
+            .unwrap();
+        let [Loaded::Valid(record)] = reports.as_slice() else {
+            panic!("valid migrated row")
+        };
+        assert_eq!(record.document.schema_version, 3);
+        assert_eq!(record.document.data, after_two);
+        assert_eq!(record.id, original.id);
+        assert_eq!(record.revision, original.revision);
+        assert_eq!(record.created_at, original.created_at);
+        assert_eq!(record.updated_at, original.updated_at);
+        assert_eq!(record.updated_by, original.updated_by);
+    }
+    assert_eq!(raw_snapshot(&worker).await, snapshot);
+    assert_eq!(
+        format!(
+            "{:?}",
+            docs.get("view_state".into(), id).await.unwrap().unwrap()
+        ),
+        format!("{original:?}")
+    );
+    assert_eq!(
+        format!(
+            "{:?}",
+            docs.list("view_state".into(), Filter::default())
+                .await
+                .unwrap()
+        ),
+        format!("{original_list:?}")
+    );
+    worker.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn callback_panics_are_row_local_and_caller_worker_and_neighbors_recover() {
+    let (_temp, worker, docs) = harness().await;
+    let bad = EntityId::new_v7();
+    let good = EntityId::new_v7();
+    let newer = EntityId::new_v7();
+    for (version, callback) in [(1, "migration"), (3, "validator")] {
+        seed_document(&worker, "view_state", bad, version, json!({"panic":true})).await;
+        seed_document(&worker, "view_state", good, 3, json!({"ok":true})).await;
+        seed_document(&worker, "view_state", newer, 99, json!({"panic":true})).await;
+        let registry = Registry::new(BTreeMap::from([(
+            "view_state".into(),
+            DocumentSchema {
+                version: 3,
+                migrations: BTreeMap::from([
+                    (1, panicking_step as den_core::storage::documents::Migration),
+                    (2, fixture_step_two),
+                ]),
+                validate: panicking_validator,
+            },
+        )]))
+        .unwrap();
+        let snapshot = raw_snapshot(&worker).await;
+        for _ in 0..2 {
+            let reports = docs.load("view_state".into(), &registry).await.unwrap();
+            assert_eq!(reports.len(), 3);
+            assert!(reports.iter().any(|report| {
+                matches!(report, Loaded::Invalid(Invalid {
+                    id, error: DocumentError::CallbackPanicked(stage), ..
+                }) if *id == SqlValue::Text(bad.to_string()) && *stage == callback)
+            }));
+            assert!(reports.iter().any(|report| {
+                matches!(report, Loaded::Newer(record) if record.id == newer
+                    && record.document.schema_version == 99 && record.document.data == json!({"panic":true}))
+            }));
+            assert!(
+                reports
+                    .iter()
+                    .any(|r| matches!(r, Loaded::Valid(record) if record.id == good))
+            );
+            assert!(docs.get("view_state".into(), good).await.unwrap().is_some());
+        }
+        assert_eq!(raw_snapshot(&worker).await, snapshot);
+        raw(&worker.handle, |c| {
+            c.config.execute("DELETE FROM documents", []).unwrap();
+        })
+        .await;
+    }
+    worker.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn registry_preflight_precedes_rows_and_query_and_transport_failures_stay_call_level() {
+    let (_temp, worker, docs) = harness().await;
+    let empty = Registry::new(BTreeMap::new()).unwrap();
+    assert!(
+        docs.load("view_state".into(), &full_registry())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(matches!(
+        docs.load("view_state".into(), &empty).await,
+        Err(DocumentError::InvalidInput(_))
+    ));
+    raw(&worker.handle, |c| {
+        c.config.execute("DROP TABLE documents", []).unwrap();
+    })
+    .await;
+    assert!(matches!(
+        docs.load("view_state".into(), &empty).await,
+        Err(DocumentError::InvalidInput(_))
+    ));
+    assert!(matches!(
+        docs.load("view_state".into(), &full_registry()).await,
+        Err(DocumentError::Sqlite(_))
+    ));
+    worker.close().await.unwrap();
+    assert!(matches!(
+        docs.load("view_state".into(), &empty).await,
+        Err(DocumentError::InvalidInput(_))
+    ));
+    assert!(matches!(
+        docs.load("view_state".into(), &full_registry()).await,
+        Err(DocumentError::Transport(_))
+    ));
+}
+
+#[tokio::test]
+async fn failed_migration_retains_original_diagnostic_and_valid_neighbor() {
+    let (_temp, worker, docs) = harness().await;
+    let bad = EntityId::new_v7();
+    let good = EntityId::new_v7();
+    let body = json!({"unmapped":[1,null],"no-old-field":true});
+    seed_document(&worker, "view_state", bad, 1, body.clone()).await;
+    seed_document(&worker, "view_state", good, 3, json!({"ok":true})).await;
+    let snapshot = raw_snapshot(&worker).await;
+    let reports = docs
+        .load("view_state".into(), &full_registry())
+        .await
+        .unwrap();
+    assert_eq!(reports.len(), 2);
+    assert!(reports.iter().any(|report| {
+        matches!(report, Loaded::Invalid(Invalid {
+            id, error: DocumentError::Schema(message), data: SqlValue::Text(data), ..
+        }) if *id == SqlValue::Text(bad.to_string()) && message == "missing old"
+            && serde_json::from_str::<Value>(data).unwrap() == body)
+    }));
+    assert!(
+        reports
+            .iter()
+            .any(|r| matches!(r, Loaded::Valid(record) if record.id == good))
+    );
+    assert_eq!(raw_snapshot(&worker).await, snapshot);
+    worker.close().await.unwrap();
+}

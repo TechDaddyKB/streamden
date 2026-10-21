@@ -625,3 +625,42 @@ impl Registry {
         Ok(record)
     }
 }
+
+/// Inspectable newer bodies are never passed through older callbacks or rewritten.
+#[derive(Debug)]
+pub enum Loaded {
+    Valid(Record),
+    Invalid(Invalid),
+    Newer(Record),
+}
+impl Documents {
+    /// Lazy in-memory migration and validation. No database write, disabling or bus emission.
+    pub async fn load(&self, kind: String, registry: &Registry) -> Result<Vec<Loaded>> {
+        registry.policy.version(&kind)?;
+        Ok(self
+            .inspect_rows(kind)
+            .await?
+            .into_iter()
+            .map(|row| match row {
+                Err(invalid) => Loaded::Invalid(invalid),
+                Ok(record) => {
+                    let id = record.id.to_string().into();
+                    let kind = record.document.kind.clone();
+                    let data = serde_json::to_string(&record.document.data)
+                        .expect("decoded JSON")
+                        .into();
+                    match registry.migrate(record.clone()) {
+                        Ok(record) => Loaded::Valid(record),
+                        Err(DocumentError::UnsupportedVersion { .. }) => Loaded::Newer(record),
+                        Err(error) => Loaded::Invalid(Invalid {
+                            id,
+                            kind,
+                            error,
+                            data,
+                        }),
+                    }
+                }
+            })
+            .collect())
+    }
+}
