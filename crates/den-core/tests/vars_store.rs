@@ -713,3 +713,110 @@ async fn raw_empty_batch_attempts_a_config_transaction_and_recovers() {
     assert!(vars.read_globals().await.unwrap().is_empty());
     worker.close().await.unwrap();
 }
+
+#[tokio::test]
+async fn raw_upserts_replace_full_records_across_and_within_batches_in_both_scopes() {
+    for target in [Scope::Global, user("p", "one")] {
+        let (_temp, worker, vars) = harness().await;
+        let initial = record(json!("initial"), false, UpdatedBy::System);
+        let mut plugin = record(
+            json!({"plugin": "untrusted"}),
+            true,
+            UpdatedBy::Plugin {
+                plugin_id: "com.example.overwrite".try_into().unwrap(),
+            },
+        );
+        plugin.updated_at = Timestamp::parse("2026-10-20T12:00:00.001Z").unwrap();
+        let mut trusted = record(json!(["trusted", 2]), false, UpdatedBy::User);
+        trusted.updated_at = Timestamp::parse("2026-10-20T12:00:00.002Z").unwrap();
+        let mut final_record = trusted.clone();
+        final_record.value = json!({"final": true});
+        final_record.updated_at = Timestamp::parse("2026-10-20T12:00:00.004Z").unwrap();
+        let mut intermediate = plugin.clone();
+        intermediate.value = json!(["intermediate", 3]);
+        intermediate.updated_at = Timestamp::parse("2026-10-20T12:00:00.003Z").unwrap();
+        // Same name everywhere: an overwrite must leave every other scope unchanged.
+        vars.apply_batch(vec![
+            put(Scope::Global, "key", initial.clone()),
+            put(user("p", "one"), "key", initial.clone()),
+            put(user("p", "two"), "key", initial.clone()),
+            put(user("q", "one"), "key", initial.clone()),
+        ])
+        .await
+        .unwrap();
+        for (batch, expected) in [
+            (vec![plugin.clone()], plugin),
+            (vec![trusted.clone()], trusted),
+            // Neither repeated put is hidden by a delete. The last record must win.
+            (vec![intermediate, final_record.clone()], final_record),
+        ] {
+            vars.apply_batch(
+                batch
+                    .into_iter()
+                    .map(|entry| put(target.clone(), "key", entry))
+                    .collect(),
+            )
+            .await
+            .unwrap();
+            let expected_global = match target {
+                Scope::Global => &expected,
+                Scope::User { .. } => &initial,
+            };
+            let expected_user = match target {
+                Scope::Global => &initial,
+                Scope::User { .. } => &expected,
+            };
+            assert_eq!(
+                vars.read_globals().await.unwrap(),
+                [("key".into(), expected_global.clone())].into()
+            );
+            for (platform, id, entry) in [
+                ("p", "one", expected_user),
+                ("p", "two", &initial),
+                ("q", "one", &initial),
+            ] {
+                assert_eq!(
+                    vars.read_user(platform.into(), id.into()).await.unwrap(),
+                    [("key".into(), entry.clone())].into()
+                );
+            }
+            // Independent raw SQLite readback: the typed reader cannot hide stale columns.
+            let scope = target.clone();
+            let stored = raw(&worker.handle, move |c| {
+                let read = |row: &rusqlite::Row<'_>| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, bool>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                };
+                match scope {
+                    Scope::Global => c.config.query_row(
+                        "SELECT value,untrusted,updated_at,updated_by FROM globals WHERE name=?1",
+                        ["key"],
+                        read,
+                    ),
+                    Scope::User { platform, user_id } => c.config.query_row(
+                        "SELECT value,untrusted,updated_at,updated_by FROM user_vars
+                         WHERE platform=?1 AND user_id=?2 AND name=?3",
+                        params![platform, user_id, "key"],
+                        read,
+                    ),
+                }
+                .unwrap()
+            })
+            .await;
+            assert_eq!(
+                stored,
+                (
+                    serde_json::to_string(&expected.value).unwrap(),
+                    expected.untrusted,
+                    expected.updated_at.to_string(),
+                    serde_json::to_string(&expected.updated_by).unwrap(),
+                )
+            );
+        }
+        worker.close().await.unwrap();
+    }
+}
