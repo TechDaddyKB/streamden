@@ -20,6 +20,7 @@ pub enum DocumentError {
     Sqlite(rusqlite::Error),
     Json(serde_json::Error),
     Schema(String),
+    InputSchema(String),
     CallbackPanicked(&'static str),
     InvalidInput(&'static str),
     InvalidStored(&'static str),
@@ -36,7 +37,7 @@ impl DocumentError {
     /// Existing protocol code only; callers must not expose raw diagnostics on the wire.
     pub fn code(&self) -> ErrorCode {
         ErrorCode::new(match self {
-            Self::InvalidInput(_) => ErrorCode::INVALID_PARAMS,
+            Self::InvalidInput(_) | Self::InputSchema(_) => ErrorCode::INVALID_PARAMS,
             Self::Conflict { .. } => ErrorCode::CONFLICT,
             Self::UnsupportedVersion { .. } => ErrorCode::INVALID_STATE,
             _ => ErrorCode::INTERNAL,
@@ -615,6 +616,19 @@ impl Registry {
             ));
         }
         Ok(Self { schemas, policy })
+    }
+    /// Validate a complete current-version caller body; preserve local raw causes.
+    /// Stored-row migrations still use migrate() and retain their INTERNAL errors.
+    pub fn validate_input(&self, record: Record) -> Result<Record> {
+        if record.document.schema_version != self.policy.version(&record.document.kind)? {
+            return Err(DocumentError::InvalidInput(
+                "input version must match registered version",
+            ));
+        }
+        self.migrate(record).map_err(|error| match error {
+            DocumentError::Schema(message) => DocumentError::InputSchema(message),
+            error => error,
+        })
     }
     /// Pure conversion of a supplied persisted record; no SQL, installation or writes.
     pub fn migrate(&self, mut record: Record) -> Result<Record> {
