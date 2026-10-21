@@ -243,15 +243,16 @@ and at startup. A trigger is in the index only if its action is `enabled`, the t
 ### 6.2 Filters
 
 All filters of a trigger are AND-ed. `field` is a dotted path into `event.payload` (plus the reserved paths
-`user.*` and `platform` for the envelope's normalized user and platform). Operator semantics, evaluated on JSON
-values with the field's catalog type:
+`user.*` and `platform` for the envelope's normalized user and platform). A bare `user` path is rejected at compile
+time with `INVALID_PARAMS`; it never falls back to `event.payload.user` (Q-E13). Operator semantics, evaluated on
+JSON values with the field's catalog type:
 
 | `op` | True when |
 |---|---|
 | `eq`, `ne` | JSON equality after number normalization (`1` equals `1.0`); strings compared case-sensitively unless the catalog field says `caseInsensitive` |
 | `in`, `not_in` | `value` is an array; membership by `eq` |
-| `gte`, `lte`, `between` | numeric or RFC 3339 compare; `between` takes `[min, max]`, both inclusive; a missing or non-numeric field is **false** |
-| `contains` | string: substring, **case-insensitive** by default (Streamer.bot Text filters are; `eq` stays case-sensitive so ids compare exactly); array: element `eq` |
+| `gte`, `lte`, `between` | numeric or RFC 3339 compare; `between` takes `[min, max]`, both inclusive; reversed bounds (`min > max`) are rejected at compile/save time with `INVALID_PARAMS` (Q-E11); a missing or non-numeric field is **false** |
+| `contains` | string: substring, **case-insensitive** by default (Streamer.bot Text filters are; `eq` stays case-sensitive so ids compare exactly); array: element `eq`, so the field's `caseInsensitive` flag applies (Q-E12) |
 | `regex` | Rust `regex` crate syntax, compiled once at index build with a 1 MiB size limit; captures go to `match` (array plus named groups) **of the winning trigger only** |
 | `exists` | `value: true` → field present and not `null`; `false` → absent or `null` |
 
@@ -977,7 +978,8 @@ both the value and the flag together.
 `NOT_FOUND`), `variables.list { scope, persisted?, prefix?, platform?, userId? }` (tier 0, paged),
 `variables.set { scope, name, value, persisted, mode: set | increment | decrement | default, durable?: bool,
 platform?, userId? }`
-(tier 1; `increment`/`decrement` require a number or missing (treated as 0) and are atomic; `default` writes only
+(tier 1; `increment`/`decrement` require a number or missing (treated as 0), are atomic and follow the
+arithmetic rule below; `default` writes only
 if the variable does not exist; returns `{ value, created, untrusted }`, where `value` and `untrusted` describe
 the **stored entry after the call**: for `default` on an existing entry that is the existing value with the
 existing flag, and no write and no event occur), `variables.delete` (tier 1; returns `{ deleted: bool }`, never
@@ -991,6 +993,15 @@ persisted, updatedBy }`; `old: null` means created (`oldUntrusted: null`), `new:
 `{ old: <chat text>, oldUntrusted: true, new: <literal>, untrusted: false }` (rows 3.16; `variables.user_updated` is
 `highVolume`). For `variables.user_updated` the **envelope's** `platform` and `user` are the variable's user
 (the event is about that user), never payload keys (§7.1 reserved-name rule).
+
+**Arithmetic rule (Q-E15).** When both operands of `increment`/`decrement` are integers, the result is exact
+and must lie in the union of the signed `i64` and unsigned `u64` domains (`-9223372036854775808` through
+`18446744073709551615`); a result outside it is rejected. When either operand is floating point, both are
+converted to IEEE 754 binary64 and the operation is binary64 arithmetic, round-to-nearest, ties-to-even. That loses
+precision: an integer above 2^53 converts to the nearest binary64 value, so `9007199254740993 + 0.5` yields
+`9007199254740992`, and every mixed result carries binary64 rounding. A nonfinite result is rejected. A rejection
+is `INVALID_PARAMS` (spec 02 §8.5): the entry and its metadata stay unchanged and no `variables.*_updated` event is
+published. An integer result is never promoted to float, wrapped, saturated or stored as `null`.
 
 **Readback rule.** Every field of an operation result or event payload that carries a stored variable value
 carries the flag of the entry it came from next to it and is catalogued `x-den-untrusted: conditional` on that
@@ -2217,3 +2228,6 @@ grammar"; signals are implemented as operations rather than new `Node` kinds so 
   §9.5, §9.10, §10.8, §12.2, §24); the Q-H1 and Q-C5 answers of 2026-10-19 recorded where §12.5 and §13.6
   deferred to them (no behaviour change here; spec 08 owns the chat history store). Cards DEN-69, 70, 77, 82, 93,
   99, 102, 118, 119 and 146 updated where the decision adds to their assumption.
+- **Owner answers of 2026-10-21** (DEN-521, text only, no type or wire change): Q-E11 reversed `between` bounds and
+  Q-E13 bare `user` path rejected with `INVALID_PARAMS`, Q-E12 array `contains` follows `caseInsensitive` (§6.2);
+  Q-E15 `increment`/`decrement` arithmetic rule with its `INVALID_PARAMS` mapping (§11.2). Q-E14 stays open.
