@@ -876,3 +876,78 @@ already accepted. Independent Grok documentation QA, current Docs CI and exact i
 required for DEN-372; recording the question does not complete DEN-84 or resolve DEN-371.
 **Status:** UNANSWERED.
 **Answer:**
+
+### Q-E16 — May repair replace older rejected documents, and how should updates route? 🟥 (DEN-424 / DEN-426)
+Raised by [DEN-421 / DEN-422 / DEN-424 / DEN-426](agents/board.md), reviewing candidate
+`061c86d81245f7e49909bc52c63c1e9b955846b2`. Full qualified Claude review: project file 386
+(`context/den421-cursor-claude-review-061c86d.json`, SHA-256
+`5d9056432855dceea6be8f9e9a15b7cc01ee12ca7552d51d0fe2f2e92e5c5abf`), **M1 Medium**.
+Full mandatory Grok QA: project file 392 (`context/den422-grok-qa-061c86d.json`, SHA-256
+`48c2242b6f6223bdf979ee5b15490107b12af1cb93a6c45f9d06289ca96cf83b`), **F1 High, OPEN**.
+[Spec 02 §7.3](spec/02-protocol.md#73-persisted-documents-and-migrations) chains migrations on load
+and requires lossless steps, preserving unmappable fields in `data.x-migrated`;
+[Spec 03 §13.3](spec/03-engine.md#133-migrations) requires lazy migration and rewrite on the next write.
+[§16](spec/03-engine.md#16-settings-document-kind-settings-schema-generated-form) keeps rejected settings
+in place until the next successful `settings.update` replaces them;
+[§22.13](spec/03-engine.md#22-test-plan) requires a valid whole-section repair update
+and refuses newer-version repair. These sections support current-invalid replacement, but do not explicitly
+authorize discarding an older unmigrated body through `repair_batch`. They also do not explicitly mandate
+ordinary-update failure for older rejected bodies or a separate public repair API.
+
+**Observed candidate behavior, not accepted policy:** Claude's actual probes show an ordinary validated
+`put` replaces a current-version invalid body (`Ok(2)`), but an older body that migrates successfully and
+then fails current validation yields `INTERNAL`. Older missing or failed migrations also fail on the
+ordinary path. Separate internal `repair_batch` skips the older body's migration and validation and can
+replace it with a valid whole current body, while retaining raw-readability, metadata, revision and newer-version
+guards. This bypass can discard unmigrated data; passing checks does not establish permission to do so.
+
+**Reviewer positions differ:** qualified Claude **APPROVE** covers the storage mechanism only, with handler
+routing left to the owner. Claude interprets §7.3's lossless requirement as applying to migration steps,
+not whole-body replacements, and recommends A below. Mandatory Grok **NOT APPROVED** leaves F1 High open:
+the accepted sections do not establish permission for any `repair_batch` replacement that discards an older
+unmigrated body. Both support current-version invalid-body replacement and its storage guards. Grok explicitly
+supports deletion of a decoded older row under the existing guards; deletion is not the open policy question.
+Neither review is an owner answer, and there is no joint approval of older-body replacement policy.
+
+**First owner decision — repair permission:** when an older document's migration is missing, fails, or
+produces a body that fails current validation, may an explicit repair replace it with a valid complete
+current body? Decide each case, including whether unmigrated data may be discarded, or choose D below.
+Define what must survive from the original or migrated body, including unknown fields and `data.x-migrated`:
+may a complete replacement omit them, must they be preserved, and from which body when migration fails?
+
+**Then, only if that repair is permitted — ordinary handler routing:** should a valid complete configuration
+update (`settings.update`, `actions.update`, …) use that permitted repair behavior, or fail until an explicit
+repair action? A/B/C assume repair permission for the cases the owner explicitly allows; they do not grant it.
+
+Options (all proposed, none accepted):
+
+- **(A) Ordinary complete valid updates replace older rejected bodies.** Handlers use the permitted
+  `repair_batch` semantics for whole-body updates.
+- **(B) Ordinary updates fail (`INTERNAL`) until an explicit repair action.** Add an explicit repair
+  operation and define how handlers route ordinary updates versus permitted repairs.
+- **(C) A for settings only, B for other document kinds.** Define that distinction in handler routing.
+- **(D) Every replacement of an older body, including explicit repair, waits for successful migration.**
+  No replacement discards an unmigrated body; missing or failed migration blocks repair as well as ordinary
+  updates. Define separately whether successful migration steps followed by current-validation failure allow
+  a valid whole-body repair, and the required preservation of migrated fields and `data.x-migrated`.
+
+**Recommendation:** A is the qualified Claude reviewer's recommendation: it matches settings §16/§22.13,
+is consistent with current-invalid replacement (M1), and still refuses newer rows as read-only. It remains
+conditional on the owner's repair-permission and preservation decisions. Grok has not approved that premise;
+D makes the migration-required alternative explicit. This record adopts neither interpretation as policy.
+**Impact / owner readiness:** [DEN-423](agents/board.md) remains UNANSWERED. The owner must first explicitly
+decide repair permission versus D (or a precise alternative) for missing migrations, failed migrations and
+migration-produced-invalid bodies, including unknown-field / `x-migrated` preservation. If repair is allowed,
+the owner must then choose A/B/C or a precise alternative and concrete handler-routing semantics. Record the
+exact answer and accepted spec/decision before relying on a replacement policy or feature-handler routing.
+DEN-412 remains blocked; DEN-365 depends on DEN-423. Recording this question does not establish full
+DEN-365 / DEN-302 / original DEN-71 acceptance. Source-mechanism review or green CI cannot resolve it.
+Under every option, unsupported newer versions remain read-only, and malformed raw metadata or unreadable
+JSON remains protected; no option bypasses existing storage guards. Current-invalid replacement remains
+supported; this question concerns older rejected bodies.
+DEN-424 / DEN-426 record this question only; the parent must obtain fresh cross-vendor documentation review
+of the corrected Q-E16 and current CI before publication/merge. Recording it neither resolves DEN-423 nor
+completes the parent cards, and leaves DEN-341, DEN-371 and DEN-407 holds unchanged. No account, key or
+registration runbook is needed for this policy question. No ADR, spec or policy is changed here.
+**Status:** UNANSWERED.
+**Answer:**
