@@ -776,15 +776,12 @@ mod tests {
             since: None,
         };
         let dbg = format!("{params:?}");
-        assert!(dbg.contains("***") && !dbg.contains("sdt_secret"), "{dbg}");
+        assert!(dbg.contains("***") && !dbg.contains("sdt_secret"));
         // And the wire form only carries the token inside an explicit exposure.
         let json = serde_json::to_string(&params).unwrap();
-        assert!(
-            json.contains("\"token\":\"***\"") && !json.contains("sdt_secret"),
-            "{json}"
-        );
+        assert!(json.contains("\"token\":\"***\"") && !json.contains("sdt_secret"));
         let json = crate::secret::expose_secrets(|| serde_json::to_string(&params).unwrap());
-        assert!(json.contains("\"token\":\"sdt_secret\""), "{json}");
+        assert!(json.contains("\"token\":\"sdt_secret\""));
     }
 
     #[test]
