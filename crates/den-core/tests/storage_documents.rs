@@ -2743,3 +2743,69 @@ async fn loader_failures_retain_raw_json_bytes_and_public_inspection_behavior() 
     }
     worker.close().await.unwrap();
 }
+
+#[test]
+fn caller_schema_errors_are_distinct_from_stored_schema_errors() {
+    let registry = full_registry();
+    let record = policy()
+        .prepare(
+            put("view_state", EntityId::new_v7(), json!({})),
+            None,
+            clock().wall(),
+        )
+        .unwrap()
+        .record;
+    same_record(&registry.validate_input(record.clone()).unwrap(), &record);
+    let mut invalid = record.clone();
+    invalid.document.data = json!({"invalid":true});
+    let error = registry.validate_input(invalid.clone()).unwrap_err();
+    assert!(
+        matches!(&error, DocumentError::InputSchema(message) if message == "fixture validation failed")
+    );
+    assert_eq!(error.code(), ErrorCode::new(ErrorCode::INVALID_PARAMS));
+    let error = registry.migrate(invalid).unwrap_err();
+    assert!(
+        matches!(&error, DocumentError::Schema(message) if message == "fixture validation failed")
+    );
+    assert_eq!(error.code(), ErrorCode::new(ErrorCode::INTERNAL));
+    for version in [0, 1, 2, 99] {
+        let mut wrong = record.clone();
+        wrong.document.schema_version = version;
+        wrong.document.data = json!({"panic":true});
+        let error = registry.validate_input(wrong).unwrap_err();
+        assert!(matches!(error, DocumentError::InvalidInput(_)));
+        assert_eq!(error.code(), ErrorCode::new(ErrorCode::INVALID_PARAMS));
+    }
+    for kind in ["action", "plugin_data"] {
+        let mut unregistered = record.clone();
+        unregistered.document.kind = kind.into();
+        let error = registry.validate_input(unregistered).unwrap_err();
+        assert!(matches!(error, DocumentError::InvalidInput(_)));
+        assert_eq!(error.code(), ErrorCode::new(ErrorCode::INVALID_PARAMS));
+    }
+    let mut panicking = record.clone();
+    panicking.document.data = json!({"panic":true});
+    let registry = Registry::new(BTreeMap::from([(
+        "view_state".into(),
+        DocumentSchema {
+            version: 3,
+            migrations: BTreeMap::new(),
+            validate: panicking_validator,
+        },
+    )]))
+    .unwrap();
+    let error = registry.validate_input(panicking.clone()).unwrap_err();
+    assert!(matches!(
+        error,
+        DocumentError::CallbackPanicked("validator")
+    ));
+    assert_eq!(error.code(), ErrorCode::new(ErrorCode::INTERNAL));
+    for version in [0, 1, 2, 99] {
+        panicking.document.schema_version = version;
+        assert!(matches!(
+            registry.validate_input(panicking.clone()),
+            Err(DocumentError::InvalidInput(_))
+        ));
+    }
+    same_record(&registry.validate_input(record.clone()).unwrap(), &record);
+}
