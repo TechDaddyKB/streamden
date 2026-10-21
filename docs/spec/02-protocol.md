@@ -299,18 +299,19 @@ pub struct Trigger {
 pub struct Filter {
     pub field: String,                 // dotted path into the payload: "amount", "user.roles"
     pub op: FilterOp,                  // eq | ne | in | not_in | gte | lte | between | contains | regex | exists
-    pub value: serde_json::Value,      // validated against the field's schema; "between" takes [min, max]
+    pub value: serde_json::Value,      // validated against the field's schema; "between" takes [min, max], min > max is INVALID_PARAMS
 }
 ```
 
 The catalog entry for each filterable field is `FilterableField { field, ops: Vec<FilterOp>, optionsFrom?:
 OperationName /* feeds the value picker */, specificity: u32 /* default 1 */, caseInsensitive: bool /* default
 false */ }` (A5). `specificity` is the rank spec 03 §6.3 multiplies by the operator weight for "specific beats any"
-precedence (`core.custom.name` is 4, §5.2); `caseInsensitive` makes `eq`, `ne`, `in` and `not_in` compare strings
-case-insensitively for that field (spec 03 §6.2; `contains` is case-insensitive by default regardless). `field` is a
-dotted path into `event.payload`, plus the **reserved filter paths** `user.*` and `platform`, which resolve against
-the envelope's normalized user and platform; a payload therefore never declares a top-level `platform` field (§6.3,
-A12).
+precedence (`core.custom.name` is 4, §5.2); `caseInsensitive` makes `eq`, `ne`, `in` and `not_in`, and array
+`contains` (element `eq`), compare strings case-insensitively for that field (spec 03 §6.2; string substring
+`contains` is case-insensitive regardless, Q-E12). `field` is a dotted path into `event.payload`, plus the
+**reserved filter paths** `user.*` and `platform`, which resolve against the envelope's normalized user and platform;
+a payload therefore never declares a top-level `platform` field (§6.3, A12). A bare `user` path is rejected at
+compile time with `INVALID_PARAMS`; it never falls back to the payload (Q-E13).
 
 ### 6.3 Variables and the run context
 
@@ -1576,3 +1577,6 @@ protocol design choice made here, not a product decision, and is open to reviewe
   request JSON Pointer for `settings.update` (§6.5); parser limits made transport-independent with
   `source.maxLength`, the failure shape and span units (§10). A16 is registration-only (`runs.list` paging, `actions.run.queue`) and lives in
   spec 03 §12.6 and §10.2.
+- **Owner answers of 2026-10-21** (DEN-521, text only, no type or wire change): §6.2 records Q-E11 (reversed
+  `between` bounds are `INVALID_PARAMS`), Q-E12 (A5 wording narrowed to string substring `contains`; array
+  `contains` follows `caseInsensitive`) and Q-E13 (bare `user` path is `INVALID_PARAMS`).

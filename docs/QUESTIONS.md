@@ -736,7 +736,7 @@ Action History and the event log (`engine.history.maxAgeDays` maximum `365`;
 `engine.events.maxAgeHours` maximum `8760`). Existing defaults and the separate Q-H1 / D-054 chat-retention
 policy remain unchanged.
 
-### Q-E11 — Should reversed `between` bounds be rejected? 🟥 (DEN-340)
+### Q-E11 — Should reversed `between` bounds be rejected? 🟨 (DEN-340)
 Raised by [DEN-338 / DEN-340](agents/board.md), Claude review project file 256
 (`context/den338-claude-review-cb634fd3.md`), question Q1, reviewing DEN-318 at `cb634fd3`.
 [Spec 03 §6.2](spec/03-engine.md#62-filters) defines inclusive numeric or RFC 3339 `[min, max]`
@@ -746,15 +746,20 @@ Options: (a) accept the current empty-range behavior; (b) reject reversed bounds
 with `INVALID_PARAMS`, making the authoring error visible before the trigger is used.
 **Recommendation:** reject reversed bounds at save time, as recommended by the reviewer; the
 compile-time part of option (b) remains an owner choice. A filter that can never match is usually an
-unintentional authoring error. This is a recommendation, not an accepted policy or implementation authorization.
-**Impact / owner readiness:** DEN-341 is the queued human decision card on the
+unintentional authoring error. (Historical recommendation; the owner's answer below is current policy.)
+**Impact / owner readiness (before the answer):** DEN-341 is the queued human decision card on the
 [streamden board](agents/board.md). Choose (a) or (b), or identify an already accepted normative clarification,
 before DEN-319 fixes expectations for this case and before full DEN-80 acceptance. Bounded DEN-318's
 review and CI/integration gates remain as described under Q-E14.
-**Status:** UNANSWERED.
-**Answer:**
+**Status:** ANSWERED 2026-10-21 (owner); not yet copied into `decisions.md`.
+**Answer:** Option (b). Reversed numeric or RFC 3339 `between` bounds (`min > max`) are rejected at
+compile/save time with `INVALID_PARAMS`; they are not accepted as an empty, never-matching range. Ordinary
+ordered ranges stay inclusive and unchanged ([Spec 03 §6.2](spec/03-engine.md#62-filters)). Owner answer recorded by DEN-521 from project file 647
+(`context/owner-e11-e12-e13-e15-and-den407-disposition.md`, SHA-256
+`e1816578a5ddcad8f8a03620075c2e1a647ea856c7fe5f5cc9deb48f2569314e`); exact operator answer of
+2026-10-21T18:43:22Z: "E11 B, E12 A, E13 A, E15 A including the error mapping".
 
-### Q-E12 — Which case rule applies to array `contains`? 🟥 (DEN-340)
+### Q-E12 — Which case rule applies to array `contains`? 🟨 (DEN-340)
 Raised by [DEN-338 / DEN-340](agents/board.md), Claude review project file 256, question Q2,
 reviewing DEN-318 at `cb634fd3`. [Spec 03 §6.2](spec/03-engine.md#62-filters) says array `contains`
 uses element `eq`, whose string comparison follows the field's `caseInsensitive` flag. The reviewed code
@@ -765,14 +770,20 @@ case-insensitive regardless, without restricting that wording to string substrin
 Options: (a) keep array element `eq`, including the field's case flag; (b) always fold array string elements
 for `contains`, regardless of that flag. String substring `contains` already folds case under the table.
 **Recommendation:** (a), the reviewer's recommendation: follow the table and clarify A5 to say
-"string `contains`". Neither that clarification nor a spec change is enacted here.
-**Impact / owner readiness:** [DEN-341](agents/board.md) needs a choice or an accepted clarification that
+"string `contains`". (Historical recommendation; the owner's answer below is current policy.)
+**Impact / owner readiness (before the answer):** [DEN-341](agents/board.md) needs a choice or an accepted clarification that
 reconciles the sources before DEN-319's ambiguous array-case assertions, full DEN-80 acceptance and consumer
 expectations are settled. DEN-318's independent review and CI/integration gates remain unchanged.
-**Status:** UNANSWERED.
-**Answer:**
+**Status:** ANSWERED 2026-10-21 (owner); not yet copied into `decisions.md`.
+**Answer:** Option (a). Array `contains` uses element `eq`, including the field's `caseInsensitive` flag;
+string substring `contains` stays case-insensitive as already specified. Spec 02 §6.2 / A5 now says "string
+`contains`". The `FilterableField` source comment still has the old wording; that drift needs a separate
+contract task and is not edited by DEN-521. Owner answer recorded by DEN-521 from project file 647
+(`context/owner-e11-e12-e13-e15-and-den407-disposition.md`, SHA-256
+`e1816578a5ddcad8f8a03620075c2e1a647ea856c7fe5f5cc9deb48f2569314e`); exact operator answer of
+2026-10-21T18:43:22Z: "E11 B, E12 A, E13 A, E15 A including the error mapping".
 
-### Q-E13 — What should a bare `user` filter path mean? 🟥 (DEN-340)
+### Q-E13 — What should a bare `user` filter path mean? 🟨 (DEN-340)
 Raised by [DEN-338 / DEN-340](agents/board.md), Claude review project file 256, question Q3 and
 **F1 Low**, reviewing DEN-318 at `cb634fd3`. [Spec 02 §6.2 / A5](spec/02-protocol.md#62-trigger)
 and [Spec 03 §6.2](spec/03-engine.md#62-filters) reserve `user.*` for the envelope; the reviewed code
@@ -785,14 +796,18 @@ Options: (a) reject bare `user` at compile time with `INVALID_PARAMS`; (b) defin
 [`UserRef`](../crates/den-protocol/src/shared.rs), with normative whole-root semantics;
 (c) retain the current payload fallback. Option (c) crosses the untrusted payload boundary and depends on
 non-conforming data; it is explicitly not recommended. Existing `user.*` paths stay envelope paths.
-**Recommendation:** (a) until normative whole-root support is needed. This is the parent/reviewer follow-up
-recommendation only, not an owner answer, an approved contract or implementation authorization; the review
-itself left the choice open.
-**Impact / owner readiness:** [DEN-341](agents/board.md) needs a choice or accepted clarification before
+**Recommendation:** (a) until normative whole-root support is needed. This was the parent/reviewer follow-up
+recommendation; the review itself left the choice open. (Historical; the owner's answer below is current policy.)
+**Impact / owner readiness (before the answer):** [DEN-341](agents/board.md) needs a choice or accepted clarification before
 DEN-319 encodes bare-root expectations, full DEN-80 acceptance or consumers rely on whole-root behavior.
 Keep the Low finding distinct from Q-E14's field-schema contract gap; DEN-318's remaining gates are unchanged.
-**Status:** UNANSWERED.
-**Answer:**
+**Status:** ANSWERED 2026-10-21 (owner); not yet copied into `decisions.md`.
+**Answer:** Option (a). A bare `user` filter path is rejected at compile time with `INVALID_PARAMS`.
+`user.*` paths keep resolving against the trusted envelope user; there is no payload fallback and no
+whole-root `UserRef` semantics. Owner answer recorded by DEN-521 from project file 647
+(`context/owner-e11-e12-e13-e15-and-den407-disposition.md`, SHA-256
+`e1816578a5ddcad8f8a03620075c2e1a647ea856c7fe5f5cc9deb48f2569314e`); exact operator answer of
+2026-10-21T18:43:22Z: "E11 B, E12 A, E13 A, E15 A including the error mapping".
 
 ### Q-E14 — Where does filter operand field-schema validation come from? 🟥 (DEN-340)
 Raised by [DEN-338 / DEN-340](agents/board.md), Claude review project file 256, question Q4,
@@ -824,7 +839,7 @@ No account, key or console operation is needed to answer these questions, so no 
 **Status:** UNANSWERED.
 **Answer:**
 
-### Q-E15 — What precision, promotion and overflow rules should variable arithmetic use? 🟥 (DEN-372)
+### Q-E15 — What precision, promotion and overflow rules should variable arithmetic use? 🟨 (DEN-372)
 Raised by [DEN-84 / DEN-372](agents/board.md), preflight project file 303
 (`context/den84-numeric-contract-hold-4f263991.json`, SHA-256
 `444b450f27f66bc38a2ea8b721b8aabef92db7cf4133c01604b8bb89e1f544e5`).
@@ -832,11 +847,11 @@ Raised by [DEN-84 / DEN-372](agents/board.md), preflight project file 303
 or a missing variable (already treated as `0`); [§11.4](spec/03-engine.md#114-storage-behaviour) defines
 memory and persistence behavior. [Spec 02 §6.3](spec/02-protocol.md#63-variables-and-the-run-context) allows
 JSON numbers, and actual [`VariableRecord.value`](../crates/den-protocol/src/domain.rs) is
-`serde_json::Value`. These sources do not settle integer precision, mixed integer/float promotion,
+`serde_json::Value`. Before the answer, these sources did not settle integer precision, mixed integer/float promotion,
 rounding or overflow. The current JSON number representation supports `i64`/`u64` integers and finite
-`f64` values; choosing arithmetic rules over those representations remains an owner decision.
+`f64` values; choosing arithmetic rules over those representations was left to the owner (answered below).
 
-**Observed reproductions, not accepted VarStore behavior:** file 303's locked JSON-library probe
+**Observed reproductions (before the answer), not accepted VarStore behavior:** file 303's locked JSON-library probe
 preserves stored integer `9007199254740993`, but converting it to `f64` produces `9007199254740992`.
 That route yields `9007199254740992` for both `9007199254740993 + 1` (mathematically
 `9007199254740994`) and `9007199254740993 + 0.5` (mathematically `9007199254740993.5`).
@@ -845,7 +860,7 @@ That route yields `9007199254740992` for both `9007199254740993 + 1` (mathematic
 These probes reproduce representation hazards only: no VarStore implementation or arithmetic policy
 was accepted, and neither null substitution nor silent wrapping/saturation is an approved response.
 
-Options (all proposed, none accepted):
+Options (as proposed before the answer; the owner chose (a) with its error mapping):
 
 - **(a) Checked exact integers within the existing JSON integer domain.** For two integer operands,
   compute exactly across the signed `i64` / unsigned `u64` domain (`-9223372036854775808` through
@@ -867,15 +882,25 @@ Options (all proposed, none accepted):
 **Recommendation:** (a), conditional on the owner's explicit approval of the integer range, promotion,
 rounding, atomic rejection and error mapping. It preserves exact integer arithmetic where the current
 representation can hold the result while making mixed-float rounding visible. This is a recommendation
-only, not an owner answer, accepted design or implementation authorization.
-**Impact / owner readiness:** [DEN-371](agents/board.md) queues the owner's choice or an already accepted
+only. (Historical recommendation; the owner's answer below is current policy.)
+**Impact / owner readiness (before the answer):** [DEN-371](agents/board.md) queues the owner's choice or an already accepted
 normative clarification. DEN-84 arithmetic and full acceptance remain held until resolved; the parent
 can continue separately scoped, unblocked non-arithmetic work. This question introduces no changes to
 namespaces, provenance flags, persistence flags, defaults or operation parameters. Missing-as-`0` is
 already accepted. Independent Grok documentation QA, current Docs CI and exact integration remain
 required for DEN-372; recording the question does not complete DEN-84 or resolve DEN-371.
-**Status:** UNANSWERED.
-**Answer:**
+**Status:** ANSWERED 2026-10-21 (owner); not yet copied into `decisions.md`.
+**Answer:** Option (a), including the error mapping. Two integer operands compute exactly; a result outside
+`-9223372036854775808` through `18446744073709551615` is rejected, never promoted to float, wrapped,
+saturated or stored as `null`. If either operand is floating point, both convert to IEEE 754 binary64 and
+binary64 arithmetic is used, round-to-nearest, ties-to-even, with the precision loss documented; nonfinite
+results are rejected. Every rejection uses existing `INVALID_PARAMS`, leaves the entry and its metadata
+unchanged and emits no update. Missing-as-`0` is unchanged. No namespace, provenance, persistence, default,
+parameter or public type change follows ([Spec 03 §11.2](spec/03-engine.md#112-operations)).
+Owner answer recorded by DEN-521 from project file 647
+(`context/owner-e11-e12-e13-e15-and-den407-disposition.md`, SHA-256
+`e1816578a5ddcad8f8a03620075c2e1a647ea856c7fe5f5cc9deb48f2569314e`); exact operator answer of
+2026-10-21T18:43:22Z: "E11 B, E12 A, E13 A, E15 A including the error mapping".
 
 ### Q-E16 — May repair replace older rejected documents, and how should updates route? 🟥 (DEN-424 / DEN-426)
 Raised by [DEN-421 / DEN-422 / DEN-424 / DEN-426](agents/board.md), reviewing candidate
