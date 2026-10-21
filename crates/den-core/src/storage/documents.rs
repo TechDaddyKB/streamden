@@ -20,6 +20,7 @@ pub enum DocumentError {
     Sqlite(rusqlite::Error),
     Json(serde_json::Error),
     Schema(String),
+    InputSchema(String),
     CallbackPanicked(&'static str),
     InvalidInput(&'static str),
     InvalidStored(&'static str),
@@ -36,7 +37,7 @@ impl DocumentError {
     /// Existing protocol code only; callers must not expose raw diagnostics on the wire.
     pub fn code(&self) -> ErrorCode {
         ErrorCode::new(match self {
-            Self::InvalidInput(_) => ErrorCode::INVALID_PARAMS,
+            Self::InvalidInput(_) | Self::InputSchema(_) => ErrorCode::INVALID_PARAMS,
             Self::Conflict { .. } => ErrorCode::CONFLICT,
             Self::UnsupportedVersion { .. } => ErrorCode::INVALID_STATE,
             _ => ErrorCode::INTERNAL,
@@ -487,6 +488,8 @@ pub struct Invalid {
     pub error: DocumentError,
     pub data: rusqlite::types::Value,
 }
+type InspectedRow = (Record, rusqlite::types::Value);
+
 impl Documents {
     /// Decode every row without installing, migrating, validating or repairing it.
     /// A malformed row is isolated; query/I/O and transport failures still fail the call.
@@ -494,6 +497,20 @@ impl Documents {
         &self,
         kind: String,
     ) -> Result<Vec<std::result::Result<Record, Invalid>>> {
+        let mut reports = Vec::new();
+        for row in self.inspect_raw_rows(kind).await? {
+            reports.push(match row {
+                Ok((record, _)) => Ok(record),
+                Err(invalid) => Err(invalid),
+            });
+        }
+        Ok(reports)
+    }
+
+    async fn inspect_raw_rows(
+        &self,
+        kind: String,
+    ) -> Result<Vec<std::result::Result<InspectedRow, Invalid>>> {
         check_kind(&kind)?;
         run(&self.handle, move |conns| {
             let mut statement = conns.config.prepare(
@@ -505,12 +522,15 @@ impl Documents {
             while let Some(row) = rows.next()? {
                 let id = diagnostic_field(row, 0)?;
                 let data = diagnostic_field(row, 3)?;
-                reports.push(decode_row(row, &kind).map_err(|error| Invalid {
-                    id,
-                    kind: kind.clone(),
-                    error,
-                    data,
-                }));
+                reports.push(match decode_row(row, &kind) {
+                    Ok(record) => Ok((record, data)),
+                    Err(error) => Err(Invalid {
+                        id,
+                        kind: kind.clone(),
+                        error,
+                        data,
+                    }),
+                });
             }
             Ok(reports)
         })
@@ -597,6 +617,19 @@ impl Registry {
         }
         Ok(Self { schemas, policy })
     }
+    /// Validate a complete current-version caller body; preserve local raw causes.
+    /// Stored-row migrations still use migrate() and retain their INTERNAL errors.
+    pub fn validate_input(&self, record: Record) -> Result<Record> {
+        if record.document.schema_version != self.policy.version(&record.document.kind)? {
+            return Err(DocumentError::InvalidInput(
+                "input version must match registered version",
+            ));
+        }
+        self.migrate(record).map_err(|error| match error {
+            DocumentError::Schema(message) => DocumentError::InputSchema(message),
+            error => error,
+        })
+    }
     /// Pure conversion of a supplied persisted record; no SQL, installation or writes.
     pub fn migrate(&self, mut record: Record) -> Result<Record> {
         let kind = &record.document.kind;
@@ -623,5 +656,41 @@ impl Registry {
             .map_err(|_| DocumentError::CallbackPanicked("validator"))?
             .map_err(DocumentError::Schema)?;
         Ok(record)
+    }
+}
+
+/// Inspectable newer bodies are never passed through older callbacks or rewritten.
+#[derive(Debug)]
+pub enum Loaded {
+    Valid(Record),
+    Invalid(Invalid),
+    Newer(Record),
+}
+impl Documents {
+    /// Lazy in-memory migration and validation. No database write, disabling or bus emission.
+    pub async fn load(&self, kind: String, registry: &Registry) -> Result<Vec<Loaded>> {
+        registry.policy.version(&kind)?;
+        Ok(self
+            .inspect_raw_rows(kind)
+            .await?
+            .into_iter()
+            .map(|row| match row {
+                Err(invalid) => Loaded::Invalid(invalid),
+                Ok((record, data)) => {
+                    let id = record.id.to_string().into();
+                    let kind = record.document.kind.clone();
+                    match registry.migrate(record.clone()) {
+                        Ok(record) => Loaded::Valid(record),
+                        Err(DocumentError::UnsupportedVersion { .. }) => Loaded::Newer(record),
+                        Err(error) => Loaded::Invalid(Invalid {
+                            id,
+                            kind,
+                            error,
+                            data,
+                        }),
+                    }
+                }
+            })
+            .collect())
     }
 }

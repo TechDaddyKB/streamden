@@ -820,3 +820,131 @@ async fn raw_upserts_replace_full_records_across_and_within_batches_in_both_scop
         worker.close().await.unwrap();
     }
 }
+
+#[tokio::test]
+async fn users_match_platform_and_user_case_exactly_without_writes() {
+    let (_temp, worker, vars) = harness().await;
+    let scopes = [("p", "u"), ("P", "u"), ("p", "U"), ("P", "U")];
+    for (platform, user_id) in scopes {
+        let entry = record(json!([platform, user_id]), false, UpdatedBy::User);
+        seed_user(&worker, platform, user_id, "same".into(), entry).await;
+    }
+    let before = raw(&worker.handle, |c| c.config.total_changes()).await;
+    for (platform, user_id) in scopes {
+        let actual = vars
+            .read_user(platform.into(), user_id.into())
+            .await
+            .unwrap();
+        let expected = std::collections::BTreeMap::from([(
+            "same".into(),
+            record(json!([platform, user_id]), false, UpdatedBy::User),
+        )]);
+        assert!(actual == expected, "scope record map must match exactly");
+    }
+    assert_eq!(
+        raw(&worker.handle, |c| c.config.total_changes()).await,
+        before
+    );
+    worker.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn users_isolate_unrelated_corruption_and_fail_matching_scope_without_repair() {
+    let (_temp, worker, vars) = harness().await;
+    let entry = record(json!({"valid": true}), true, UpdatedBy::Mcp);
+    seed_user(&worker, "p", "u", "good".into(), entry.clone()).await;
+    let corrupt_scopes = [("other", "u"), ("p", "other"), ("P", "u"), ("p", "U")];
+    for (platform, user_id) in corrupt_scopes {
+        // Each damaged scope also has a valid row: its read must fail as a whole.
+        seed_user(&worker, platform, user_id, "good".into(), entry.clone()).await;
+        seed_user(&worker, platform, user_id, "bad".into(), entry.clone()).await;
+    }
+    raw(&worker.handle, |c| {
+        c.config
+            .execute_batch(
+                "PRAGMA ignore_check_constraints=ON;
+             UPDATE user_vars SET untrusted=2 WHERE name='bad';",
+            )
+            .unwrap();
+    })
+    .await;
+    let before = raw(&worker.handle, |c| c.config.total_changes()).await;
+    assert_eq!(
+        vars.read_user("p".into(), "u".into()).await.unwrap(),
+        std::collections::BTreeMap::from([("good".into(), entry.clone())])
+    );
+    for (platform, user_id) in corrupt_scopes {
+        let error = vars
+            .read_user(platform.into(), user_id.into())
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::new(ErrorCode::INTERNAL));
+        assert!(matches!(
+            error,
+            DocumentError::InvalidStored("invalid variable flag")
+        ));
+    }
+    // Re-read after all failures to catch repairs or cross-scope side effects.
+    assert_eq!(
+        vars.read_user("p".into(), "u".into()).await.unwrap(),
+        std::collections::BTreeMap::from([("good".into(), entry)])
+    );
+    assert_eq!(
+        raw(&worker.handle, |c| {
+            c.config
+                .query_row(
+                    "SELECT COUNT(*) FROM user_vars WHERE name='bad' AND untrusted=2",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap()
+        })
+        .await,
+        4
+    );
+    assert_eq!(
+        raw(&worker.handle, |c| c.config.total_changes()).await,
+        before
+    );
+    worker.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn users_preserve_embedded_nul_in_each_scope_key_without_writes() {
+    let (_temp, worker, vars) = harness().await;
+    let scopes = [
+        ("x", "x"),
+        ("x\u{0}y", "x"),
+        ("x", "x\u{0}y"),
+        ("x\u{0}y", "x\u{0}y"),
+    ];
+    for (platform, user_id) in scopes {
+        let entry = record(json!([platform, user_id]), false, UpdatedBy::System);
+        seed_user(&worker, platform, user_id, "same".into(), entry).await;
+    }
+    let before = raw(&worker.handle, |c| c.config.total_changes()).await;
+    for (platform, user_id) in scopes {
+        assert_eq!(
+            vars.read_user(platform.into(), user_id.into())
+                .await
+                .unwrap(),
+            std::collections::BTreeMap::from([(
+                "same".into(),
+                record(json!([platform, user_id]), false, UpdatedBy::System),
+            )])
+        );
+    }
+    for (platform, user_id) in [("x\u{0}", "x"), ("x", "x\u{0}"), ("x\u{0}z", "x\u{0}y")] {
+        assert!(
+            vars.read_user(platform.into(), user_id.into())
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+    assert_eq!(
+        raw(&worker.handle, |c| c.config.total_changes()).await,
+        before
+    );
+    worker.close().await.unwrap();
+}
