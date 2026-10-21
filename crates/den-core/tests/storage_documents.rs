@@ -2618,3 +2618,128 @@ async fn failed_migration_retains_original_diagnostic_and_valid_neighbor() {
     assert_eq!(raw_snapshot(&worker).await, snapshot);
     worker.close().await.unwrap();
 }
+
+#[tokio::test]
+async fn loader_failures_retain_raw_json_bytes_and_public_inspection_behavior() {
+    let (_temp, worker, docs) = harness().await;
+    let bad = EntityId::new_v7();
+    let good = EntityId::new_v7();
+    // Raw SQLite text, deliberately not serialized from Value: every lexeme must survive.
+    let body = " { \"z\": 1, \"invalid\": true, \"panic\": true, \"big\": 123456789012345678901234567890, \"f\": 1.50e+02, \"dup\": 1, \"dup\": 2 }\n";
+    seed_document(&worker, "view_state", good, 3, json!({"ok":true})).await;
+    seed_document(&worker, "view_state", bad, 1, json!({})).await;
+    for failure in [
+        "migration",
+        "validator",
+        "missing",
+        "migration_panic",
+        "validator_panic",
+    ] {
+        let version = if failure.starts_with("validator") {
+            3
+        } else {
+            1
+        };
+        raw(&worker.handle, move |c| {
+            c.config
+                .execute(
+                    "UPDATE documents SET data=?1,schema_version=?2 WHERE kind='view_state' AND id=?3",
+                    params![body, version, bad.to_string()],
+                )
+                .unwrap();
+        })
+        .await;
+        let step: den_core::storage::documents::Migration = if failure == "migration_panic" {
+            panicking_step
+        } else {
+            fixture_step_one
+        };
+        let registry = Registry::new(BTreeMap::from([(
+            "view_state".into(),
+            DocumentSchema {
+                version: 3,
+                migrations: if failure == "missing" {
+                    BTreeMap::new()
+                } else {
+                    BTreeMap::from([(1, step), (2, fixture_step_two)])
+                },
+                validate: if failure == "validator_panic" {
+                    panicking_validator
+                } else {
+                    fixture_validator
+                },
+            },
+        )]))
+        .unwrap();
+        let snapshot = raw_snapshot(&worker).await;
+        let original = docs.get("view_state".into(), bad).await.unwrap().unwrap();
+        let listed = format!(
+            "{:?}",
+            docs.list("view_state".into(), Filter::default())
+                .await
+                .unwrap()
+        );
+        let inspected = format!(
+            "{:?}",
+            docs.inspect_rows("view_state".into()).await.unwrap()
+        );
+        for _ in 0..2 {
+            let reports = docs.load("view_state".into(), &registry).await.unwrap();
+            assert_eq!(reports.len(), 2);
+            assert!(
+                reports
+                    .iter()
+                    .any(|report| matches!(report, Loaded::Valid(record) if record.id == good))
+            );
+            let invalid = reports
+                .iter()
+                .find_map(|report| match report {
+                    Loaded::Invalid(invalid) => Some(invalid),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(invalid.id, SqlValue::Text(bad.to_string()));
+            assert_eq!(invalid.kind, "view_state");
+            assert_eq!(invalid.data, SqlValue::Text(body.into()));
+            match (&invalid.error, failure) {
+                (DocumentError::Schema(message), "migration") => assert_eq!(message, "missing old"),
+                (DocumentError::Schema(message), "validator") => {
+                    assert_eq!(message, "fixture validation failed")
+                }
+                (DocumentError::InvalidStored(message), "missing") => {
+                    assert_eq!(*message, "missing document migration")
+                }
+                (DocumentError::CallbackPanicked(stage), "migration_panic") => {
+                    assert_eq!(*stage, "migration")
+                }
+                (DocumentError::CallbackPanicked(stage), "validator_panic") => {
+                    assert_eq!(*stage, "validator")
+                }
+                other => panic!("unexpected failure: {other:?}"),
+            }
+            same_record(
+                &docs.get("view_state".into(), bad).await.unwrap().unwrap(),
+                &original,
+            );
+            assert!(docs.get("view_state".into(), good).await.unwrap().is_some());
+            assert_eq!(
+                format!(
+                    "{:?}",
+                    docs.list("view_state".into(), Filter::default())
+                        .await
+                        .unwrap()
+                ),
+                listed
+            );
+            assert_eq!(
+                format!(
+                    "{:?}",
+                    docs.inspect_rows("view_state".into()).await.unwrap()
+                ),
+                inspected
+            );
+            assert_eq!(raw_snapshot(&worker).await, snapshot);
+        }
+    }
+    worker.close().await.unwrap();
+}
