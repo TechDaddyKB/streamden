@@ -876,3 +876,52 @@ already accepted. Independent Grok documentation QA, current Docs CI and exact i
 required for DEN-372; recording the question does not complete DEN-84 or resolve DEN-371.
 **Status:** UNANSWERED.
 **Answer:**
+
+### Q-E16 — Should ordinary complete updates replace older rejected documents? 🟥 (DEN-424)
+Raised by [DEN-421 / DEN-424](agents/board.md), qualified Claude review project file 386
+(`context/den421-cursor-claude-review-061c86d.json`, SHA-256
+`5d9056432855dceea6be8f9e9a15b7cc01ee12ca7552d51d0fe2f2e92e5c5abf`), finding **M1 Medium**
+and its owner question, reviewing candidate `061c86d81245f7e49909bc52c63c1e9b955846b2`.
+[Spec 02 §7.3](spec/02-protocol.md#73-persisted-documents-and-migrations) chains migrations on load;
+[Spec 03 §13.3](spec/03-engine.md#133-migrations) requires lazy migration and rewrite on the next write.
+[§16](spec/03-engine.md#16-settings-document-kind-settings-schema-generated-form) keeps rejected settings
+in place until the next successful `settings.update` replaces them;
+[§22.13](spec/03-engine.md#22-test-plan) requires a valid whole-section repair update
+and refuses newer-version repair. Neither accepted text mandates ordinary-update failure for older rejected
+bodies or a separate public repair API.
+
+**Observed candidate behavior, not accepted policy:** the review's actual probes show an ordinary validated
+`put` replaces a current-version invalid body (`Ok(2)`), but an older body that migrates successfully and
+then fails current validation yields `INTERNAL`. Older missing or failed migrations also fail on the
+ordinary path. Separate internal `repair_batch` can replace a rejected body with a valid whole current
+body while preserving the storage guards. Source-mechanism review and green CI cannot answer this policy
+question or approve feature-handler routing.
+
+When a stored document has an older `schemaVersion` and its migration is missing, fails, or produces a body
+that fails current validation, should an ordinary configuration update (`settings.update`, `actions.update`,
+…) with a valid complete body replace it, as it does a current-version invalid record, or fail until an
+explicit repair action is used?
+
+Options (all proposed, none accepted):
+
+- **(A) Ordinary complete valid updates replace older rejected bodies.** Handlers use `repair_batch`
+  semantics for whole-body updates.
+- **(B) Ordinary updates fail (`INTERNAL`) until an explicit repair action.** Add an explicit repair
+  operation and define how handlers route ordinary updates versus repairs.
+- **(C) A for settings only, B for other document kinds.** Define that distinction in handler routing.
+
+**Recommendation:** A, the qualified Claude reviewer's recommendation: it matches settings §16/§22.13,
+is consistent with current-invalid replacement (M1), and still refuses newer rows as read-only. This is
+not an owner answer or an approved policy.
+**Impact / owner readiness:** [DEN-423](agents/board.md) needs the owner's explicit A/B/C choice or precise
+alternative, confirmation of whether migration-produced-invalid bodies are included, and concrete
+handler-routing semantics. Record the exact answer and accepted spec/decision before feature handlers,
+default policy or full DEN-365 / DEN-302 / original DEN-71 acceptance depend on it. Unblocked internal
+mechanism work may continue. Under every option, unsupported newer versions remain read-only, and malformed
+raw metadata or unreadable JSON remains protected; no option bypasses existing storage guards.
+DEN-424 records this question only; fresh cross-vendor documentation review and current CI remain required
+before publication/merge. Recording it neither resolves DEN-423 nor completes the parent cards, and leaves
+DEN-341, DEN-371 and DEN-407 holds unchanged. No account, key or registration runbook is needed for this
+policy question. No ADR, spec or policy is changed here.
+**Status:** UNANSWERED.
+**Answer:**
