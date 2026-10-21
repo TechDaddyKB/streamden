@@ -444,16 +444,15 @@ async fn users_match_platform_and_user_case_exactly_without_writes() {
     }
     let before = raw(&worker.handle, |c| c.config.total_changes()).await;
     for (platform, user_id) in scopes {
-        assert_eq!(
-            vars.read_user(platform.into(), user_id.into())
-                .await
-                .unwrap(),
-            std::collections::BTreeMap::from([(
-                "same".into(),
-                record(json!([platform, user_id]), false, UpdatedBy::User),
-            )]),
-            "scope ({platform:?}, {user_id:?})"
-        );
+        let actual = vars
+            .read_user(platform.into(), user_id.into())
+            .await
+            .unwrap();
+        let expected = std::collections::BTreeMap::from([(
+            "same".into(),
+            record(json!([platform, user_id]), false, UpdatedBy::User),
+        )]);
+        assert!(actual == expected, "scope record map must match exactly");
     }
     assert_eq!(
         raw(&worker.handle, |c| c.config.total_changes()).await,
