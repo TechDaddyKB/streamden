@@ -2086,3 +2086,231 @@ async fn load_report_rejects_all_uuid_aliases_without_repair_or_deduplication() 
     assert_eq!(raw_snapshot(&worker).await, before);
     worker.close().await.unwrap();
 }
+
+use den_core::storage::documents::{DocumentSchema, Registry};
+use std::collections::BTreeMap;
+
+fn schema_registry(migrations: BTreeMap<u32, den_core::storage::documents::Migration>) -> Registry {
+    Registry::new(BTreeMap::from([(
+        "view_state".into(),
+        DocumentSchema {
+            version: 3,
+            migrations,
+            validate: fixture_validator,
+        },
+    )]))
+    .unwrap()
+}
+fn fixture_validator(data: &Value) -> Result<(), String> {
+    if data.get("invalid").is_some() {
+        Err("fixture validation failed".into())
+    } else {
+        Ok(())
+    }
+}
+fn fixture_step_one(mut data: Value) -> Result<Value, String> {
+    let old = data
+        .as_object_mut()
+        .ok_or("fixture requires object")?
+        .remove("old")
+        .ok_or("missing old")?;
+    data["new"] = old;
+    Ok(data)
+}
+fn fixture_step_two(mut data: Value) -> Result<Value, String> {
+    data["step2"] = json!(true);
+    Ok(data)
+}
+fn full_registry() -> Registry {
+    schema_registry(BTreeMap::from([
+        (
+            1,
+            fixture_step_one as den_core::storage::documents::Migration,
+        ),
+        (
+            2,
+            fixture_step_two as den_core::storage::documents::Migration,
+        ),
+    ]))
+}
+
+#[test]
+fn supplied_registry_checks_versions_and_migration_edges() {
+    for (kind, version) in [
+        ("action", StoredDocument::ACTION_SCHEMA_VERSION),
+        ("queue", StoredDocument::QUEUE_SCHEMA_VERSION),
+        ("command", StoredDocument::COMMAND_SCHEMA_VERSION),
+        ("timer", StoredDocument::TIMER_SCHEMA_VERSION),
+        (
+            "pending_change",
+            StoredDocument::PENDING_CHANGE_SCHEMA_VERSION,
+        ),
+    ] {
+        let schema = DocumentSchema {
+            version,
+            migrations: BTreeMap::new(),
+            validate: fixture_validator,
+        };
+        assert!(Registry::new(BTreeMap::from([(kind.into(), schema.clone())])).is_ok());
+        assert!(
+            Registry::new(BTreeMap::from([(
+                kind.into(),
+                DocumentSchema {
+                    version: version + 1,
+                    ..schema
+                }
+            )]))
+            .is_err()
+        );
+    }
+    for (kind, version, from) in [
+        ("view_state", 0, 0),
+        ("view_state", 3, 3),
+        ("view_state", 3, 4),
+        ("plugin_data", 3, 1),
+    ] {
+        assert!(
+            Registry::new(BTreeMap::from([(
+                kind.into(),
+                DocumentSchema {
+                    version,
+                    migrations: BTreeMap::from([(
+                        from,
+                        fixture_step_one as den_core::storage::documents::Migration
+                    )]),
+                    validate: fixture_validator
+                }
+            )]))
+            .is_err()
+        );
+    }
+}
+
+fn panicking_step(data: Value) -> Result<Value, String> {
+    if data.get("panic").is_some() {
+        panic!("fixture migration panic")
+    }
+    fixture_step_one(data)
+}
+
+fn panicking_validator(data: &Value) -> Result<(), String> {
+    if data.get("panic").is_some() {
+        panic!("fixture validator panic")
+    }
+    fixture_validator(data)
+}
+
+#[tokio::test]
+async fn supplied_registry_pure_conversion_preserves_metadata_and_contains_all_failures() {
+    let (_temp, worker, docs) = harness().await;
+    let id = EntityId::new_v7();
+    seed_document(
+        &worker,
+        "view_state",
+        id,
+        1,
+        json!({"old":7,"x-migrated":{"kept":true},"unmapped":[null]}),
+    )
+    .await;
+    let original = docs.get("view_state".into(), id).await.unwrap().unwrap();
+    let snapshot = raw_snapshot(&worker).await;
+    let converted = full_registry().migrate(original.clone()).unwrap();
+    assert_eq!(converted.document.schema_version, 3);
+    assert_eq!(
+        converted.document.data,
+        json!({"new":7,"step2":true,"x-migrated":{"kept":true},"unmapped":[null]})
+    );
+    assert_eq!(converted.document.kind, original.document.kind);
+    assert_eq!(converted.id, original.id);
+    assert_eq!(converted.revision, original.revision);
+    assert_eq!(converted.created_at, original.created_at);
+    assert_eq!(converted.updated_at, original.updated_at);
+    assert_eq!(converted.updated_by, original.updated_by);
+    assert!(matches!(
+        schema_registry(BTreeMap::new()).migrate(original.clone()),
+        Err(DocumentError::InvalidStored("missing document migration"))
+    ));
+    assert!(matches!(
+        Registry::new(BTreeMap::new())
+            .unwrap()
+            .migrate(original.clone()),
+        Err(DocumentError::InvalidInput(_))
+    ));
+    let mut invalid = original.clone();
+    invalid.document.schema_version = 3;
+    invalid.document.data = json!({"invalid":true});
+    assert!(matches!(
+        full_registry().migrate(invalid),
+        Err(DocumentError::Schema(_))
+    ));
+    for (version, stage) in [(1, "migration"), (3, "validator")] {
+        let registry = Registry::new(BTreeMap::from([(
+            "view_state".into(),
+            DocumentSchema {
+                version: 3,
+                migrations: BTreeMap::from([
+                    (1, panicking_step as den_core::storage::documents::Migration),
+                    (2, fixture_step_two),
+                ]),
+                validate: panicking_validator,
+            },
+        )]))
+        .unwrap();
+        let mut record = original.clone();
+        record.document.schema_version = version;
+        record.document.data = json!({"panic":true});
+        assert!(
+            matches!(registry.migrate(record), Err(DocumentError::CallbackPanicked(actual)) if actual == stage)
+        );
+        let mut newer = original.clone();
+        newer.document.schema_version = 99;
+        newer.document.data = json!({"panic":true});
+        assert!(matches!(
+            registry.migrate(newer),
+            Err(DocumentError::UnsupportedVersion {
+                stored: 99,
+                supported: 3,
+                ..
+            })
+        ));
+        assert_eq!(
+            registry.migrate(original.clone()).unwrap().document.data,
+            converted.document.data
+        );
+        assert!(docs.get("view_state".into(), id).await.unwrap().is_some());
+    }
+    let mut missing = original.clone();
+    missing.document.data = json!({"no-old":true});
+    assert!(
+        matches!(full_registry().migrate(missing), Err(DocumentError::Schema(message)) if message == "missing old")
+    );
+    let first = fixture_step_one(original.document.data.clone()).unwrap();
+    assert_eq!(
+        first,
+        json!({"new":7,"x-migrated":{"kept":true},"unmapped":[null]})
+    );
+    assert_eq!(fixture_step_two(first).unwrap(), converted.document.data);
+    assert_eq!(
+        full_registry()
+            .migrate(converted.clone())
+            .unwrap()
+            .document
+            .data,
+        converted.document.data
+    );
+    let partial = schema_registry(BTreeMap::from([(
+        1,
+        fixture_step_one as den_core::storage::documents::Migration,
+    )]));
+    assert!(matches!(
+        partial.migrate(original.clone()),
+        Err(DocumentError::InvalidStored("missing document migration"))
+    ));
+    let mut invalid_after_steps = original.clone();
+    invalid_after_steps.document.data["invalid"] = json!(true);
+    assert!(
+        matches!(full_registry().migrate(invalid_after_steps), Err(DocumentError::Schema(message)) if message == "fixture validation failed")
+    );
+    assert_eq!(raw_snapshot(&worker).await, snapshot);
+    worker.close().await.unwrap();
+}
