@@ -75,8 +75,8 @@ without polling. The repair ADR depends on this one and adds its operation to th
 ### 1. Operations
 
 All three are catalog operations in the reserved `system` slug (Spec 02 §4), beside `system.audit`, the read on
-which Spec 03 §14.4 already builds the approval UI. The `auth` slug is not used, because Spec 02 §8.1 reserves
-`auth.*` for protocol methods in prose (see Alternatives). None is a protocol method; `lint-catalog` rules are
+which Spec 03 §14.4 already builds the approval UI. The `auth` slug is not used: Spec 02 §8.1 prose lists
+`auth.*` as a protocol-method family (see Alternatives). None is a protocol method; `lint-catalog` rules are
 unchanged.
 
 | Operation | Tier | Scope and rule | Expose rpc / subAction / mcp | Params → normal result |
@@ -128,7 +128,8 @@ server cannot distinguish a human click from shell automation on any design; tha
 **Store.** Process-local, in-memory, owned by the auth layer (`crates/den-core/src/auth/approval.rs`, a stub
 today). Never persisted and never written to `config.db`: an approval does not survive an engine restart, which
 also closes consent drift across code changes (schemas and migrations are compiled code and change only across
-restarts). Every check and transition below runs under the store's single lock as one atomic step.
+restarts). Every check and transition below is one atomic step under the store's single lock; the lock is never
+held across a storage job or any await, so Minting steps (0) and (2) run outside it.
 
 **Requester key.** `SessionId` when the requesting context has one (a WebSocket or MCP session), else the
 `TokenId` (a REST request, whose context lives for one request). A record is redeemable only by a call presenting
@@ -137,6 +138,9 @@ by the same token. `AuthContext.approvals` of a session is the store's view filt
 populated per request from the store. A context with neither key (`Plugin`, `Trigger`, `System`, or any
 non-`rpc`/non-`mcp` surface) cannot request an approval: a call that would need one fails `APPROVAL_REQUIRED
 details.reason = "unattended"` (existing reason) and nothing is minted.
+`AuthContext.approvals` lists each `granted` record of the key as `ApprovalBinding { id, operation, argsHash,
+plan, sessionGrant: false, expiresAt }`, where `plan` is the server-computed `ApprovedPlan` of a composite call
+(`actions.run`, `plugins.call`, a `batch.execute` entry) that the store keeps beside the record, never on the wire.
 
 **Record** (the wire type `system.list_approvals` returns):
 
@@ -145,7 +149,8 @@ pub struct PendingApproval {
     pub approval_id: ApprovalId,
     pub operation: OperationName,
     pub args_hash: Sha256,            // binding hash of the requesting call, computed by the server
-    pub requester: ApprovalRequester, // { principalKind, tokenId?, sessionId?, client?: ClientInfo }; identity only
+    pub requester: ApprovalRequester, // { principalKind, tokenKind?, tokenId?, sessionId?, client?: ClientInfo }
+                                      // identity only; `client` is `x-den-untrusted: true` (§8)
     pub requested_at: Timestamp,
     pub expires_at: Timestamp,        // requested_at + APPROVAL_TTL_MS (120 s)
     pub state: ApprovalState,         // pending | granted | denied | consumed | expired (open string enum)
@@ -154,18 +159,30 @@ pub struct PendingApproval {
 }
 ```
 
-**Minting.** Performed by the requesting operation's handler **after** the whole pipeline (validation, scope, tier
-policy, approval check, rate limit, audit) has passed, never inside the pipeline's approval step, in this order:
-(1) lookup of an existing non-terminal record under `(requester key, operation, argsHash)`; a `pending` or
-`granted` match returns the **same** `approvalId` and does no further work (no duplicate prompts, no storage
-work for a repeated identical call); (2) the operation's own pre-mint checks, if it defines any (the repair ADR
-defines a preview read here), so nobody is asked to approve an impossible call; (3) mint `ApprovalId`, compute
-`argsHash`, `plan` and `disclosure` server-side (Spec 02 §8.8 rule 4: never from client-supplied data), store the
-record as `pending`, publish `system.approval_pending` (§9) and return `APPROVAL_REQUIRED { details.approvalId }`.
+**Minting.** The pipeline's approval step (after validation, scope and tier policy, before rate limit and audit,
+Spec 02 §16) only classifies a call as approval-bearing: a member of §4 under every origin, or a tier-3 or
+effective-tier-3 call whose origin principal is `Mcp` (rule 5 unchanged: `Token`, `Trigger` and `System` origins
+of ordinary tier-3 calls stay exempt and never reach this section; a `Plugin` origin follows its permissions (spec 12)
+and is not classified here); for such a call it refuses a keyless context (`unattended`, nothing minted) and discards
+a `sessionGrant: true` binding presented to a member; it neither mints nor consumes. Minting and §5 are performed by
+the engine's **generic dispatch** for every approval-bearing call, after rate limit and audit and before the
+operation's handler body runs: no handler implements them, so none can omit them; an operation contributes only its
+pre-mint check (step 2) and the work it submits. A `dryRun: true` call (C6) and a draft-first deferral (§4) never
+reach Minting or §5. Without an `approvalId`, in this order: (0) outside the lock, the binding render and `argsHash`
+of the call (Spec 02 §8.8); (1) under the lock, lookup of a non-terminal record under
+`(requester key, operation, argsHash)`; a match returns the **same** `approvalId` and does no further work (no
+duplicate prompts, no storage work for a repeated identical call); (2) outside the lock, the dry-run `plan` and, for a
+composite call, the `ApprovedPlan` (Spec 02 §8.8 rule 4: server-computed, never from client-supplied data; it reads
+stored actions), then the operation's own pre-mint checks, if any, which also yield its `disclosure` (the repair ADR
+defines a preview read here), so nobody is asked to approve an impossible call; (3) under the lock again, repeat the
+lookup, because a concurrent identical first request may have minted meanwhile (then: one record, the same id for both
+callers, at most one plan and one pre-mint check per caller, no id before a check passed); else mint `ApprovalId`,
+store the precomputed record as `pending` and release the lock; then publish `system.approval_pending` (§9) and return
+`APPROVAL_REQUIRED { details.approvalId }`.
 
 **Transitions.** `pending → granted` and `pending → denied` by an approver (§2); `granted → denied` by an
 approver before consumption (revocation of a mistaken grant inside the TTL; §7 lists the alternative);
-`granted → consumed` by the one-shot compare-and-swap of §5, performed by the requesting operation's handler;
+`granted → consumed` by the one-shot compare-and-swap of §5, performed by the generic dispatch (§3 Minting);
 `pending | granted → expired` when `now ≥ expiresAt`, evaluated inside the lock at every access and by a sweeper.
 `denied`, `consumed` and `expired` are terminal. Every transition publishes `system.approval_resolved` (§9) and
 grants and denials write an audit row (§10).
@@ -174,6 +191,7 @@ grants and denials write an audit row (§10).
 in total; when a bound is reached the oldest non-terminal record is expired first. Terminal records are retained
 for one TTL so the UI can show the outcome, capped at M as well, oldest dropped first. PROPOSED values N = 8 and
 M = 256 are engine bounds for the owner's acceptance (§7), not product policy.
+On every transition to a terminal state a record drops `plan` and `disclosure`; the UI needs only the outcome.
 
 **Restart.** The store starts empty; a retry presenting a pre-restart id is `binding_mismatch` / `expired`.
 
@@ -201,15 +219,21 @@ M = 256 are engine bounds for the owner's acceptance (§7), not product policy.
 
 ### 5. Retry, ordered checks, one-shot consumption, admission
 
-On a call that presents `approvalId`, the handler checks, in this order and all before any storage work:
+On a call that presents `approvalId`, the whole pipeline runs again (schema; scope and `maxTier` against the
+**current** token record: a revoked token is `UNAUTHENTICATED` at identify, a removed scope is `PERMISSION_DENIED`; an
+approval never grants capability), then the generic dispatch (§3 Minting) checks, in this order and all before the
+operation's work is submitted:
 
-1. Params schema; then scope and `maxTier` re-checked against the **current** token record: a revoked token is
-   `UNAUTHENTICATED` at identify, a removed scope is `PERMISSION_DENIED`. An approval never grants capability.
+1. The pipeline result above.
 2. Lookup under the caller's requester key: (a) no record → `binding_mismatch` / `expired`; (b) `operation` or
    `argsHash` differs → `binding_mismatch` / `args`; (c) `now ≥ expiresAt` → `expired`; (d) state `pending` →
    `APPROVAL_REQUIRED` with the **same** `approvalId` (wait); (e) state `granted` → one-shot compare-and-swap
    `granted → consumed` inside the lock; (f) any other state → `expired`. Unknown, foreign (another key), denied
    and consumed ids are indistinguishable from expired on the wire: no oracle.
+   For a composite call the plan is recomputed outside the lock before this step and compared under it in (b): a
+   difference is `binding_mismatch` / `args`, `revision` or `unplanned_call` exactly as Spec 02 §8.8 rule 4 (a)
+   assigns (`args` for a changed `dynamicFields` set or planned-call hash); rule 4 (b) and (c) keep enforcing the plan
+   at execution.
 3. Only the CAS winner submits the operation's work (a storage job, the settings writer request, or whatever the
    operation uses). Exactly one caller can win; every later presentation of the id is a mismatch.
 
@@ -242,7 +266,7 @@ per-key bound N caps prompts a single requester can hold open. A request repeate
 | O5 | Bounds N per key / M total, non-terminal plus one-TTL terminal retention | 8 / 256 | other values; no bound (rejected: unbounded memory) |
 | O6 | List visibility | approver rule only (§2) | non-approvers get their own-key records with `plan` and `disclosure` omitted (second visibility shape) |
 | O7 | Revocation of a `granted` record by an approver before consumption | allowed (`granted → denied`) | `pending` only (a mistaken grant is irrevocable for up to 120 s) |
-| O8 | Events (§9) | both normative; minimal payloads | `system.approval_pending` only; or payloads carrying `operation` and `requesterKind` |
+| O8 | Events (§9) | both normative, `critical`, minimal payloads | `system.approval_pending` only; non-`critical` (droppable) events; payloads carrying `operation` and `requesterKind` |
 | O9 | Mismatch value for unknown / foreign / denied / consumed ids | uniform `expired` (no oracle) | additive mismatch value `unknown` (more precise, enum growth) |
 | O10 | Disclosure provenance invariant (§8) | closed trust state only; no raw stored strings | bounded raw string (regex, ≤ 64 chars); rejected here because a bound does not make a stored string secret-safe |
 | O11 | Slug for the three operations | `system` | `auth` plus an amendment of the Spec 02 §8.1 protocol-method prose; a new reserved `approvals` slug |
@@ -259,16 +283,21 @@ Owner B (Q-E16) is a premise of this ADR and is **not** one of these decisions.
   SQLite text), panic payloads, hashes of any of these (a hash of a low-entropy name is a dictionary oracle), or any
   string decoded from a stored body that has not passed the current whole-document schema. Provenance of such a
   body is disclosed as a **closed trust state only**: the `Origin` kind tag and its `trusted` flag, never the raw
-  `from` text. Counts, booleans, closed reason enums, typed identifiers and timestamps are permitted.
+  `from` text. Counts, booleans, closed reason enums, timestamps and typed identifiers taken from record metadata
+  (row id, token id, session id) are permitted; no identifier decoded from the body is.
 - Records of other requesters are visible only to an approver context (§2); errors never carry record content;
   the events of §9 carry no params, hash or disclosure; audit rows (§10) carry identifiers and kinds only.
-- `ApprovalRequester` carries identity (`principalKind`, `tokenId`, `sessionId`, `client`), never a token secret.
+- `ApprovalRequester` carries identity (`principalKind`, `tokenKind`, `tokenId`, `sessionId`, `client`), never a
+  token secret; `client` is the requester's self-description (Spec 02 §8.3), marked `x-den-untrusted: true`.
 
 ### 9. Events (no polling)
 
 AGENTS.md forbids polling where events exist, and a shell must learn about approvals requested by other
 principals (MCP tier 3, REST third parties) without polling `system.list_approvals`. Two engine-internal events
-(Spec 03 §5.1 internal lane: non-blocking, may be dropped and counted; the list is the on-demand truth):
+(Spec 03 §5.1 internal lane), registered `critical: true`, `highVolume: false`, `payloadVersion: 1` with one example
+each (Spec 02 §5.2), published from task context after the store's lock is released, not dropped by the slow-consumer
+policy while the session drains (Spec 02 §8.4; Spec 03 §5.3), and replayed on reconnect (Spec 02 §8.4); a session
+closed with 4006 or a stalled subscriber recovers by the resync rule below:
 
 | Event | Payload | When |
 |---|---|---|
@@ -277,6 +306,8 @@ principals (MCP tier 3, REST third parties) without polling `system.list_approva
 
 Payloads are minimal on purpose (O8): a subscriber with `events:read` learns an opaque handle and a time, which it
 can neither redeem (requester key) nor grant (approver rule); the approver reads everything else from the list.
+A shell reconciles with `system.list_approvals` on (re)identify and on a replay `gap: true` (Spec 02 §8.4); that
+is event-driven resync, never polling, and the list stays the on-demand truth.
 
 ### 10. Errors (existing codes only; PROPOSED additions are reason strings)
 
@@ -289,6 +320,7 @@ can neither redeem (requester key) nor grant (approver rule); the approver reads
 | Request needing approval, no `approvalId`; or id presented while `pending` | `APPROVAL_REQUIRED` | `approvalId` (new or the same) | existing |
 | Id unknown to this key, foreign, denied, consumed, past `expiresAt`, or pre-restart | `APPROVAL_REQUIRED` | `reason = "binding_mismatch"`, `mismatch = "expired"` | existing values, PROPOSED uniform rule (O9) |
 | Id known but `operation` or `argsHash` differs | `APPROVAL_REQUIRED` | `binding_mismatch`, `mismatch = "args"` | existing |
+| Composite call whose recomputed plan differs from the kept `ApprovedPlan` | `APPROVAL_REQUIRED` | `binding_mismatch`, `mismatch = "args"`, `"revision"` or `"unplanned_call"` per Spec 02 §8.8 rule 4 (a) | existing |
 | Member of §4 called by a context without a requester key | `APPROVAL_REQUIRED` | `reason = "unattended"` | existing value, PROPOSED rule |
 | `sessionGrant: true` binding presented for a member of §4 | `APPROVAL_REQUIRED` | `approvalId` (one-shot) | existing shape, PROPOSED rule |
 | Work rejected at admission after the CAS | `INVALID_STATE` | `reason = "shutting_down"` | existing |
@@ -300,17 +332,18 @@ description constants in the same contract card, never ad hoc in a handler. Audi
 ### 11. Exposure and generation
 
 `protocol.json` gains the three operations, `PendingApproval`, `ApprovalRequester`, `ApprovalState`, the grant and
-deny param and result types, `confirmationRequiredOperations: []`, and the §9 events; TypeScript and Python
+deny param and result types, `confirmationRequiredOperations: []`, and the §9 events (`payloadVersion: 1`,
+`highVolume: false`, `critical: true`, one example each); TypeScript and Python
 bindings and OpenAPI regenerate; no MCP tool is generated (`mcp: false`). Fixtures: one per `ApprovalState`, one
 per operation example (normal and dry run for the tier-1 pair). `lint-catalog` keeps rejecting `approvalId` and
 `dryRun` in author params. The UI consumes the generated schema; no UI-only endpoint exists anywhere in this design.
 
 ## Consequences
 
-- **Positive.** One public, schema-generated surface serves MCP tier-3 approvals, the `unattended` flow and every
-  future confirmation-required operation; self-confirmation by a non-shell principal is impossible by rule, not by
-  convention; consumption is exactly-once by a single CAS; restarts and code changes invalidate consent; the
-  approver never sees stored secrets or unvalidated stored strings; nothing requires a new error code.
+- **Positive.** One public, schema-generated surface serves one-shot MCP tier-3 approvals, the `unattended` flow
+  and every future confirmation-required operation; self-confirmation by a non-shell principal is impossible by
+  rule, not by convention; consumption is exactly-once by a single CAS; restarts and code changes invalidate
+  consent; the approver never sees stored secrets or unvalidated stored strings; nothing requires a new error code.
 - **Negative / accepted limits.** A pure REST third party cannot complete a confirmation-required call without the
   human at the app and may time out repeatedly at 120 s (O4). A ui-token issuance invariant is contract text until
   spec 06 exists; code does not yet enforce it anywhere. The shell both requests and grants under one token; the
@@ -338,7 +371,7 @@ per operation example (normal and dry run for the tier-1 pair). `lint-catalog` k
 | A7 | Storage worker owns approval state | violates C11; makes "transaction open" and "consumed" a cross-thread race |
 | A8 | Any `admin` principal may grant | self-confirmation: an `api` token confirms its own call with a second call (A1 with extra steps) |
 | A9 | Persist approvals in `config.db` | consent survives restarts and code changes, the drift case to avoid; a document write for runtime state |
-| A10 | Names under `auth.*` | Spec 02 §8.1 prose reserves `auth.*` for protocol methods; using it needs a prose amendment and risks the §9.7 lint intent (O11) |
+| A10 | Names under `auth.*` | Spec 02 §8.1 prose lists `auth.*` as a protocol-method family (the lint constant `PROTOCOL_METHODS` names only `auth.request_pairing`, and `system.*` already mixes both kinds); `system` avoids a prose amendment (O11) |
 
 ## Acceptance tests (names PROPOSED; none exists; nothing was run)
 
@@ -361,12 +394,14 @@ Approval store and handler (integration tests once the router and store exist; L
 | T13 | `sessionGrant: true` binding presented for a member of §4 | ignored; `APPROVAL_REQUIRED` with a one-shot id; nothing submitted |
 | T14 | two concurrent identical retries with one granted id | exactly one CAS winner and exactly one `binding_mismatch expired`; never two submissions |
 | T15 | shutdown or cancellation after the CAS and before admission | `INVALID_STATE shutting_down` or cancelled; approval `consumed`; nothing durable |
-| T16 | dedupe: repeated identical request while `pending` or `granted` | same id; the operation's pre-mint check runs zero times (counter asserts) |
+| T16 | dedupe: repeated identical request while `pending` or `granted`; two concurrent identical first requests | same id; the pre-mint check runs zero times for the repeat and at most once per caller in the race; one record (counter asserts) |
 | T17 | bounds: N+1 non-terminal per key; M+1 total counting `granted`; terminal retention beyond M | oldest expired first; list bounded; no unbounded growth |
 | T18 | engine restart with pending and granted records | store empty; retry → `binding_mismatch expired` |
 | T19 | member called by `Trigger`, `System` or `Plugin` context | `APPROVAL_REQUIRED unattended`; nothing minted |
 | T20 | `dryRun: true` on grant and deny | `DryRunResult`, one `PlanStep`, no transition, no audit row, no event |
 | T21 | serialized `PendingApproval`, events and audit rows for a request whose params hold `x-secret` values and whose disclosure covers a body with secret-looking keys and strings | `"***"` at secret positions; no key name, stored value, message or raw `from` string anywhere (substring asserts) |
+| T22 | composite call approved, then a reachable action's revision or the planned call multiset changes before the retry | `binding_mismatch revision` / `unplanned_call` / `args` for a changed planned-call hash or `dynamicFields` set; approval untouched; nothing submitted |
+| T23 | subscriber reconnects with `since` after a mint and a resolution; then with a cursor older than the buffer | both events replayed with `meta.replay: true`; on `gap: true` the list shows the same state; no polling |
 
 Protocol (`den-protocol`): fixtures per `ApprovalState` and per example round-trip; `codegen_rules`: the three
 operations carry `dryRun` (tier 1) and no `approvalId`, name the handle `approval`; `confirmationRequiredOperations`
