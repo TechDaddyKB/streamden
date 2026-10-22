@@ -902,7 +902,7 @@ Owner answer recorded by DEN-521 from project file 647
 `e1816578a5ddcad8f8a03620075c2e1a647ea856c7fe5f5cc9deb48f2569314e`); exact operator answer of
 2026-10-21T18:43:22Z: "E11 B, E12 A, E13 A, E15 A including the error mapping".
 
-### Q-E16 — May repair replace older rejected documents, and how should updates route? 🟥 (DEN-424 / DEN-426)
+### Q-E16 — May repair replace older rejected documents, and how should updates route? 🟨 (DEN-424 / DEN-426)
 Raised by [DEN-421 / DEN-422 / DEN-424 / DEN-426](agents/board.md), reviewing candidate
 `061c86d81245f7e49909bc52c63c1e9b955846b2`. Full qualified Claude review: project file 386
 (`context/den421-cursor-claude-review-061c86d.json`, SHA-256
@@ -944,7 +944,7 @@ may a complete replacement omit them, must they be preserved, and from which bod
 update (`settings.update`, `actions.update`, …) use that permitted repair behavior, or fail until an explicit
 repair action? A/B/C assume repair permission for the cases the owner explicitly allows; they do not grant it.
 
-Options (all proposed, none accepted):
+Options (all were proposed when the question was asked; the owner selected B, see **Answer**):
 
 - **(A) Ordinary complete valid updates replace older rejected bodies.** Handlers use the permitted
   `repair_batch` semantics for whole-body updates.
@@ -956,23 +956,44 @@ Options (all proposed, none accepted):
   updates. Define separately whether successful migration steps followed by current-validation failure allow
   a valid whole-body repair, and the required preservation of migrated fields and `data.x-migrated`.
 
-**Recommendation:** A is the qualified Claude reviewer's recommendation: it matches settings §16/§22.13,
+**Recommendation (historical; the owner's answer B below is current policy):** A is the qualified Claude reviewer's recommendation: it matches settings §16/§22.13,
 is consistent with current-invalid replacement (M1), and still refuses newer rows as read-only. It remains
 conditional on the owner's repair-permission and preservation decisions. Grok has not approved that premise;
-D makes the migration-required alternative explicit. This record adopts neither interpretation as policy.
-**Impact / owner readiness:** [DEN-423](agents/board.md) remains UNANSWERED. The owner must first explicitly
-decide repair permission versus D (or a precise alternative) for missing migrations, failed migrations and
-migration-produced-invalid bodies, including unknown-field / `x-migrated` preservation. If repair is allowed,
-the owner must then choose A/B/C or a precise alternative and concrete handler-routing semantics. Record the
-exact answer and accepted spec/decision before relying on a replacement policy or feature-handler routing.
-DEN-412 remains blocked; DEN-365 depends on DEN-423. Recording this question does not establish full
-DEN-365 / DEN-302 / original DEN-71 acceptance. Source-mechanism review or green CI cannot resolve it.
-Under every option, unsupported newer versions remain read-only, and malformed raw metadata or unreadable
-JSON remains protected; no option bypasses existing storage guards. Current-invalid replacement remains
-supported; this question concerns older rejected bodies.
-DEN-424 / DEN-426 record this question only; the parent must obtain fresh cross-vendor documentation review
-of the corrected Q-E16 and current CI before publication/merge. Recording it neither resolves DEN-423 nor
-completes the parent cards, and leaves DEN-341, DEN-371 and DEN-407 holds unchanged. No account, key or
-registration runbook is needed for this policy question. No ADR, spec or policy is changed here.
-**Status:** UNANSWERED.
-**Answer:**
+D makes the migration-required alternative explicit. This record adopts neither interpretation as policy; the owner then answered B (below).
+**Impact / owner readiness (after the answer):** [DEN-423](agents/board.md) is answered B (see **Answer**). This
+is a policy answer only: no repair endpoint, approval surface, handler or public type exists yet, and an accepted
+contract/ADR must precede any implementation or public type. A repair design is **under review and proposed, not
+accepted**; cite it only by stored project file and SHA-256: project file 697 (`context/den519-fable-design-r1.md`,
+`d849b20f0b7018c52e47ce604067c4244ca8cc2bb9bce7421965586f7bc9bf1c`), independent review 698
+(`context/den532-fable-review-r1.md`, `339be3e93eb2d4d9e607c8344f1ff15a77167a7d59e71123c1180972cb7d006a`; not an
+approvable ADR basis), revised proposal 699 (`context/den519-fable-design-r2.md`,
+`5e674787b4f80ac4e1dbe8f63f144a984cde6a0bfd33cd431993a3d18a68831b`) and its independent review 702
+(`context/den533-fable-review-r2.md`, `363e0dbffa06c4223e6843e377b666fa7834f0e24bf7f7d70718fdf44c923dd5`). Review 702
+finds 699 a basis for drafting ADRs once three Medium text corrections and several precision items are applied. None of
+the four files is an accepted ADR, API, source change, name, scope, TTL or default.
+The answer does not approve candidates DEN-412 / DEN-425, waives no 400-line limit, and does not complete DEN-365,
+DEN-302, DEN-303 or original DEN-71; every other parent hold is retained. Hold updates that touch this question:
+DEN-341 is partial and now concerns Q-E14 only (Q-E11 B, Q-E12 A, Q-E13 A and Q-E15 A including the error mapping were
+answered from project file 647 and recorded by DEN-521 / PR #74); DEN-371 is Done by owner decision; DEN-407 was waived by
+the owner ("ignore that issue", project file 647), which is not a credential fix, rotation or security fix. This record
+makes no Q-E14 or other new product choice and does not ask Q-E16 again. Source-mechanism review or green CI cannot
+change the answer. No ADR, spec, `decisions.md` row or code changes here, and no production data was repaired by
+recording the answer. No account, key or registration runbook is needed.
+**Status:** ANSWERED 2026-10-21 (owner); not yet copied into `decisions.md` (no decision ID assigned, no ADR accepted).
+**Answer:** Option (B). Exact owner answer of 2026-10-21T18:37:29Z: "B. Allow explicit repair when migration is
+missing, fails, or produces invalid data. After confirmation, the complete replacement may omit old unknown and
+migration-preserved fields." Recorded by DEN-534 from project file 645
+(`context/den423-owner-qe16-option-b-decision.md`, SHA-256
+`d44b60b51ff2a42cd2835320401e91a3265540cc1cfa6bcfebf094cd55db3e7e`). As policy:
+
+- An older document whose migration is missing, whose migration fails, or whose migration returns data that fails
+  current validation may be replaced by an explicit repair. A confirmed, valid, complete current replacement may omit
+  old unknown fields and migration-preserved fields, including `data.x-migrated`.
+- Ordinary updates (`settings.update`, `actions.update`, …) of an older rejected document keep failing until an
+  explicit repair; they never silently fall back to a destructive repair.
+- Unsupported newer versions stay read-only. Unreadable raw JSON, malformed raw metadata, and the revision /
+  conflict / overflow / name / draft / final-current-body validation guards remain.
+- Current-version invalid ordinary replacement and guarded deletion keep their existing semantics.
+- The answer is not consent to repair any actual document or database: confirmation is required by each repair
+  operation. The explicit repair contract (handler routing, complete-replacement payload, confirmation boundary and
+  concurrency binding) still needs an accepted contract/ADR before implementation or public types.
