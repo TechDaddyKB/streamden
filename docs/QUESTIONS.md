@@ -809,7 +809,7 @@ whole-root `UserRef` semantics. Owner answer recorded by DEN-521 from project fi
 `e1816578a5ddcad8f8a03620075c2e1a647ea856c7fe5f5cc9deb48f2569314e`); exact operator answer of
 2026-10-21T18:43:22Z: "E11 B, E12 A, E13 A, E15 A including the error mapping".
 
-### Q-E14 — Where does filter operand field-schema validation come from? 🟥 (DEN-340)
+### Q-E14 — Where does filter operand field-schema validation come from? 🟩 (DEN-340)
 Raised by [DEN-338 / DEN-340](agents/board.md), Claude review project file 256, question Q4,
 reviewing DEN-318 at `cb634fd3`. [Spec 02 §6.2](spec/02-protocol.md#62-trigger) says `Filter.value`
 is validated against the field's schema; [Spec 03 §6.2](spec/03-engine.md#62-filters) describes evaluation
@@ -827,8 +827,9 @@ Before choosing either, define the exact constraint source, reserved-envelope ma
 coverage; no public field, API or typing policy is invented by these options.
 **Recommendation:** investigate (a) only if the existing schemas can express all of that coverage; otherwise
 use dedicated contract design under (b). This conditional recommendation is not an accepted design, and the
-reviewer's contract-task warning remains applicable to any public contract change.
-**Impact / owner readiness:** [DEN-341](agents/board.md) is queued for the owner's choice or an accepted
+reviewer's contract-task warning remains applicable to any public contract change. (Historical; the owner's
+answer below is current policy.)
+**Impact / owner readiness (before the answer):** [DEN-341](agents/board.md) is queued for the owner's choice or an accepted
 normative clarification, with the exact source/coverage evidence needed to resolve this question. Full
 DEN-80 acceptance, DEN-319 expectations on these ambiguous cases and consumer contracts need that resolution.
 Public type changes still require an approved ADR and a dedicated contract task before implementation.
@@ -836,8 +837,24 @@ Claude DEN-338 approved bounded DEN-318 per the current Spec 03 table; mandatory
 current Linux and native Windows CI (matcher 8 and protocol timestamp 7), and exact merge-content integration
 remain required. Recording Q-E11–Q-E14 neither waives those gates nor completes DEN-80 / DEN-319.
 No account, key or console operation is needed to answer these questions, so no registration runbook is needed.
-**Status:** UNANSWERED.
-**Answer:**
+**Status:** ANSWERED 2026-10-22 (owner); recorded as D-060 in [`decisions.md`](decisions.md) with accepted
+[ADR-0015](adr/0015-shared-reserved-filter-metadata.md).
+**Answer:** Three owner direction choices, recorded on 2026-10-22 (first recorded 19:44:09Z) in project file 909
+(`context/owner-qe14-d1a-d2i-d3a-20261022.md`, SHA-256
+`331f66d1932e359fb65c2a1c8886cdc6a85ba8c725098a95587a40eca1c7adf4`): D1 "A — Derive operator-specific checks
+from existing schemas (Recommended)"; D2 "i — One shared definition included in every event’s published filters
+(Recommended)"; D3 "a — RFC3339 offsets/precision and JSON numbers, matching the accepted comparator
+(Recommended)". The same day the owner accepted the exact reserved table and registration contract (project
+file 918, SHA-256 `bd0c1bdd026cfa2f805daa0731d6a9f30173973dbe17fa019ca48bb830a7a6d6`) and the exact ADR text
+(project file 955, SHA-256 `ea17d70af5244de65067c7aa9c3f12f0d5b797c2650d2fe07782ee46968826c1`), placed by
+DEN-578 as [ADR-0015](adr/0015-shared-reserved-filter-metadata.md) and D-060 in
+[PR #79](https://github.com/TechDaddyKB/streamden/pull/79) (`cdc0ccb`): nine fixed-order reserved
+`FilterableField` entries (`platform` and eight `user.*` paths; specificity 1, `caseInsensitive` false, no
+`optionsFrom`; `user.badges` deferred), appended once to every registered event's `filters`. These are owner
+choices and an accepted ADR, not an implementation: the `den-protocol` contract task and its implementation are
+not accepted, and the general schema resolver and operand validator, untrusted-mark/taint handling, filter
+error-reason vocabulary, plugin ingestion, engine integration and UI filter editor stay deferred (ADR-0015).
+Recording this answer waives no review, CI or merge gate.
 
 ### Q-E15 — What precision, promotion and overflow rules should variable arithmetic use? 🟨 (DEN-372)
 Raised by [DEN-84 / DEN-372](agents/board.md), preflight project file 303
